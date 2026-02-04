@@ -13,7 +13,7 @@ architecture:
     - name: UI
       description: Razorコンポーネントでゲーム一覧と操作を提供
     - name: Application
-      description: 同期オーケストレーション、起動制御、状態管理
+      description: 同期オーケストレーション、起動制御、ゲーム管理
     - name: Infrastructure
       description: Git実行、監視、通知、サムネイル、永続化
     - name: WindowsBridge
@@ -45,15 +45,15 @@ di_lifecycles:
   singleton:
     - SyncOrchestrator
     - RepositoryWatcherService
-    - RepositoryStateStore
     - NotificationService
-    - TrayService
-    - AutoStartService
+    - GameLibraryService
   scoped:
     - LauncherService
     - ThumbnailService
   transient:
     - GitService
+  notes:
+    - TrayService / AutoStartService / RepositoryStateStore は設計のみで未実装
 
 public_interfaces:
   - name: IGitService
@@ -69,22 +69,20 @@ public_interfaces:
       - UnregisterRepository(repositoryId)
       - RequestSync(repositoryId, reason)
       - RequestImmediateSyncAsync(repositoryId, cancellationToken)
+  - name: IGameLibraryService
+    methods:
+      - GetAllAsync(cancellationToken)
+      - AddAsync(draft, cancellationToken)
+      - UpdateAsync(gameId, draft, cancellationToken)
+      - DeleteAsync(gameId, cancellationToken)
+      - MarkLaunchedAsync(gameId, cancellationToken)
   - name: ILauncherService
     methods:
-      - LaunchGameAsync(gameId, cancellationToken)
+      - LaunchAsync(game, cancellationToken)
   - name: INotificationService
     methods:
-      - NotifySyncSuccess(repositoryId)
-      - NotifySyncFailure(repositoryId, errorType)
-      - NotifyRecovered(repositoryId)
-  - name: ITrayService
-    methods:
-      - SetState(state)
-      - ShowMenu()
-  - name: IAutoStartService
-    methods:
-      - EnableAutoStart()
-      - DisableAutoStart()
+      - NotifyInfoAsync(title, message, cancellationToken)
+      - NotifyErrorAsync(title, message, cancellationToken)
   - name: IThumbnailService
     methods:
-      - GenerateThumbnailAsync(sourcePath, destinationPath)
+      - TryGenerateThumbnailAsync(sourcePath, destinationPath, cancellationToken)

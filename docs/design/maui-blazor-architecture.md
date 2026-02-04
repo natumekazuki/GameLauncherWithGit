@@ -132,3 +132,13 @@ sequenceDiagram
 - ランチャー: 起動前 pull 成功時のみ起動、失敗時ブロック
 - Windows連携: トレイ状態遷移、Toast 発火、自動起動設定
 - サムネイル: 512px変換、PNG化、失敗時フォールバック
+
+## 12. 実装ステータス（2026-02-04）
+- 実装済み
+  - `SyncOrchestrator` による同期フロー、失敗分類、指数バックオフ
+  - `GameLibraryService` とランチャーUI（カード表示・詳細モーダル）
+  - `ThumbnailService` による 512px PNG 生成
+- 未実装
+  - 起動前 `fetch/pull --rebase` の本実装（現在はexe起動のみ）
+  - Windows 固有機能（タスクトレイ / Toast / 自動起動）
+  - ログビュー画面と「今すぐ同期」操作の実動作
