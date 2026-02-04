@@ -1,8 +1,10 @@
-using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using GameLauncherWithGit.App.Infrastructure.Abstractions;
 using Microsoft.Extensions.Logging;
+using DrawingBitmap = System.Drawing.Bitmap;
+using DrawingGraphics = System.Drawing.Graphics;
+using DrawingImage = System.Drawing.Image;
 
 namespace GameLauncherWithGit.App.Infrastructure.Services;
 
@@ -30,11 +32,11 @@ public sealed class ThumbnailService : IThumbnailService
 
             cancellationToken.ThrowIfCancellationRequested();
 
-            using Image source = Image.FromFile(sourcePath);
+            using DrawingImage source = DrawingImage.FromFile(sourcePath);
 
             (int width, int height) = CalculateTargetSize(source.Width, source.Height);
-            using var bitmap = new Bitmap(width, height);
-            using Graphics graphics = Graphics.FromImage(bitmap);
+            using var bitmap = new DrawingBitmap(width, height);
+            using DrawingGraphics graphics = DrawingGraphics.FromImage(bitmap);
 
             graphics.CompositingQuality = CompositingQuality.HighQuality;
             graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
