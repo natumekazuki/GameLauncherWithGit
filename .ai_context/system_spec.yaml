@@ -55,6 +55,12 @@ di_lifecycles:
   notes:
     - TrayService / AutoStartService / RepositoryStateStore は設計のみで未実装
 
+game_library_model:
+  game_item:
+    executable_path: required
+    thumbnail_path: optional
+    related_repository_path: optional_single_folder
+
 public_interfaces:
   - name: IGitService
     methods:
@@ -86,3 +92,8 @@ public_interfaces:
   - name: IThumbnailService
     methods:
       - TryGenerateThumbnailAsync(sourcePath, destinationPath, cancellationToken)
+  - name: IPathPickerService
+    methods:
+      - PickExecutablePathAsync(cancellationToken)
+      - PickThumbnailImagePathAsync(cancellationToken)
+      - PickRepositoryFolderPathAsync(cancellationToken)

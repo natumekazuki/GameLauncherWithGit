@@ -45,6 +45,9 @@ flowchart LR
   - 常駐・状態アイコン・コンテキストメニュー（今すぐ同期/設定/ログ/終了）
 - `ThumbnailService`
   - 画像を長辺 512px の PNG に変換して `%AppData%` に保存
+- `PathPickerService`
+  - 実行ファイル、サムネイル画像、関連リポジトリフォルダの選択をOSピッカー経由で提供
+  - UI層から Windows API へ直接依存しないための抽象境界を維持
 
 ## 5. 同期フロー
 ```mermaid
@@ -96,6 +99,10 @@ sequenceDiagram
   - `ErrorPaused`: 競合などで自動同期停止
 - ゲームカード状態
   - `Unknown`, `Syncing`, `Synced`, `Error`
+- ゲーム設定モデル
+  - `ExecutablePath`: 実行ファイルパス（必須）
+  - `ThumbnailSourcePath`: サムネイル元画像パス（任意）
+  - `RelatedRepositoryPath`: 関連リポジトリフォルダ（任意、単一）
 
 ## 8. DI ライフサイクル（MVP）
 | サービス | ライフサイクル | 理由 |
