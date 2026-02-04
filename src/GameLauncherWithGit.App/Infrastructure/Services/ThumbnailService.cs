@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using DrawingBitmap = System.Drawing.Bitmap;
 using DrawingGraphics = System.Drawing.Graphics;
 using DrawingImage = System.Drawing.Image;
+using DrawingImageFormat = System.Drawing.Imaging.ImageFormat;
 
 namespace GameLauncherWithGit.App.Infrastructure.Services;
 
@@ -49,7 +50,7 @@ public sealed class ThumbnailService : IThumbnailService
                 Directory.CreateDirectory(dir);
             }
 
-            bitmap.Save(destinationPath, ImageFormat.Png);
+            bitmap.Save(destinationPath, DrawingImageFormat.Png);
             return Task.FromResult(true);
         }
         catch (Exception ex)

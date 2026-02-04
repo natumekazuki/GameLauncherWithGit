@@ -1,1 +1,4 @@
 /src/GameLauncherWithGit.App/obj
+/src/GameLauncherWithGit.App/bin
+/tests/**/bin
+/tests/**/obj
