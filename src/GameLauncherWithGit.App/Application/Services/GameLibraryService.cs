@@ -41,7 +41,7 @@ public sealed class GameLibraryService : IGameLibraryService
             Id = Guid.NewGuid(),
             Title = draft.Title.Trim(),
             ExecutablePath = draft.ExecutablePath.Trim(),
-            RelatedRepositoryIds = ParseRelatedRepositoryIds(draft.RelatedRepositoryIdsCsv),
+            RelatedRepositoryPath = NormalizeOptionalPath(draft.RelatedRepositoryPath),
             Status = GameSyncStatus.Unknown,
         };
 
@@ -62,7 +62,7 @@ public sealed class GameLibraryService : IGameLibraryService
 
         existing.Title = draft.Title.Trim();
         existing.ExecutablePath = draft.ExecutablePath.Trim();
-        existing.RelatedRepositoryIds = ParseRelatedRepositoryIds(draft.RelatedRepositoryIdsCsv);
+        existing.RelatedRepositoryPath = NormalizeOptionalPath(draft.RelatedRepositoryPath);
 
         await TrySetThumbnailAsync(existing, draft.ThumbnailSourcePath, cancellationToken).ConfigureAwait(false);
 
@@ -114,14 +114,6 @@ public sealed class GameLibraryService : IGameLibraryService
         item.ThumbnailPath = success ? destinationPath : null;
     }
 
-    private static IReadOnlyList<string> ParseRelatedRepositoryIds(string csv)
-    {
-        return csv
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-    }
-
     private static void ValidateDraft(GameDraft draft)
     {
         if (string.IsNullOrWhiteSpace(draft.Title))
@@ -133,6 +125,12 @@ public sealed class GameLibraryService : IGameLibraryService
         {
             throw new InvalidOperationException("実行ファイルパスは必須です。");
         }
+
+        string? repositoryPath = NormalizeOptionalPath(draft.RelatedRepositoryPath);
+        if (repositoryPath is not null && !Directory.Exists(repositoryPath))
+        {
+            throw new InvalidOperationException("関連リポジトリフォルダが見つかりません。");
+        }
     }
 
     private static GameItem Clone(GameItem item)
@@ -143,9 +141,14 @@ public sealed class GameLibraryService : IGameLibraryService
             Title = item.Title,
             ExecutablePath = item.ExecutablePath,
             ThumbnailPath = item.ThumbnailPath,
-            RelatedRepositoryIds = item.RelatedRepositoryIds.ToArray(),
+            RelatedRepositoryPath = item.RelatedRepositoryPath,
             LastPlayedAt = item.LastPlayedAt,
             Status = item.Status,
         };
+    }
+
+    private static string? NormalizeOptionalPath(string? path)
+    {
+        return string.IsNullOrWhiteSpace(path) ? null : path.Trim();
     }
 }

@@ -5,6 +5,7 @@
 @inject IGameLibraryService GameLibraryService
 @inject ILauncherService LauncherService
 @inject INotificationService NotificationService
+@inject IPathPickerService PathPickerService
 
 <PageTitle>Game Launcher</PageTitle>
 
@@ -79,14 +80,26 @@
             <label>タイトル</label>
             <input @bind="_draft.Title" />
 
-            <label>実行ファイルパス (exe)</label>
-            <input @bind="_draft.ExecutablePath" />
+            <label>実行ファイル (必須)</label>
+            <div class="picker-input-row">
+                <input @bind="_draft.ExecutablePath" readonly />
+                <button type="button" class="picker-button" @onclick="PickExecutablePathAsync">参照</button>
+                <button type="button" class="clear-button" @onclick="ClearExecutablePath">クリア</button>
+            </div>
 
-            <label>サムネイル画像パス (png/jpg/webp)</label>
-            <input @bind="_draft.ThumbnailSourcePath" />
+            <label>サムネイル画像 (任意)</label>
+            <div class="picker-input-row">
+                <input @bind="_draft.ThumbnailSourcePath" readonly />
+                <button type="button" class="picker-button" @onclick="PickThumbnailImagePathAsync">参照</button>
+                <button type="button" class="clear-button" @onclick="ClearThumbnailPath">クリア</button>
+            </div>
 
-            <label>関連リポジトリID (カンマ区切り)</label>
-            <input @bind="_draft.RelatedRepositoryIdsCsv" />
+            <label>関連リポジトリフォルダ (任意)</label>
+            <div class="picker-input-row">
+                <input @bind="_draft.RelatedRepositoryPath" readonly />
+                <button type="button" class="picker-button" @onclick="PickRepositoryFolderPathAsync">参照</button>
+                <button type="button" class="clear-button" @onclick="ClearRepositoryPath">クリア</button>
+            </div>
 
             <div class="modal-actions">
                 <button type="button" class="launch-button" @onclick="SaveDraftAsync">保存</button>
@@ -102,6 +115,7 @@
         <section class="modal-sheet" @onclick:stopPropagation="true">
             <h3>@_selectedGame.Title</h3>
             <p class="meta">@_selectedGame.ExecutablePath</p>
+            <p class="meta">@FormatRepositoryPath(_selectedGame.RelatedRepositoryPath)</p>
 
             <div class="modal-grid-actions">
                 <button type="button" class="launch-button" @onclick="() => LaunchAsync(_selectedGame)">起動</button>
@@ -180,7 +194,7 @@
             Title = _selectedGame.Title,
             ExecutablePath = _selectedGame.ExecutablePath,
             ThumbnailSourcePath = _selectedGame.ThumbnailPath,
-            RelatedRepositoryIdsCsv = string.Join(',', _selectedGame.RelatedRepositoryIds),
+            RelatedRepositoryPath = _selectedGame.RelatedRepositoryPath,
         };
 
         _editingGameId = _selectedGame.Id;
@@ -208,6 +222,48 @@
 
         CloseEditor();
         await ReloadAsync().ConfigureAwait(false);
+    }
+
+    private async Task PickExecutablePathAsync()
+    {
+        string? selectedPath = await PathPickerService.PickExecutablePathAsync().ConfigureAwait(false);
+        if (!string.IsNullOrWhiteSpace(selectedPath))
+        {
+            _draft.ExecutablePath = selectedPath;
+        }
+    }
+
+    private async Task PickThumbnailImagePathAsync()
+    {
+        string? selectedPath = await PathPickerService.PickThumbnailImagePathAsync().ConfigureAwait(false);
+        if (!string.IsNullOrWhiteSpace(selectedPath))
+        {
+            _draft.ThumbnailSourcePath = selectedPath;
+        }
+    }
+
+    private async Task PickRepositoryFolderPathAsync()
+    {
+        string? selectedPath = await PathPickerService.PickRepositoryFolderPathAsync().ConfigureAwait(false);
+        if (!string.IsNullOrWhiteSpace(selectedPath))
+        {
+            _draft.RelatedRepositoryPath = selectedPath;
+        }
+    }
+
+    private void ClearExecutablePath()
+    {
+        _draft.ExecutablePath = string.Empty;
+    }
+
+    private void ClearThumbnailPath()
+    {
+        _draft.ThumbnailSourcePath = null;
+    }
+
+    private void ClearRepositoryPath()
+    {
+        _draft.RelatedRepositoryPath = null;
     }
 
     private async Task DeleteSelectedAsync()
@@ -269,6 +325,11 @@
     private static string FormatLastPlayed(DateTimeOffset? value)
     {
         return value is null ? "最終プレイ: 未記録" : $"最終プレイ: {value.Value:yyyy-MM-dd HH:mm}";
+    }
+
+    private static string FormatRepositoryPath(string? path)
+    {
+        return string.IsNullOrWhiteSpace(path) ? "関連リポジトリ: 未設定" : $"関連リポジトリ: {path}";
     }
 
     private static string GetStatusClass(GameSyncStatus status)

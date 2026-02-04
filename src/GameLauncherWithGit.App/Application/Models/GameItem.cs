@@ -10,7 +10,7 @@ public sealed class GameItem
 
     public string? ThumbnailPath { get; set; }
 
-    public IReadOnlyList<string> RelatedRepositoryIds { get; set; } = Array.Empty<string>();
+    public string? RelatedRepositoryPath { get; set; }
 
     public DateTimeOffset? LastPlayedAt { get; set; }
 

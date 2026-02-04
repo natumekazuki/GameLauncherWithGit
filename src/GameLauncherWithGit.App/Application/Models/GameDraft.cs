@@ -8,5 +8,5 @@ public sealed class GameDraft
 
     public string? ThumbnailSourcePath { get; set; }
 
-    public string RelatedRepositoryIdsCsv { get; set; } = string.Empty;
+    public string? RelatedRepositoryPath { get; set; }
 }

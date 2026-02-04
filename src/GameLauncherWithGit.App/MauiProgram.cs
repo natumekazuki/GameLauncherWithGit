@@ -31,6 +31,7 @@ public static class MauiProgram
 		builder.Services.AddSingleton<IGameLibraryService, GameLibraryService>();
 		builder.Services.AddScoped<ILauncherService, LauncherService>();
 		builder.Services.AddScoped<IThumbnailService, ThumbnailService>();
+		builder.Services.AddScoped<IPathPickerService, PathPickerService>();
 		builder.Services.AddTransient<IGitService, GitService>();
 
 		MauiApp app = builder.Build();
