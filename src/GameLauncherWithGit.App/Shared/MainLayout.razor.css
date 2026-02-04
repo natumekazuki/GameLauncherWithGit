@@ -1,7 +1,7 @@
 .shell-root {
     min-height: 100vh;
     background:
-        radial-gradient(1200px 600px at -10% -20%, rgba(31, 88, 138, 0.18), transparent 60%),
-        radial-gradient(900px 500px at 110% -10%, rgba(14, 120, 102, 0.16), transparent 55%),
-        #f3f7fa;
+        radial-gradient(1200px 700px at 85% -10%, rgba(255, 255, 255, 0.05), transparent 60%),
+        radial-gradient(900px 500px at 8% 100%, rgba(255, 255, 255, 0.04), transparent 70%),
+        #0b0b0c;
 }
