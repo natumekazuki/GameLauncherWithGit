@@ -1,4 +1,6 @@
 ﻿using Microsoft.AspNetCore.Components.WebView.Maui;
+using GameLauncherWithGit.App.Application.Abstractions;
+using GameLauncherWithGit.App.Application.Services;
 using GameLauncherWithGit.App.Infrastructure.Abstractions;
 using GameLauncherWithGit.App.Infrastructure.Services;
 using Microsoft.Extensions.DependencyInjection;
@@ -25,6 +27,7 @@ public static class MauiProgram
 		builder.Services.AddSingleton<IAppStoragePaths, AppStoragePaths>();
 		builder.Services.AddSingleton<IRepositoryWatcherService, RepositoryWatcherService>();
 		builder.Services.AddSingleton<INotificationService, NotificationService>();
+		builder.Services.AddSingleton<ISyncOrchestrator, SyncOrchestrator>();
 		builder.Services.AddTransient<IGitService, GitService>();
 
 		MauiApp app = builder.Build();

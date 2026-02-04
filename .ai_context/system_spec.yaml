@@ -65,8 +65,10 @@ public_interfaces:
       - StopWatch(repositoryId)
   - name: ISyncOrchestrator
     methods:
+      - RegisterRepository(definition)
+      - UnregisterRepository(repositoryId)
       - RequestSync(repositoryId, reason)
-      - RequestImmediateSync(repositoryId)
+      - RequestImmediateSyncAsync(repositoryId, cancellationToken)
   - name: ILauncherService
     methods:
       - LaunchGameAsync(gameId, cancellationToken)

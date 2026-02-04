@@ -17,10 +17,10 @@
   - [x] 設定/ログ保存ディレクトリ（`%AppData%`）の基盤実装
   - [x] Git実行サービス、監視サービス、通知サービスのDI登録
 
-- [ ] 3. 同期エンジン（MVP）を実装する
-  - [ ] FileSystemWatcher + リポジトリ単位デバウンス（既定10秒、設定可変）
-  - [ ] 同期フロー `fetch -> pull --rebase -> add -A -> commit(差分時のみ) -> push`
-  - [ ] 失敗分類（競合/認証/ネットワーク/権限）と指数バックオフ再試行
+- [x] 3. 同期エンジン（MVP）を実装する
+  - [x] FileSystemWatcher + リポジトリ単位デバウンス（既定10秒、設定可変）
+  - [x] 同期フロー `fetch -> pull --rebase -> add -A -> commit(差分時のみ) -> push`
+  - [x] 失敗分類（競合/認証/ネットワーク/権限）と指数バックオフ再試行
 
 - [ ] 4. ランチャーUI（Blazor）を実装する
   - [ ] ゲーム一覧カードUI（先頭「+新規追加」カード、常時「起動」ボタン）
@@ -69,3 +69,4 @@
 - 2026-02-04: `.ai_context/system_spec.yaml` と `.ai_context/coding_rules.md` を新規追加。
 - 2026-02-04: `src/GameLauncherWithGit.App` に MAUI Blazor プロジェクトを作成し、基盤サービス（AppData/Git/Watcher/Notification）のDIを追加。
 - 2026-02-04: `dotnet build -f net8.0-windows10.0.19041.0` は `NETSDK1147 (maui-tizen workload)` で失敗。Windows環境での workload restore 実施後に起動確認を継続する。
+- 2026-02-04: `SyncOrchestrator` を追加し、デバウンス後の同期実行、差分時のみcommit、失敗分類、指数バックオフ再試行を実装。
