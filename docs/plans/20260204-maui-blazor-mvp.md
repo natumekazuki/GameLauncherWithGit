@@ -14,8 +14,8 @@
 
 - [ ] 2. ソリューション基盤を作成する（MAUI Blazor）
   - [ ] MAUI Blazorプロジェクトを作成し、Windowsターゲットで起動確認
-  - [ ] 設定/ログ保存ディレクトリ（`%AppData%`）の基盤実装
-  - [ ] Git実行サービス、監視サービス、通知サービスのDI登録
+  - [x] 設定/ログ保存ディレクトリ（`%AppData%`）の基盤実装
+  - [x] Git実行サービス、監視サービス、通知サービスのDI登録
 
 - [ ] 3. 同期エンジン（MVP）を実装する
   - [ ] FileSystemWatcher + リポジトリ単位デバウンス（既定10秒、設定可変）
@@ -67,3 +67,5 @@
 - 2026-02-04: `docs/要件定義.md` に MAUI Blazor Hybrid 前提を追加。
 - 2026-02-04: `docs/design/maui-blazor-architecture.md` を追加し、同期フロー/起動フロー/DI方針を定義。
 - 2026-02-04: `.ai_context/system_spec.yaml` と `.ai_context/coding_rules.md` を新規追加。
+- 2026-02-04: `src/GameLauncherWithGit.App` に MAUI Blazor プロジェクトを作成し、基盤サービス（AppData/Git/Watcher/Notification）のDIを追加。
+- 2026-02-04: `dotnet build -f net8.0-windows10.0.19041.0` は `NETSDK1147 (maui-tizen workload)` で失敗。Windows環境での workload restore 実施後に起動確認を継続する。
