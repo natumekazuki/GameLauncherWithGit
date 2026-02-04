@@ -73,3 +73,4 @@
 - 2026-02-04: ランチャーUIの初版（カード/詳細モーダル/起動導線）と `GameLibraryService` を追加。サムネイルは `ThumbnailService` で512px PNG生成に対応。
 - 2026-02-04: 「今すぐ同期」「ログ表示」はUI導線のみ先行実装。Windows連携機能と合わせて次ステップで本実装する。
 - 2026-02-04: プロジェクトを `net8.0-windows10.0.19041.0` に絞っても、現環境では引き続き `maui-tizen workload` 要求でビルド不能。環境依存課題として継続管理する。
+- 2026-02-04: Windowsビルド時の `CS0118 ('Application' は名前空間)` を解消するため、`App.xaml.cs` の基底型を `Microsoft.Maui.Controls.Application` に明示修正。
