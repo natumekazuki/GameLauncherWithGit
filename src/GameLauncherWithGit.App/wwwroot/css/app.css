@@ -1,9 +1,27 @@
+:root {
+    --bg-main: #0b0b0c;
+    --bg-panel: #141517;
+    --bg-panel-soft: #191b1d;
+    --bg-input: #111214;
+    --border: #2a2d31;
+    --border-soft: #22252a;
+    --text-main: #f2f3f5;
+    --text-sub: #a5acb4;
+    --accent: #d0d4db;
+    --accent-strong: #f3f5f8;
+    --danger: #ff6a6a;
+    --shadow: 0 10px 32px rgba(0, 0, 0, 0.45);
+}
+
 html,
 body {
     margin: 0;
     font-family: "Segoe UI", "Yu Gothic UI", sans-serif;
-    color: #122331;
-    background: #f3f7fa;
+    color: var(--text-main);
+    background:
+        radial-gradient(1200px 700px at 80% -10%, rgba(255, 255, 255, 0.05), transparent 60%),
+        radial-gradient(900px 500px at 10% 100%, rgba(255, 255, 255, 0.04), transparent 70%),
+        var(--bg-main);
 }
 
 h1,
@@ -30,18 +48,19 @@ input {
 
 .launcher-header h1 {
     font-size: 34px;
-    letter-spacing: 0.02em;
+    letter-spacing: 0.03em;
+    color: var(--accent-strong);
 }
 
 .launcher-header p {
     margin-top: 6px;
-    color: #496170;
+    color: var(--text-sub);
 }
 
 .loading-panel {
     border-radius: 16px;
-    background: #ffffff;
-    border: 1px solid #d3e0ea;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
     padding: 36px;
 }
 
@@ -52,13 +71,13 @@ input {
 }
 
 .game-card {
-    border: 1px solid #d2e0e8;
+    border: 1px solid var(--border);
     border-radius: 16px;
-    background: #fff;
+    background: var(--bg-panel);
     padding: 12px;
     display: grid;
     gap: 12px;
-    box-shadow: 0 6px 16px rgba(27, 56, 78, 0.08);
+    box-shadow: var(--shadow);
     text-align: left;
 }
 
@@ -68,16 +87,16 @@ input {
     display: grid;
     place-content: center;
     gap: 10px;
-    color: #21526d;
+    color: var(--text-sub);
     border-style: dashed;
-    background: #f8fcff;
+    background: var(--bg-panel-soft);
 }
 
 .add-icon {
     width: 50px;
     height: 50px;
     border-radius: 999px;
-    border: 2px solid #21526d;
+    border: 2px solid var(--text-sub);
     display: grid;
     place-items: center;
     font-size: 30px;
@@ -88,8 +107,8 @@ input {
 .thumb-area {
     height: 170px;
     border-radius: 12px;
-    border: 1px solid #dbe6ed;
-    background: #edf4f9;
+    border: 1px solid var(--border-soft);
+    background: #0f1012;
     display: grid;
     place-items: center;
     overflow: hidden;
@@ -100,7 +119,7 @@ input {
     width: 100%;
     height: 100%;
     object-fit: contain;
-    background: #f4f8fb;
+    background: #0f1012;
 }
 
 .thumb-hidden {
@@ -108,7 +127,7 @@ input {
 }
 
 .thumb-placeholder {
-    color: #688294;
+    color: #707780;
     font-size: 13px;
 }
 
@@ -116,20 +135,22 @@ input {
     width: 26px;
     height: 26px;
     border-radius: 999px;
-    border: 3px solid #b7ccda;
-    border-top-color: #1f6485;
+    border: 3px solid #3a3f45;
+    border-top-color: #b8bec7;
     animation: spin 0.9s linear infinite;
     position: absolute;
 }
 
 .game-main h2 {
     font-size: 19px;
+    color: var(--text-main);
 }
 
 .meta {
-    color: #4f6677;
+    color: var(--text-sub);
     font-size: 13px;
     margin-top: 6px;
+    word-break: break-all;
 }
 
 .status-badge {
@@ -139,26 +160,31 @@ input {
     border-radius: 999px;
     font-size: 12px;
     font-weight: 600;
+    border: 1px solid transparent;
 }
 
 .status-unknown {
-    color: #8f5a11;
-    background: #fff4df;
+    color: #d0bb8d;
+    background: rgba(107, 83, 40, 0.24);
+    border-color: rgba(176, 141, 82, 0.4);
 }
 
 .status-syncing {
-    color: #0b4f85;
-    background: #ddefff;
+    color: #9ec2e3;
+    background: rgba(41, 77, 117, 0.24);
+    border-color: rgba(98, 150, 201, 0.38);
 }
 
 .status-synced {
-    color: #0f6a45;
-    background: #dff5ea;
+    color: #9ed2b8;
+    background: rgba(35, 89, 62, 0.24);
+    border-color: rgba(88, 160, 125, 0.38);
 }
 
 .status-error {
-    color: #8a1b1b;
-    background: #ffe4e4;
+    color: #ff9b9b;
+    background: rgba(120, 40, 40, 0.24);
+    border-color: rgba(199, 86, 86, 0.4);
 }
 
 .card-actions {
@@ -168,28 +194,48 @@ input {
 }
 
 .launch-button,
-.secondary-button {
-    border: none;
+.secondary-button,
+.picker-button,
+.clear-button {
+    border: 1px solid var(--border);
     border-radius: 10px;
     padding: 10px 12px;
     cursor: pointer;
+    background: var(--bg-panel-soft);
+    color: var(--text-main);
 }
 
 .launch-button {
-    background: #1d6a8f;
-    color: #fff;
+    background: #23262a;
+    border-color: #353a41;
+    color: var(--accent-strong);
     font-weight: 600;
 }
 
 .secondary-button {
-    background: #e9f2f8;
-    color: #1d4f69;
+    color: var(--text-sub);
+}
+
+.picker-button {
+    color: var(--accent-strong);
+}
+
+.clear-button {
+    color: var(--danger);
+}
+
+.launch-button:hover,
+.secondary-button:hover,
+.picker-button:hover,
+.clear-button:hover,
+.add-card:hover {
+    filter: brightness(1.12);
 }
 
 .modal-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(8, 21, 34, 0.36);
+    background: rgba(0, 0, 0, 0.58);
     display: grid;
     place-items: center;
     padding: 20px;
@@ -197,18 +243,32 @@ input {
 }
 
 .modal-sheet {
-    width: min(640px, 100%);
+    width: min(720px, 100%);
     border-radius: 14px;
-    background: #fff;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
     padding: 18px;
     display: grid;
     gap: 10px;
+    box-shadow: var(--shadow);
 }
 
 .modal-sheet input {
-    border: 1px solid #c8d8e3;
+    border: 1px solid var(--border);
     border-radius: 8px;
     padding: 9px 10px;
+    background: var(--bg-input);
+    color: var(--text-main);
+}
+
+.modal-sheet input[readonly] {
+    color: #cfd4db;
+}
+
+.picker-input-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 8px;
 }
 
 .modal-actions {
@@ -242,5 +302,9 @@ input {
 
     .thumb-area {
         height: 150px;
+    }
+
+    .picker-input-row {
+        grid-template-columns: 1fr;
     }
 }
