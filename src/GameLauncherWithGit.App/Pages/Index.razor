@@ -6,6 +6,7 @@
 @inject ILauncherService LauncherService
 @inject INotificationService NotificationService
 @inject IPathPickerService PathPickerService
+@inject IAppStoragePaths AppStoragePaths
 
 <PageTitle>Game Launcher</PageTitle>
 
@@ -211,43 +212,83 @@
 
     private async Task SaveDraftAsync()
     {
-        if (_editingGameId is null)
+        if (string.IsNullOrWhiteSpace(_draft.Title))
         {
-            await GameLibraryService.AddAsync(_draft).ConfigureAwait(false);
-        }
-        else
-        {
-            await GameLibraryService.UpdateAsync(_editingGameId.Value, _draft).ConfigureAwait(false);
+            await NotificationService.NotifyErrorAsync("入力エラー", "タイトルは必須です。").ConfigureAwait(false);
+            return;
         }
 
-        CloseEditor();
-        await ReloadAsync().ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(_draft.ExecutablePath))
+        {
+            await NotificationService.NotifyErrorAsync("入力エラー", "実行ファイルを選択してください。").ConfigureAwait(false);
+            return;
+        }
+
+        try
+        {
+            if (_editingGameId is null)
+            {
+                await GameLibraryService.AddAsync(_draft).ConfigureAwait(false);
+            }
+            else
+            {
+                await GameLibraryService.UpdateAsync(_editingGameId.Value, _draft).ConfigureAwait(false);
+            }
+
+            CloseEditor();
+            await ReloadAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            await LogUiErrorAsync("保存処理", ex).ConfigureAwait(false);
+        }
     }
 
     private async Task PickExecutablePathAsync()
     {
-        string? selectedPath = await PathPickerService.PickExecutablePathAsync().ConfigureAwait(false);
-        if (!string.IsNullOrWhiteSpace(selectedPath))
+        try
         {
-            _draft.ExecutablePath = selectedPath;
+            string? selectedPath = await PathPickerService.PickExecutablePathAsync().ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(selectedPath))
+            {
+                _draft.ExecutablePath = selectedPath;
+            }
+        }
+        catch (Exception ex)
+        {
+            await LogUiErrorAsync("実行ファイル選択", ex).ConfigureAwait(false);
         }
     }
 
     private async Task PickThumbnailImagePathAsync()
     {
-        string? selectedPath = await PathPickerService.PickThumbnailImagePathAsync().ConfigureAwait(false);
-        if (!string.IsNullOrWhiteSpace(selectedPath))
+        try
         {
-            _draft.ThumbnailSourcePath = selectedPath;
+            string? selectedPath = await PathPickerService.PickThumbnailImagePathAsync().ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(selectedPath))
+            {
+                _draft.ThumbnailSourcePath = selectedPath;
+            }
+        }
+        catch (Exception ex)
+        {
+            await LogUiErrorAsync("サムネイル選択", ex).ConfigureAwait(false);
         }
     }
 
     private async Task PickRepositoryFolderPathAsync()
     {
-        string? selectedPath = await PathPickerService.PickRepositoryFolderPathAsync().ConfigureAwait(false);
-        if (!string.IsNullOrWhiteSpace(selectedPath))
+        try
         {
-            _draft.RelatedRepositoryPath = selectedPath;
+            string? selectedPath = await PathPickerService.PickRepositoryFolderPathAsync().ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(selectedPath))
+            {
+                _draft.RelatedRepositoryPath = selectedPath;
+            }
+        }
+        catch (Exception ex)
+        {
+            await LogUiErrorAsync("関連リポジトリ選択", ex).ConfigureAwait(false);
         }
     }
 
@@ -330,6 +371,31 @@
     private static string FormatRepositoryPath(string? path)
     {
         return string.IsNullOrWhiteSpace(path) ? "関連リポジトリ: 未設定" : $"関連リポジトリ: {path}";
+    }
+
+    private async Task LogUiErrorAsync(string actionName, Exception ex)
+    {
+        string logPath = Path.Combine(
+            AppStoragePaths.LogDirectory,
+            $"ui-temp-{DateTime.Now:yyyyMMdd}.log");
+
+        string message =
+            $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {actionName}{Environment.NewLine}" +
+            $"{ex}{Environment.NewLine}{Environment.NewLine}";
+
+        try
+        {
+            Directory.CreateDirectory(AppStoragePaths.LogDirectory);
+            await File.AppendAllTextAsync(logPath, message).ConfigureAwait(false);
+        }
+        catch
+        {
+            // ログ書き込み自体の失敗は握りつぶし、通知のみ試みる。
+        }
+
+        await NotificationService.NotifyErrorAsync(
+            "処理中にエラーが発生しました",
+            $"{actionName} に失敗しました。ログ: {logPath}").ConfigureAwait(false);
     }
 
     private static string GetStatusClass(GameSyncStatus status)
