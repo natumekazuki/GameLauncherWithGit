@@ -1,0 +1,88 @@
+project:
+  name: GameLauncherWithGit
+  platform:
+    os: Windows 11
+    runtime: .NET 8
+    ui: .NET MAUI Blazor Hybrid
+  goals:
+    - ゲームセーブデータのGit自動同期
+    - ゲーム起動前の事前pull
+
+architecture:
+  layers:
+    - name: UI
+      description: Razorコンポーネントでゲーム一覧と操作を提供
+    - name: Application
+      description: 同期オーケストレーション、起動制御、状態管理
+    - name: Infrastructure
+      description: Git実行、監視、通知、サムネイル、永続化
+    - name: WindowsBridge
+      description: タスクトレイ、Toast、自動起動などOS連携
+
+sync_policy:
+  debounce_seconds_default: 10
+  command_order:
+    - git fetch
+    - git pull --rebase
+    - git add -A
+    - git commit (only when changes exist)
+    - git push
+  offline_behavior:
+    local_commit: enabled
+    retry: exponential_backoff
+  conflict_behavior:
+    auto_sync: stop
+    notify: true
+
+storage:
+  base_dir: "%AppData%/GameLauncherWithGit"
+  files:
+    - settings.json
+    - logs/*.log
+    - thumbnails/*.png
+
+di_lifecycles:
+  singleton:
+    - SyncOrchestrator
+    - RepositoryWatcherService
+    - RepositoryStateStore
+    - NotificationService
+    - TrayService
+    - AutoStartService
+  scoped:
+    - LauncherService
+    - ThumbnailService
+  transient:
+    - GitService
+
+public_interfaces:
+  - name: IGitService
+    methods:
+      - ExecuteAsync(repositoryPath, args, cancellationToken)
+  - name: IRepositoryWatcherService
+    methods:
+      - StartWatch(repositoryId, path, debounceSeconds)
+      - StopWatch(repositoryId)
+  - name: ISyncOrchestrator
+    methods:
+      - RequestSync(repositoryId, reason)
+      - RequestImmediateSync(repositoryId)
+  - name: ILauncherService
+    methods:
+      - LaunchGameAsync(gameId, cancellationToken)
+  - name: INotificationService
+    methods:
+      - NotifySyncSuccess(repositoryId)
+      - NotifySyncFailure(repositoryId, errorType)
+      - NotifyRecovered(repositoryId)
+  - name: ITrayService
+    methods:
+      - SetState(state)
+      - ShowMenu()
+  - name: IAutoStartService
+    methods:
+      - EnableAutoStart()
+      - DisableAutoStart()
+  - name: IThumbnailService
+    methods:
+      - GenerateThumbnailAsync(sourcePath, destinationPath)
