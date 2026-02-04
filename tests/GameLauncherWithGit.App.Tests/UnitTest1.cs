@@ -12,18 +12,20 @@ public class GameLibraryServiceTests
     {
         using var fixture = new TestFixture(thumbnailResult: true, createThumbnailFile: true);
         var service = fixture.CreateService();
+        string repositoryPath = Path.Combine(fixture.BaseDirectory, "repo");
+        Directory.CreateDirectory(repositoryPath);
 
         var added = await service.AddAsync(new GameDraft
         {
             Title = "  Test Game  ",
             ExecutablePath = "  C:\\Games\\test.exe  ",
             ThumbnailSourcePath = "C:\\tmp\\source.png",
-            RelatedRepositoryIdsCsv = "repo-a, repo-b, repo-a",
+            RelatedRepositoryPath = $"  {repositoryPath}  ",
         });
 
         Assert.Equal("Test Game", added.Title);
         Assert.Equal("C:\\Games\\test.exe", added.ExecutablePath);
-        Assert.Equal(new[] { "repo-a", "repo-b" }, added.RelatedRepositoryIds);
+        Assert.Equal(repositoryPath, added.RelatedRepositoryPath);
         Assert.False(string.IsNullOrWhiteSpace(added.ThumbnailPath));
         Assert.True(File.Exists(added.ThumbnailPath!));
     }
@@ -51,6 +53,20 @@ public class GameLibraryServiceTests
         {
             Title = "Game",
             ExecutablePath = "C:\\Games\\test.exe",
+        }));
+    }
+
+    [Fact]
+    public async Task AddAsync_WithMissingRepositoryFolder_ThrowsInvalidOperationException()
+    {
+        using var fixture = new TestFixture();
+        var service = fixture.CreateService();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.AddAsync(new GameDraft
+        {
+            Title = "Game",
+            ExecutablePath = "C:\\Games\\test.exe",
+            RelatedRepositoryPath = "C:\\not-found\\repo",
         }));
     }
 
@@ -123,6 +139,8 @@ public class GameLibraryServiceTests
         {
             return new GameLibraryService(_paths, _thumbnailService, NullLogger<GameLibraryService>.Instance);
         }
+
+        public string BaseDirectory => _baseDir;
 
         public void Dispose()
         {
