@@ -2,11 +2,12 @@
 @using GameLauncherWithGit.App.Application.Abstractions
 @using GameLauncherWithGit.App.Application.Models
 @using GameLauncherWithGit.App.Infrastructure.Abstractions
-@using GameLauncherWithGit.App.Infrastructure.Services
+@using Microsoft.Extensions.Logging
 @inject IGameLibraryService GameLibraryService
 @inject ILauncherService LauncherService
 @inject INotificationService NotificationService
 @inject IPathPickerService PathPickerService
+@inject ILogger<Index> Logger
 
 <PageTitle>Game Launcher</PageTitle>
 
@@ -375,11 +376,11 @@
 
     private async Task LogUiErrorAsync(string actionName, Exception ex)
     {
-        string logPath = TemporaryErrorLogService.AppendException($"UI.{actionName}", ex);
+        Logger.LogError(ex, "UI例外: {ActionName}", actionName);
 
         await NotificationService.NotifyErrorAsync(
             "処理中にエラーが発生しました",
-            $"{actionName} に失敗しました。ログ: {logPath}").ConfigureAwait(false);
+            $"{actionName} に失敗しました。アプリログを確認してください。").ConfigureAwait(false);
     }
 
     private static string GetStatusClass(GameSyncStatus status)
