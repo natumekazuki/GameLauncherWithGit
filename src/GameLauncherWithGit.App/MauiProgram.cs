@@ -30,7 +30,7 @@ public static class MauiProgram
 		builder.Services.AddSingleton<ISyncOrchestrator, SyncOrchestrator>();
 		builder.Services.AddSingleton<IGameLibraryService, GameLibraryService>();
 		builder.Services.AddScoped<ILauncherService, LauncherService>();
-		builder.Services.AddScoped<IThumbnailService, ThumbnailService>();
+		builder.Services.AddSingleton<IThumbnailService, ThumbnailService>();
 		builder.Services.AddScoped<IPathPickerService, PathPickerService>();
 		builder.Services.AddTransient<IGitService, GitService>();
 
