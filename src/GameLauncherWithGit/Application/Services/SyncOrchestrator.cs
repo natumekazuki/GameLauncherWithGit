@@ -172,12 +172,12 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 
 		await EnsureCommandSuccessAsync(repositoryPath, "fetch", shouldPauseRepository: false, cancellationToken);
 
-		var pullResult = await _gitService.RunAsync(repositoryPath, "pull --rebase", cancellationToken);
+		var pullResult = await _gitService.RunAsync(repositoryPath, "pull --rebase --autostash", cancellationToken);
 		if (!pullResult.IsSuccess)
 		{
 			throw new SyncCommandException(
 				repositoryPath,
-				"pull --rebase",
+				"pull --rebase --autostash",
 				BuildFailureReason(pullResult),
 				shouldPauseRepository: IsPullConflict(pullResult));
 		}
