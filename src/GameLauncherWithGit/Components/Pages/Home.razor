@@ -89,10 +89,49 @@
             </div>
 
             <div class="editor-field">
-                <label for="editor-repository-paths">関連リポジトリ（1行に1件）</label>
-                <textarea id="editor-repository-paths" rows="5" @bind="_editorRepositoryPaths" @bind:event="oninput"></textarea>
+                <label>関連リポジトリ</label>
+                @if (_editorRepositoryPaths.Count == 0)
+                {
+                    <p class="repo-editor-empty">関連リポジトリが未設定です。</p>
+                }
+                else
+                {
+                    <ul class="repo-editor-list">
+                        @for (var index = 0; index < _editorRepositoryPaths.Count; index++)
+                        {
+                            var currentIndex = index;
+                            <li class="repo-editor-item">
+                                <span class="repo-editor-path">@_editorRepositoryPaths[currentIndex]</span>
+                                <div class="repo-editor-item-actions">
+                                    <button type="button"
+                                            class="secondary-button repo-op-button"
+                                            @onclick="() => MoveRepositoryPathUp(currentIndex)"
+                                            disabled="_isSaving || currentIndex == 0">
+                                        ↑
+                                    </button>
+                                    <button type="button"
+                                            class="secondary-button repo-op-button"
+                                            @onclick="() => MoveRepositoryPathDown(currentIndex)"
+                                            disabled="_isSaving || currentIndex == _editorRepositoryPaths.Count - 1">
+                                        ↓
+                                    </button>
+                                    <button type="button"
+                                            class="secondary-button repo-op-button repo-remove-button"
+                                            @onclick="() => RemoveRepositoryPath(currentIndex)"
+                                            disabled="_isSaving">
+                                        削除
+                                    </button>
+                                </div>
+                            </li>
+                        }
+                    </ul>
+                }
+
                 <div class="editor-repo-actions">
-                    <button type="button" class="secondary-button picker-button" @onclick="PickRepositoryDirectoryPathAsync" disabled="_isSaving">
+                    <button type="button"
+                            class="secondary-button picker-button"
+                            @onclick="PickRepositoryDirectoryPathAsync"
+                            disabled="_isSaving">
                         フォルダ追加
                     </button>
                 </div>
@@ -123,7 +162,7 @@
     private string? _editingGameId;
     private string _editorTitle = string.Empty;
     private string _editorExecutablePath = string.Empty;
-    private string _editorRepositoryPaths = string.Empty;
+    private List<string> _editorRepositoryPaths = [];
     private string? _editorError;
 
     protected override async Task OnInitializedAsync()
@@ -149,7 +188,7 @@
         _editingGameId = null;
         _editorTitle = string.Empty;
         _editorExecutablePath = string.Empty;
-        _editorRepositoryPaths = string.Empty;
+        _editorRepositoryPaths = [];
         _editorError = null;
         _isEditorOpen = true;
     }
@@ -160,7 +199,7 @@
         _editingGameId = game.Id;
         _editorTitle = game.Title;
         _editorExecutablePath = game.ExecutablePath;
-        _editorRepositoryPaths = string.Join(Environment.NewLine, game.RelatedRepositoryPaths);
+        _editorRepositoryPaths = game.RelatedRepositoryPaths.ToList();
         _editorError = null;
         _isEditorOpen = true;
     }
@@ -196,7 +235,7 @@
         var input = new GameEditInput(
             Title: _editorTitle,
             ExecutablePath: _editorExecutablePath,
-            RelatedRepositoryPaths: ParseRepositoryPaths(_editorRepositoryPaths));
+            RelatedRepositoryPaths: _editorRepositoryPaths);
 
         _isSaving = true;
         try
@@ -261,33 +300,49 @@
             return;
         }
 
-        var paths = ParseRepositoryPaths(_editorRepositoryPaths).ToList();
-        if (paths.Any(existing => string.Equals(existing, selectedPath, StringComparison.OrdinalIgnoreCase)))
+        if (_editorRepositoryPaths.Any(existing => string.Equals(existing, selectedPath, StringComparison.OrdinalIgnoreCase)))
         {
             return;
         }
 
-        paths.Add(selectedPath);
-        _editorRepositoryPaths = string.Join(Environment.NewLine, paths);
+        _editorRepositoryPaths.Add(selectedPath);
+    }
+
+    private void RemoveRepositoryPath(int index)
+    {
+        if (index < 0 || index >= _editorRepositoryPaths.Count)
+        {
+            return;
+        }
+
+        _editorRepositoryPaths.RemoveAt(index);
+    }
+
+    private void MoveRepositoryPathUp(int index)
+    {
+        if (index <= 0 || index >= _editorRepositoryPaths.Count)
+        {
+            return;
+        }
+
+        (_editorRepositoryPaths[index - 1], _editorRepositoryPaths[index]) =
+            (_editorRepositoryPaths[index], _editorRepositoryPaths[index - 1]);
+    }
+
+    private void MoveRepositoryPathDown(int index)
+    {
+        if (index < 0 || index >= _editorRepositoryPaths.Count - 1)
+        {
+            return;
+        }
+
+        (_editorRepositoryPaths[index], _editorRepositoryPaths[index + 1]) =
+            (_editorRepositoryPaths[index + 1], _editorRepositoryPaths[index]);
     }
 
     private async Task ReloadGamesAsync()
     {
         _games = await GameLibraryService.GetGamesAsync();
-    }
-
-    private static IReadOnlyList<string> ParseRepositoryPaths(string rawValue)
-    {
-        if (string.IsNullOrWhiteSpace(rawValue))
-        {
-            return Array.Empty<string>();
-        }
-
-        return rawValue
-            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(static value => !string.IsNullOrWhiteSpace(value))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
     }
 
     private static string FormatLastPlayed(DateTimeOffset? value)
