@@ -11,8 +11,8 @@
 ## Task List
 - [x] 1. モデル/サービス契約を拡張し、ゲームごとの関連リポジトリ情報を取得できるようにする。
 - [x] 2. `Infrastructure/Services/GitService.cs` を実装し、`git` コマンドを実行して結果（exit code/stdout/stderr）を返す。
-- [ ] 3. `Application/Services/LauncherService.cs` を実装し、`fetch -> pull --rebase` 成功時のみ exe を起動する。
-- [ ] 4. `Home.razor` の起動結果メッセージを本実装に合わせて調整する（失敗理由を表示）。
+- [x] 3. `Application/Services/LauncherService.cs` を実装し、`fetch -> pull --rebase` 成功時のみ exe を起動する。
+- [x] 4. `Home.razor` の起動結果メッセージを本実装に合わせて調整する（失敗理由を表示）。
 - [ ] 5. ビルドで動作確認し、`docs/design/maui-blazor-architecture.md` の実装ステータスを更新する。
 - [ ] 6. 計画ファイルを完了状態に更新し、`docs/plans/archive/2026/02/` へ移動する。
 
@@ -35,3 +35,5 @@
 - 2026-02-06: ユーザー指定スコープとして「LauncherService 本実装（起動前同期）」を選択。
 - 2026-02-06: `GameCardItem` に `RelatedRepositoryPaths` を追加し、`IGameLibraryService` に `FindByIdAsync` を追加。
 - 2026-02-06: `GitService` を実装し、`ProcessStartInfo` 経由で `git` 実行・キャンセル処理・標準出力/標準エラー収集を追加。
+- 2026-02-06: `LauncherService` を本実装化し、`fetch -> pull --rebase` 成功時のみ exe 起動、失敗時は `Error` 状態へ遷移するよう変更。
+- 2026-02-06: `Home.razor` に起動結果の成功/失敗スタイルを追加。

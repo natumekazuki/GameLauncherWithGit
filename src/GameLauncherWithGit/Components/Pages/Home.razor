@@ -7,7 +7,7 @@
 <section class="library-page">
     <header class="library-header">
         <h1>ゲーム一覧</h1>
-        <p>最小実装として、カード表示と起動前同期フローのプレースホルダーを提供しています。</p>
+        <p>ゲーム起動時に関連リポジトリの同期を実行します。</p>
     </header>
 
     <div class="game-grid">
@@ -47,13 +47,14 @@
 
     @if (!string.IsNullOrWhiteSpace(_message))
     {
-        <p class="action-message">@_message</p>
+        <p class="action-message @GetMessageClass()">@_message</p>
     }
 </section>
 
 @code {
     private IReadOnlyList<GameCardItem>? _games;
     private string? _message;
+    private bool? _isLastActionSuccess;
 
     protected override async Task OnInitializedAsync()
     {
@@ -63,16 +64,19 @@
     private void HandleAddGame()
     {
         _message = "新規追加フローは次ステップで実装予定です。";
+        _isLastActionSuccess = null;
     }
 
     private async Task LaunchAsync(string gameId)
     {
         _message = "起動前同期を実行中です...";
+        _isLastActionSuccess = null;
         StateHasChanged();
 
         var result = await LauncherService.LaunchAsync(gameId);
         _games = await GameLibraryService.GetGamesAsync();
         _message = result.Message;
+        _isLastActionSuccess = result.IsSuccess;
     }
 
     private static string FormatLastPlayed(DateTimeOffset? value)
@@ -99,6 +103,16 @@
             GameCardStatus.Synced => "status-synced",
             GameCardStatus.Error => "status-error",
             _ => "status-unknown"
+        };
+    }
+
+    private string GetMessageClass()
+    {
+        return _isLastActionSuccess switch
+        {
+            true => "action-message-success",
+            false => "action-message-error",
+            _ => string.Empty
         };
     }
 }

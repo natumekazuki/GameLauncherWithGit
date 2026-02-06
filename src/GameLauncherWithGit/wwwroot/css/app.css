@@ -226,3 +226,11 @@ h1:focus {
     margin-top: 1rem;
     color: #263141;
 }
+
+.action-message-success {
+    color: #0f5132;
+}
+
+.action-message-error {
+    color: #842029;
+}
