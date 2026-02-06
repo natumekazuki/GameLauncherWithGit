@@ -1,6 +1,7 @@
 @page "/"
 @inject IGameLibraryService GameLibraryService
 @inject ILauncherService LauncherService
+@inject IPathPickerService PathPickerService
 
 <PageTitle>ゲーム一覧</PageTitle>
 
@@ -79,12 +80,22 @@
 
             <div class="editor-field">
                 <label for="editor-executable-path">実行ファイルパス</label>
-                <input id="editor-executable-path" @bind="_editorExecutablePath" @bind:event="oninput" />
+                <div class="editor-inline-input">
+                    <input id="editor-executable-path" @bind="_editorExecutablePath" @bind:event="oninput" />
+                    <button type="button" class="secondary-button picker-button" @onclick="PickExecutablePathAsync" disabled="_isSaving">
+                        参照
+                    </button>
+                </div>
             </div>
 
             <div class="editor-field">
                 <label for="editor-repository-paths">関連リポジトリ（1行に1件）</label>
                 <textarea id="editor-repository-paths" rows="5" @bind="_editorRepositoryPaths" @bind:event="oninput"></textarea>
+                <div class="editor-repo-actions">
+                    <button type="button" class="secondary-button picker-button" @onclick="PickRepositoryDirectoryPathAsync" disabled="_isSaving">
+                        フォルダ追加
+                    </button>
+                </div>
             </div>
 
             @if (!string.IsNullOrWhiteSpace(_editorError))
@@ -231,6 +242,33 @@
                 CloseEditor(force: true);
             }
         }
+    }
+
+    private async Task PickExecutablePathAsync()
+    {
+        var selectedPath = await PathPickerService.PickExecutablePathAsync();
+        if (!string.IsNullOrWhiteSpace(selectedPath))
+        {
+            _editorExecutablePath = selectedPath;
+        }
+    }
+
+    private async Task PickRepositoryDirectoryPathAsync()
+    {
+        var selectedPath = await PathPickerService.PickRepositoryDirectoryPathAsync();
+        if (string.IsNullOrWhiteSpace(selectedPath))
+        {
+            return;
+        }
+
+        var paths = ParseRepositoryPaths(_editorRepositoryPaths).ToList();
+        if (paths.Any(existing => string.Equals(existing, selectedPath, StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        paths.Add(selectedPath);
+        _editorRepositoryPaths = string.Join(Environment.NewLine, paths);
     }
 
     private async Task ReloadGamesAsync()

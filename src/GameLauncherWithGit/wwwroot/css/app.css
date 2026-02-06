@@ -322,6 +322,24 @@ h1:focus {
     border-color: #4c7de0;
 }
 
+.editor-inline-input {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.editor-inline-input input {
+    flex: 1;
+}
+
+.editor-repo-actions {
+    margin-top: 0.45rem;
+}
+
+.picker-button {
+    width: auto;
+    min-width: 5rem;
+}
+
 .editor-error {
     margin: 0.2rem 0 0.8rem;
     color: #842029;
