@@ -144,13 +144,14 @@ sequenceDiagram
 - 実装済み
   - MAUI Blazor Hybrid の初期スキャフォールド（`GameLauncherWithGit.sln` / `src/GameLauncherWithGit`）
   - `Domain` / `Application` / `Infrastructure` の基本フォルダとインターフェース
-  - DI 登録の初期実装（設計書のライフサイクル方針に沿った仮実装を登録）
-  - ゲーム一覧カードのプレースホルダーUI（先頭の「+ 新規追加」カードと `▶ 起動` 導線）
+  - DI 登録の初期実装
+  - `GitService` の実装（`git` プロセス実行、stdout/stderr/exit code 取得）
+  - `LauncherService` の実装（起動前 `fetch -> pull --rebase`、失敗時の起動ブロック）
+  - ゲーム一覧カードUI（先頭の「+ 新規追加」カードと `▶ 起動` 導線、起動結果表示）
   - Windows 実行/配布スクリプト（`scripts/run-local-unpackaged.ps1` / `scripts/publish-windows-msix.ps1`）
 - 未実装
-  - Git 実行の本実装（`fetch/pull --rebase/add/commit/push`）
+  - 自動同期フロー用の Git 実行実装（`add/commit/push` と失敗分類）
   - FileSystemWatcher による変更監視とリポジトリ単位デバウンス制御
-  - 起動前 Pull の本実装と exe 起動制御
   - Windows 固有機能（タスクトレイ / Toast / 自動起動）
   - 設定永続化（`settings.json`）とログ画面/運用導線
 
