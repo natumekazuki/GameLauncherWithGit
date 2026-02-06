@@ -26,6 +26,7 @@ public static class MauiProgram
 		builder.Services.AddSingleton<INotificationService, NotificationService>();
 		builder.Services.AddSingleton<ITrayService, TrayService>();
 		builder.Services.AddSingleton<IAutoStartService, AutoStartService>();
+		builder.Services.AddSingleton<ILogAccessService, LogAccessService>();
 		builder.Services.AddTransient<IGitService, GitService>();
 		builder.Services.AddScoped<IThumbnailService, ThumbnailService>();
 		builder.Services.AddScoped<ILauncherService, LauncherService>();

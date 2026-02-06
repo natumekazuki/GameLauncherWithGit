@@ -4,11 +4,24 @@
 @inject ILauncherService LauncherService
 @inject IPathPickerService PathPickerService
 @inject IGitService GitService
+@inject IAutoStartService AutoStartService
+@inject ILogAccessService LogAccessService
 @inject IRepositoryWatcherService RepositoryWatcherService
 @inject ISyncOrchestrator SyncOrchestrator
 @inject IRepositoryStateStore RepositoryStateStore
 
 <PageTitle>GameLauncherWithGit</PageTitle>
+
+@if (!_isStartupChecking)
+{
+    <section class="utility-bar">
+        <button type="button"
+                class="secondary-button utility-button"
+                @onclick="OpenSettingsAsync">
+            環境設定
+        </button>
+    </section>
+}
 
 @if (_isStartupChecking)
 {
@@ -114,6 +127,53 @@ else
     }
 </div>
 
+@if (_isSettingsOpen)
+{
+    <div class="editor-overlay" @onclick="() => CloseSettings()">
+        <section class="settings-modal" @onclick:stopPropagation="true">
+            <h2>環境設定</h2>
+
+            <div class="settings-section">
+                <label class="settings-toggle-row">
+                    <span>Windows起動時に自動起動</span>
+                    <input type="checkbox"
+                           checked="@_autoStartEnabled"
+                           @onchange="OnAutoStartChangedAsync"
+                           disabled="@(_isSettingsLoading || _isAutoStartSaving)" />
+                </label>
+                @if (_isSettingsLoading)
+                {
+                    <p class="settings-note">設定を読み込み中...</p>
+                }
+            </div>
+
+            <div class="settings-section settings-actions-row">
+                <button type="button"
+                        class="secondary-button"
+                        @onclick="OpenLatestErrorLogAsync"
+                        disabled="@_isSettingsLoading">
+                    最新エラーログを開く
+                </button>
+                <button type="button"
+                        class="secondary-button"
+                        @onclick="OpenLogDirectoryAsync"
+                        disabled="@_isSettingsLoading">
+                    ログフォルダを開く
+                </button>
+            </div>
+
+            <div class="editor-actions">
+                <button type="button"
+                        class="secondary-button"
+                        @onclick="() => CloseSettings()"
+                        disabled="@(_isSettingsLoading || _isAutoStartSaving)">
+                    閉じる
+                </button>
+            </div>
+        </section>
+    </div>
+}
+
 @if (_isGitReady && _isEditorOpen)
 {
     <div class="editor-overlay" @onclick="() => CloseEditor()">
@@ -203,6 +263,10 @@ else
     private string? _editorThumbnailSourcePath;
     private bool _editorHasThumbnail;
     private bool _editorClearThumbnail;
+    private bool _isSettingsOpen;
+    private bool _isSettingsLoading;
+    private bool _isAutoStartSaving;
+    private bool _autoStartEnabled;
     private bool _isStartupChecking = true;
     private bool _isGitReady = true;
     private string? _startupError;
@@ -247,6 +311,94 @@ else
         var result = await LauncherService.LaunchAsync(gameId);
         await ReloadGamesAsync();
         SetNotification(result.Message, result.IsSuccess);
+    }
+
+    private async Task OpenSettingsAsync()
+    {
+        _isSettingsOpen = true;
+        await LoadSettingsAsync();
+    }
+
+    private void CloseSettings(bool force = false)
+    {
+        if ((_isSettingsLoading || _isAutoStartSaving) && !force)
+        {
+            return;
+        }
+
+        _isSettingsOpen = false;
+    }
+
+    private async Task LoadSettingsAsync()
+    {
+        _isSettingsLoading = true;
+        try
+        {
+            _autoStartEnabled = await AutoStartService.IsEnabledAsync();
+        }
+        catch (Exception ex)
+        {
+            SetNotification($"設定の読み込みに失敗しました: {ex.Message}", false);
+        }
+        finally
+        {
+            _isSettingsLoading = false;
+        }
+    }
+
+    private async Task OnAutoStartChangedAsync(ChangeEventArgs args)
+    {
+        var enabled = ParseCheckboxValue(args);
+        _isAutoStartSaving = true;
+
+        try
+        {
+            await AutoStartService.SetEnabledAsync(enabled);
+            _autoStartEnabled = enabled;
+            SetNotification(enabled ? "自動起動を有効化しました。" : "自動起動を無効化しました。", true);
+        }
+        catch (Exception ex)
+        {
+            SetNotification($"自動起動設定の更新に失敗しました: {ex.Message}", false);
+            try
+            {
+                _autoStartEnabled = await AutoStartService.IsEnabledAsync();
+            }
+            catch
+            {
+                _autoStartEnabled = false;
+            }
+        }
+        finally
+        {
+            _isAutoStartSaving = false;
+        }
+    }
+
+    private async Task OpenLatestErrorLogAsync()
+    {
+        try
+        {
+            await LogAccessService.OpenLatestErrorLogAsync();
+            SetNotification("最新エラーログを開きました。", true);
+        }
+        catch (Exception ex)
+        {
+            SetNotification(ex.Message, false);
+        }
+    }
+
+    private async Task OpenLogDirectoryAsync()
+    {
+        try
+        {
+            await LogAccessService.OpenLogDirectoryAsync();
+            SetNotification("ログフォルダを開きました。", true);
+        }
+        catch (Exception ex)
+        {
+            SetNotification(ex.Message, false);
+        }
     }
 
     private void OpenCreateEditor()
@@ -731,6 +883,40 @@ else
     {
         _message = message;
         _isLastActionSuccess = isSuccess;
+
+        if (isSuccess == false)
+        {
+            _ = WriteErrorLogSafeAsync(message);
+        }
+    }
+
+    private async Task WriteErrorLogSafeAsync(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return;
+        }
+
+        try
+        {
+            await LogAccessService.AppendErrorAsync(message);
+        }
+        catch
+        {
+            // エラーログ書き込み失敗は通知ループを防ぐため握りつぶす。
+        }
+    }
+
+    private static bool ParseCheckboxValue(ChangeEventArgs args)
+    {
+        if (args.Value is bool boolValue)
+        {
+            return boolValue;
+        }
+
+        var value = args.Value?.ToString();
+        return string.Equals(value, "true", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "on", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string BuildGitStartupError(GitCommandResult result)

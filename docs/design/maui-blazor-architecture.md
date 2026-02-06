@@ -50,6 +50,9 @@ flowchart LR
 - `PathPickerService`
   - 実行ファイル、サムネイル画像、関連リポジトリフォルダの選択をOSピッカー経由で提供
   - UI層から Windows API へ直接依存しないための抽象境界を維持
+- `LogAccessService`
+  - `%AppData%/logs/app-errors.log` へエラーメッセージを記録
+  - 最新エラーログ/ログフォルダをOSシェルで開く
 - `GameLibraryStore (SQLite)`
   - ゲーム設定（タイトル/実行ファイル/関連リポジトリ/サムネイルパス/状態）をSQLiteへ保存・読込
 
@@ -120,7 +123,8 @@ sequenceDiagram
 | RepositoryStateStore | Singleton | リポジトリ状態共有のため |
 | NotificationService | Singleton | 通知抑制状態を共有するため |
 | TrayService | Singleton | アプリ全体でトレイを単一管理するため |
-| AutoStartService | Singleton | OS設定操作を集約するため |
+| AutoStartService | Singleton | Windows Runキーの自動起動設定を集約するため |
+| LogAccessService | Singleton | ログ記録とログ表示導線を共有するため |
 | GitService | Transient | コマンド実行を独立単位で扱うため |
 | ThumbnailService | Scoped | UI操作単位で生成しやすくするため |
 | LauncherService | Scoped | 画面操作からの起動処理単位で扱うため |
@@ -161,6 +165,7 @@ sequenceDiagram
   - サイドバーを廃止し、`MainLayout` を1画面向けの単一ペイン構成に変更
   - ホーム画面のダークテーマ化（カード/モーダル/ボタン配色更新）
   - 通知/エラー表示を右下固定の通知ドックへ集約
+  - ホーム画面に「環境設定」導線を追加（自動起動トグル、最新エラーログ/ログフォルダを開く）
   - ゲーム登録/編集モーダル（タイトル/実行ファイル/関連リポジトリ）
   - ゲーム登録/編集モーダルのサムネイル画像選択（参照/解除）
   - `ThumbnailService` の実装（長辺512px・PNG変換、`%AppData%/thumbnails` 保存）
