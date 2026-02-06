@@ -16,18 +16,21 @@ public sealed class GameLibraryService : IGameLibraryService
 				Id: "elden-ring",
 				Title: "Elden Ring",
 				ExecutablePath: @"C:\Games\EldenRing\Game\eldenring.exe",
+				RelatedRepositoryPaths: Array.Empty<string>(),
 				LastPlayedAt: DateTimeOffset.Now.AddDays(-1),
 				Status: GameCardStatus.Synced),
 			new GameCardItem(
 				Id: "monster-hunter-wilds",
 				Title: "Monster Hunter Wilds",
 				ExecutablePath: @"C:\Games\MonsterHunterWilds\mhwilds.exe",
+				RelatedRepositoryPaths: Array.Empty<string>(),
 				LastPlayedAt: null,
 				Status: GameCardStatus.Unknown),
 			new GameCardItem(
 				Id: "hades-ii",
 				Title: "Hades II",
 				ExecutablePath: @"C:\Games\HadesII\hades2.exe",
+				RelatedRepositoryPaths: Array.Empty<string>(),
 				LastPlayedAt: DateTimeOffset.Now.AddDays(-3),
 				Status: GameCardStatus.Error)
 		};
@@ -36,6 +39,12 @@ public sealed class GameLibraryService : IGameLibraryService
 		{
 			_games[item.Id] = item;
 		}
+	}
+
+	public Task<GameCardItem?> FindByIdAsync(string gameId, CancellationToken cancellationToken = default)
+	{
+		_games.TryGetValue(gameId, out var game);
+		return Task.FromResult(game);
 	}
 
 	public Task<IReadOnlyList<GameCardItem>> GetGamesAsync(CancellationToken cancellationToken = default)
