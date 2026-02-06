@@ -14,8 +14,8 @@
 - [x] 3. SQLite保存ロジックを単一リポジトリ仕様へ更新する（既存データ互換を維持）。
 - [x] 4. `Home.razor` の関連リポジトリUIを単一選択仕様へ変更し、手入力を削除する。
 - [x] 5. `app.css` を調整し、不要な一覧編集スタイルを整理する。
-- [ ] 6. ビルド確認を実施し、`docs/design/maui-blazor-architecture.md` を更新する。
-- [ ] 7. 計画ファイルを完了状態に更新し、`docs/plans/archive/2026/02/` へ移動する。
+- [x] 6. ビルド確認を実施し、`docs/design/maui-blazor-architecture.md` を更新する。
+- [x] 7. 計画ファイルを完了状態に更新し、`docs/plans/archive/2026/02/` へ移動する。
 
 ## Affected Files
 - `src/GameLauncherWithGit/Application/Models/GameCardItem.cs`
@@ -39,3 +39,5 @@
 - 2026-02-06: `SqliteGameLibraryStore` を単一リポジトリ保存へ更新し、旧JSON配列から先頭1件を移行する互換処理を追加。
 - 2026-02-06: `Home.razor` の関連リポジトリ編集を単一選択（フォルダ選択/解除）へ変更し、手入力と一覧編集を削除。
 - 2026-02-06: `app.css` の一覧編集スタイルを整理し、単一リポジトリ表示スタイルへ置換。
+- 2026-02-06: `dotnet build GameLauncherWithGit.sln -f net9.0-windows10.0.19041.0` で 0 エラーを確認。
+- 2026-02-06: `docs/design/maui-blazor-architecture.md` を単一リポジトリ仕様へ更新。
