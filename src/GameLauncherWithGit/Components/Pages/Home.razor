@@ -254,6 +254,8 @@
 
     private async Task PickExecutablePathAsync()
     {
+        _editorError = null;
+
         try
         {
             var selectedPath = await PathPickerService.PickExecutablePathAsync();
@@ -261,7 +263,10 @@
             {
                 _editorExecutablePath = selectedPath;
                 _editorError = null;
+                return;
             }
+
+            _editorError = "実行ファイルが選択されませんでした。";
         }
         catch (Exception ex)
         {
@@ -271,6 +276,8 @@
 
     private async Task PickRepositoryDirectoryPathAsync()
     {
+        _editorError = null;
+
         try
         {
             var selectedPath = await PathPickerService.PickRepositoryDirectoryPathAsync();
@@ -278,7 +285,10 @@
             {
                 _editorRepositoryPath = selectedPath;
                 _editorError = null;
+                return;
             }
+
+            _editorError = "リポジトリフォルダが選択されませんでした。";
         }
         catch (Exception ex)
         {

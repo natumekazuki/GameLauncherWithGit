@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using GameLauncherWithGit.Infrastructure.Abstractions;
 using Microsoft.Extensions.Logging;
 
@@ -143,7 +144,19 @@ public sealed class PathPickerService : IPathPickerService
 			return WindowNative.GetWindowHandle(nativeWindow);
 		}
 
-		return IntPtr.Zero;
+		var activeWindowHandle = GetActiveWindow();
+		if (activeWindowHandle != IntPtr.Zero)
+		{
+			return activeWindowHandle;
+		}
+
+		return GetForegroundWindow();
 	}
+
+	[DllImport("user32.dll")]
+	private static extern IntPtr GetActiveWindow();
+
+	[DllImport("user32.dll")]
+	private static extern IntPtr GetForegroundWindow();
 #endif
 }
