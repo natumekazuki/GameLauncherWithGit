@@ -14,7 +14,7 @@
 - [x] 3. `docs/design/maui-blazor-architecture.md` に配布モデル（Unpackaged と MSIX の使い分け）を追記する。
 - [x] 4. Azure Key Vault 証明書の発行/登録/利用手順を `docs/design/` に新規作成する。
 - [x] 5. 手順の再現性確認として、ローカル実行コマンドとMSIX生成コマンドを実行し、結果を記録する。
-- [ ] 6. 計画ファイルを完了状態に更新し、`docs/plans/archive/2026/02/` へ移動する。
+- [x] 6. 計画ファイルを完了状態に更新し、`docs/plans/archive/2026/02/` へ移動する。
 
 ## Affected Files
 - `src/GameLauncherWithGit/GameLauncherWithGit.csproj`（必要時）
