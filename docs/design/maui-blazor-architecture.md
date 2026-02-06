@@ -48,6 +48,8 @@ flowchart LR
 - `PathPickerService`
   - 実行ファイル、サムネイル画像、関連リポジトリフォルダの選択をOSピッカー経由で提供
   - UI層から Windows API へ直接依存しないための抽象境界を維持
+- `GameLibraryStore (SQLite)`
+  - ゲーム設定（タイトル/実行ファイル/関連リポジトリ/状態）をSQLiteへ保存・読込
 
 ## 5. 同期フロー
 ```mermaid
@@ -120,7 +122,8 @@ sequenceDiagram
 ## 9. 永続化
 - 保存先: `%AppData%/GameLauncherWithGit/`
 - 保存対象
-  - `settings.json`: リポジトリ設定、ゲーム設定、デバウンス秒数
+  - `game-library.db`: ゲーム設定（タイトル、実行ファイル、関連リポジトリ、状態、最終プレイ日時）
+  - `settings.json`: リポジトリ設定、デバウンス秒数（予定）
   - `logs/*.log`: Git 実行ログ、障害ログ
   - `thumbnails/*.png`: 変換済みサムネイル
 
@@ -144,10 +147,12 @@ sequenceDiagram
 - 実装済み
   - MAUI Blazor Hybrid の初期スキャフォールド（`GameLauncherWithGit.sln` / `src/GameLauncherWithGit`）
   - `Domain` / `Application` / `Infrastructure` の基本フォルダとインターフェース
+  - `GameLibraryStore` による SQLite 永続化（`game-library.db`）
   - DI 登録の初期実装
   - `GitService` の実装（`git` プロセス実行、stdout/stderr/exit code 取得）
   - `LauncherService` の実装（起動前 `fetch -> pull --rebase`、失敗時の起動ブロック）
-  - ゲーム一覧カードUI（先頭の「+ 新規追加」カードと `▶ 起動` 導線、起動結果表示）
+  - ゲーム一覧カードUI（先頭の「+ 新規追加」カード、`▶ 起動`、`設定`、起動結果表示）
+  - ゲーム登録/編集モーダル（タイトル/実行ファイル/関連リポジトリ）
   - Windows 実行/配布スクリプト（`scripts/run-local-unpackaged.ps1` / `scripts/publish-windows-msix.ps1`）
 - 未実装
   - 自動同期フロー用の Git 実行実装（`add/commit/push` と失敗分類）
