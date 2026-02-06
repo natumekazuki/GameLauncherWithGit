@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using GameLauncherWithGit.Infrastructure.Abstractions;
 using Microsoft.Extensions.Logging;
@@ -38,7 +39,7 @@ public sealed class PathPickerService : IPathPickerService
 				var windowHandle = GetWindowHandle();
 				if (windowHandle == IntPtr.Zero)
 				{
-					throw new InvalidOperationException("ウィンドウハンドルを取得できませんでした。");
+					throw new InvalidOperationException("有効なウィンドウハンドルを取得できませんでした。");
 				}
 
 				var folderPicker = new FolderPicker
@@ -60,7 +61,7 @@ public sealed class PathPickerService : IPathPickerService
 		catch (Exception ex)
 		{
 			_logger.LogError(ex, "Failed to pick repository directory path.");
-			throw new InvalidOperationException("関連リポジトリフォルダの参照に失敗しました。", ex);
+			throw new InvalidOperationException($"関連リポジトリフォルダの参照に失敗しました。詳細: {ex.GetBaseException().Message}", ex);
 		}
 #else
 		await Task.CompletedTask;
@@ -82,7 +83,7 @@ public sealed class PathPickerService : IPathPickerService
 				var windowHandle = GetWindowHandle();
 				if (windowHandle == IntPtr.Zero)
 				{
-					throw new InvalidOperationException("ウィンドウハンドルを取得できませんでした。");
+					throw new InvalidOperationException("有効なウィンドウハンドルを取得できませんでした。");
 				}
 
 				var filePicker = new FileOpenPicker
@@ -108,10 +109,9 @@ public sealed class PathPickerService : IPathPickerService
 		}
 		catch (Exception ex)
 		{
-			_logger.LogError(ex, "Failed to pick file path. title={PickerTitle}", pickerTitle);
-			throw new InvalidOperationException("ファイル参照に失敗しました。", ex);
+			_logger.LogError(ex, "Windows native picker failed. title={PickerTitle}", pickerTitle);
 		}
-#else
+#endif
 		try
 		{
 			var options = new PickOptions
@@ -132,7 +132,11 @@ public sealed class PathPickerService : IPathPickerService
 		{
 			return null;
 		}
-#endif
+		catch (Exception ex)
+		{
+			_logger.LogError(ex, "Failed to pick file path. title={PickerTitle}", pickerTitle);
+			throw new InvalidOperationException($"ファイル参照に失敗しました。詳細: {ex.GetBaseException().Message}", ex);
+		}
 	}
 
 #if WINDOWS
@@ -141,7 +145,17 @@ public sealed class PathPickerService : IPathPickerService
 		var mauiWindow = Microsoft.Maui.Controls.Application.Current?.Windows.FirstOrDefault();
 		if (mauiWindow?.Handler?.PlatformView is Microsoft.UI.Xaml.Window nativeWindow)
 		{
-			return WindowNative.GetWindowHandle(nativeWindow);
+			var handle = WindowNative.GetWindowHandle(nativeWindow);
+			if (handle != IntPtr.Zero)
+			{
+				return handle;
+			}
+		}
+
+		var processWindowHandle = Process.GetCurrentProcess().MainWindowHandle;
+		if (processWindowHandle != IntPtr.Zero)
+		{
+			return processWindowHandle;
 		}
 
 		var activeWindowHandle = GetActiveWindow();
