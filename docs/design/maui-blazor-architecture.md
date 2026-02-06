@@ -154,6 +154,7 @@ sequenceDiagram
   - ゲーム一覧カードUI（先頭の「+ 新規追加」カード、`▶ 起動`、`設定`、起動結果表示）
   - ゲーム登録/編集モーダル（タイトル/実行ファイル/関連リポジトリ）
   - パス選択UI（実行ファイル参照、関連リポジトリフォルダ追加）
+  - 関連リポジトリ一覧編集UI（削除、上へ/下へ並び替え）
   - Windows 実行/配布スクリプト（`scripts/run-local-unpackaged.ps1` / `scripts/publish-windows-msix.ps1`）
 - 未実装
   - 自動同期フロー用の Git 実行実装（`add/commit/push` と失敗分類）
