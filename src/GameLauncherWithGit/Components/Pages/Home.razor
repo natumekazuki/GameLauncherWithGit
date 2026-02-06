@@ -35,18 +35,13 @@
                         <p class="meta-label">実行ファイル</p>
                         <p class="meta-value">@game.ExecutablePath</p>
                         <p class="meta-label">関連リポジトリ</p>
-                        @if (game.RelatedRepositoryPaths.Count == 0)
+                        @if (string.IsNullOrWhiteSpace(game.RelatedRepositoryPath))
                         {
                             <p class="meta-value">未設定</p>
                         }
                         else
                         {
-                            <ul class="repo-list">
-                                @foreach (var repositoryPath in game.RelatedRepositoryPaths)
-                                {
-                                    <li>@repositoryPath</li>
-                                }
-                            </ul>
+                            <p class="meta-value">@game.RelatedRepositoryPath</p>
                         }
                         <p class="meta-label">最終プレイ</p>
                         <p class="meta-value">@FormatLastPlayed(game.LastPlayedAt)</p>
@@ -89,51 +84,25 @@
             </div>
 
             <div class="editor-field">
-                <label>関連リポジトリ</label>
-                @if (_editorRepositoryPaths.Count == 0)
-                {
-                    <p class="repo-editor-empty">関連リポジトリが未設定です。</p>
-                }
-                else
-                {
-                    <ul class="repo-editor-list">
-                        @for (var index = 0; index < _editorRepositoryPaths.Count; index++)
-                        {
-                            var currentIndex = index;
-                            <li class="repo-editor-item">
-                                <span class="repo-editor-path">@_editorRepositoryPaths[currentIndex]</span>
-                                <div class="repo-editor-item-actions">
-                                    <button type="button"
-                                            class="secondary-button repo-op-button"
-                                            @onclick="() => MoveRepositoryPathUp(currentIndex)"
-                                            disabled="_isSaving || currentIndex == 0">
-                                        ↑
-                                    </button>
-                                    <button type="button"
-                                            class="secondary-button repo-op-button"
-                                            @onclick="() => MoveRepositoryPathDown(currentIndex)"
-                                            disabled="_isSaving || currentIndex == _editorRepositoryPaths.Count - 1">
-                                        ↓
-                                    </button>
-                                    <button type="button"
-                                            class="secondary-button repo-op-button repo-remove-button"
-                                            @onclick="() => RemoveRepositoryPath(currentIndex)"
-                                            disabled="_isSaving">
-                                        削除
-                                    </button>
-                                </div>
-                            </li>
-                        }
-                    </ul>
-                }
-
-                <div class="editor-repo-actions">
-                    <button type="button"
-                            class="secondary-button picker-button"
-                            @onclick="PickRepositoryDirectoryPathAsync"
-                            disabled="_isSaving">
-                        フォルダ追加
-                    </button>
+                <label>関連リポジトリ（1件のみ）</label>
+                <div class="single-repo-picker">
+                    <p class="single-repo-value">
+                        @(string.IsNullOrWhiteSpace(_editorRepositoryPath) ? "未設定" : _editorRepositoryPath)
+                    </p>
+                    <div class="single-repo-actions">
+                        <button type="button"
+                                class="secondary-button picker-button"
+                                @onclick="PickRepositoryDirectoryPathAsync"
+                                disabled="_isSaving">
+                            フォルダ選択
+                        </button>
+                        <button type="button"
+                                class="secondary-button picker-button"
+                                @onclick="ClearRepositoryPath"
+                                disabled="_isSaving || string.IsNullOrWhiteSpace(_editorRepositoryPath)">
+                            解除
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -162,7 +131,7 @@
     private string? _editingGameId;
     private string _editorTitle = string.Empty;
     private string _editorExecutablePath = string.Empty;
-    private List<string> _editorRepositoryPaths = [];
+    private string? _editorRepositoryPath;
     private string? _editorError;
 
     protected override async Task OnInitializedAsync()
@@ -188,7 +157,7 @@
         _editingGameId = null;
         _editorTitle = string.Empty;
         _editorExecutablePath = string.Empty;
-        _editorRepositoryPaths = [];
+        _editorRepositoryPath = null;
         _editorError = null;
         _isEditorOpen = true;
     }
@@ -199,7 +168,7 @@
         _editingGameId = game.Id;
         _editorTitle = game.Title;
         _editorExecutablePath = game.ExecutablePath;
-        _editorRepositoryPaths = game.RelatedRepositoryPaths.ToList();
+        _editorRepositoryPath = game.RelatedRepositoryPath;
         _editorError = null;
         _isEditorOpen = true;
     }
@@ -235,7 +204,7 @@
         var input = new GameEditInput(
             Title: _editorTitle,
             ExecutablePath: _editorExecutablePath,
-            RelatedRepositoryPaths: _editorRepositoryPaths);
+            RelatedRepositoryPath: _editorRepositoryPath);
 
         _isSaving = true;
         try
@@ -295,49 +264,15 @@
     private async Task PickRepositoryDirectoryPathAsync()
     {
         var selectedPath = await PathPickerService.PickRepositoryDirectoryPathAsync();
-        if (string.IsNullOrWhiteSpace(selectedPath))
+        if (!string.IsNullOrWhiteSpace(selectedPath))
         {
-            return;
+            _editorRepositoryPath = selectedPath;
         }
-
-        if (_editorRepositoryPaths.Any(existing => string.Equals(existing, selectedPath, StringComparison.OrdinalIgnoreCase)))
-        {
-            return;
-        }
-
-        _editorRepositoryPaths.Add(selectedPath);
     }
 
-    private void RemoveRepositoryPath(int index)
+    private void ClearRepositoryPath()
     {
-        if (index < 0 || index >= _editorRepositoryPaths.Count)
-        {
-            return;
-        }
-
-        _editorRepositoryPaths.RemoveAt(index);
-    }
-
-    private void MoveRepositoryPathUp(int index)
-    {
-        if (index <= 0 || index >= _editorRepositoryPaths.Count)
-        {
-            return;
-        }
-
-        (_editorRepositoryPaths[index - 1], _editorRepositoryPaths[index]) =
-            (_editorRepositoryPaths[index], _editorRepositoryPaths[index - 1]);
-    }
-
-    private void MoveRepositoryPathDown(int index)
-    {
-        if (index < 0 || index >= _editorRepositoryPaths.Count - 1)
-        {
-            return;
-        }
-
-        (_editorRepositoryPaths[index], _editorRepositoryPaths[index + 1]) =
-            (_editorRepositoryPaths[index + 1], _editorRepositoryPaths[index]);
+        _editorRepositoryPath = null;
     }
 
     private async Task ReloadGamesAsync()
