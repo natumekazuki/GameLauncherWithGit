@@ -45,3 +45,4 @@
 - 2026-02-06: カード上に「設定」ボタン、関連リポジトリ一覧表示、モーダル用スタイルを `app.css` へ追加。
 - 2026-02-06: `dotnet build GameLauncherWithGit.sln -f net9.0-windows10.0.19041.0` で 0 エラーを確認。
 - 2026-02-06: `docs/design/maui-blazor-architecture.md` に SQLite 永続化と登録/編集UIの実装反映を追記。
+- 2026-02-06: 保存成功時にモーダルが閉じない不具合を修正（`_isSaving` 状態と `CloseEditor` 呼び出し順を調整）。
