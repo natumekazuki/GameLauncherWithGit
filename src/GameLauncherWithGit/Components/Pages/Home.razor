@@ -11,7 +11,7 @@
     </header>
 
     <div class="game-grid">
-        <button type="button" class="game-card add-card" @onclick="HandleAddGame">
+        <button type="button" class="game-card add-card" @onclick="OpenCreateEditor">
             <span class="add-icon">+</span>
             <span class="add-label">新規追加</span>
         </button>
@@ -33,12 +33,27 @@
                     <div class="game-card-body">
                         <p class="meta-label">実行ファイル</p>
                         <p class="meta-value">@game.ExecutablePath</p>
+                        <p class="meta-label">関連リポジトリ</p>
+                        @if (game.RelatedRepositoryPaths.Count == 0)
+                        {
+                            <p class="meta-value">未設定</p>
+                        }
+                        else
+                        {
+                            <ul class="repo-list">
+                                @foreach (var repositoryPath in game.RelatedRepositoryPaths)
+                                {
+                                    <li>@repositoryPath</li>
+                                }
+                            </ul>
+                        }
                         <p class="meta-label">最終プレイ</p>
                         <p class="meta-value">@FormatLastPlayed(game.LastPlayedAt)</p>
                     </div>
 
                     <div class="game-card-actions">
                         <button type="button" class="launch-button" @onclick="() => LaunchAsync(game.Id)">▶ 起動</button>
+                        <button type="button" class="secondary-button" @onclick="() => OpenEditEditor(game)">設定</button>
                     </div>
                 </article>
             }
@@ -51,20 +66,58 @@
     }
 </section>
 
+@if (_isEditorOpen)
+{
+    <div class="editor-overlay" @onclick="CloseEditor">
+        <section class="editor-modal" @onclick:stopPropagation="true">
+            <h2>@(_isEditMode ? "ゲーム編集" : "ゲーム追加")</h2>
+
+            <div class="editor-field">
+                <label for="editor-title">タイトル</label>
+                <input id="editor-title" @bind="_editorTitle" @bind:event="oninput" />
+            </div>
+
+            <div class="editor-field">
+                <label for="editor-executable-path">実行ファイルパス</label>
+                <input id="editor-executable-path" @bind="_editorExecutablePath" @bind:event="oninput" />
+            </div>
+
+            <div class="editor-field">
+                <label for="editor-repository-paths">関連リポジトリ（1行に1件）</label>
+                <textarea id="editor-repository-paths" rows="5" @bind="_editorRepositoryPaths" @bind:event="oninput"></textarea>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(_editorError))
+            {
+                <p class="editor-error">@_editorError</p>
+            }
+
+            <div class="editor-actions">
+                <button type="button" class="launch-button" @onclick="SaveEditorAsync" disabled="_isSaving">
+                    @(_isSaving ? "保存中..." : "保存")
+                </button>
+                <button type="button" class="secondary-button" @onclick="CloseEditor" disabled="_isSaving">キャンセル</button>
+            </div>
+        </section>
+    </div>
+}
+
 @code {
     private IReadOnlyList<GameCardItem>? _games;
     private string? _message;
     private bool? _isLastActionSuccess;
+    private bool _isEditorOpen;
+    private bool _isEditMode;
+    private bool _isSaving;
+    private string? _editingGameId;
+    private string _editorTitle = string.Empty;
+    private string _editorExecutablePath = string.Empty;
+    private string _editorRepositoryPaths = string.Empty;
+    private string? _editorError;
 
     protected override async Task OnInitializedAsync()
     {
-        _games = await GameLibraryService.GetGamesAsync();
-    }
-
-    private void HandleAddGame()
-    {
-        _message = "新規追加フローは次ステップで実装予定です。";
-        _isLastActionSuccess = null;
+        await ReloadGamesAsync();
     }
 
     private async Task LaunchAsync(string gameId)
@@ -74,9 +127,124 @@
         StateHasChanged();
 
         var result = await LauncherService.LaunchAsync(gameId);
-        _games = await GameLibraryService.GetGamesAsync();
+        await ReloadGamesAsync();
         _message = result.Message;
         _isLastActionSuccess = result.IsSuccess;
+    }
+
+    private void OpenCreateEditor()
+    {
+        _isEditMode = false;
+        _editingGameId = null;
+        _editorTitle = string.Empty;
+        _editorExecutablePath = string.Empty;
+        _editorRepositoryPaths = string.Empty;
+        _editorError = null;
+        _isEditorOpen = true;
+    }
+
+    private void OpenEditEditor(GameCardItem game)
+    {
+        _isEditMode = true;
+        _editingGameId = game.Id;
+        _editorTitle = game.Title;
+        _editorExecutablePath = game.ExecutablePath;
+        _editorRepositoryPaths = string.Join(Environment.NewLine, game.RelatedRepositoryPaths);
+        _editorError = null;
+        _isEditorOpen = true;
+    }
+
+    private void CloseEditor()
+    {
+        if (_isSaving)
+        {
+            return;
+        }
+
+        _isEditorOpen = false;
+        _editorError = null;
+    }
+
+    private async Task SaveEditorAsync()
+    {
+        _editorError = null;
+
+        if (string.IsNullOrWhiteSpace(_editorTitle))
+        {
+            _editorError = "タイトルは必須です。";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_editorExecutablePath))
+        {
+            _editorError = "実行ファイルパスは必須です。";
+            return;
+        }
+
+        var input = new GameEditInput(
+            Title: _editorTitle,
+            ExecutablePath: _editorExecutablePath,
+            RelatedRepositoryPaths: ParseRepositoryPaths(_editorRepositoryPaths));
+
+        _isSaving = true;
+        try
+        {
+            if (_isEditMode)
+            {
+                if (string.IsNullOrWhiteSpace(_editingGameId))
+                {
+                    _editorError = "編集対象が不正です。";
+                    return;
+                }
+
+                var updated = await GameLibraryService.UpdateAsync(_editingGameId, input);
+                if (updated is null)
+                {
+                    _editorError = "編集対象のゲームが見つかりません。";
+                    return;
+                }
+
+                _message = $"ゲーム設定を更新しました: {updated.Title}";
+            }
+            else
+            {
+                var created = await GameLibraryService.CreateAsync(input);
+                _message = $"ゲームを登録しました: {created.Title}";
+            }
+
+            _isLastActionSuccess = true;
+            await ReloadGamesAsync();
+            CloseEditor();
+        }
+        catch (Exception ex)
+        {
+            _isLastActionSuccess = false;
+            _editorError = ex.Message;
+            _message = "保存に失敗しました。";
+        }
+        finally
+        {
+            _isSaving = false;
+        }
+    }
+
+    private async Task ReloadGamesAsync()
+    {
+        _games = await GameLibraryService.GetGamesAsync();
+    }
+
+    private static IReadOnlyList<string> ParseRepositoryPaths(string rawValue)
+    {
+        if (string.IsNullOrWhiteSpace(rawValue))
+        {
+            return Array.Empty<string>();
+        }
+
+        return rawValue
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(static value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private static string FormatLastPlayed(DateTimeOffset? value)

@@ -183,6 +183,8 @@ h1:focus {
 
 .game-card-actions {
     margin-top: 0.5rem;
+    display: flex;
+    gap: 0.5rem;
 }
 
 .launch-button {
@@ -197,6 +199,28 @@ h1:focus {
 
 .launch-button:hover {
     background: #0f3ea5;
+}
+
+.launch-button:disabled {
+    background: #758bbf;
+}
+
+.secondary-button {
+    border: 1px solid #9aa8bf;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #25364e;
+    font-weight: 700;
+    width: 100%;
+    padding: 0.55rem 0.8rem;
+}
+
+.secondary-button:hover {
+    background: #f1f5fb;
+}
+
+.secondary-button:disabled {
+    color: #8691a5;
 }
 
 .add-card {
@@ -233,4 +257,78 @@ h1:focus {
 
 .action-message-error {
     color: #842029;
+}
+
+.repo-list {
+    margin: 0 0 0.7rem;
+    padding-left: 1.1rem;
+    font-size: 0.82rem;
+    color: #25364e;
+}
+
+.repo-list li {
+    margin: 0.15rem 0;
+    word-break: break-all;
+}
+
+.editor-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(11, 18, 33, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    z-index: 1200;
+}
+
+.editor-modal {
+    width: min(640px, 100%);
+    background: #ffffff;
+    border-radius: 14px;
+    padding: 1rem;
+    box-shadow: 0 12px 30px rgba(14, 24, 48, 0.2);
+}
+
+.editor-modal h2 {
+    margin: 0 0 0.9rem;
+    font-size: 1.2rem;
+}
+
+.editor-field {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 0.7rem;
+}
+
+.editor-field label {
+    font-size: 0.82rem;
+    color: #41536e;
+    margin-bottom: 0.2rem;
+}
+
+.editor-field input,
+.editor-field textarea {
+    border: 1px solid #becae0;
+    border-radius: 8px;
+    padding: 0.5rem 0.65rem;
+    font-size: 0.9rem;
+    color: #1a2433;
+}
+
+.editor-field input:focus,
+.editor-field textarea:focus {
+    outline: 2px solid #4c7de0;
+    border-color: #4c7de0;
+}
+
+.editor-error {
+    margin: 0.2rem 0 0.8rem;
+    color: #842029;
+    font-size: 0.85rem;
+}
+
+.editor-actions {
+    display: flex;
+    gap: 0.65rem;
 }
