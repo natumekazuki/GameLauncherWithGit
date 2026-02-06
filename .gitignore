@@ -1,5 +1,6 @@
 /src/**/obj
 /src/**/bin
 /src/**/.vs
+/artifacts
 /tests/**/bin
 /tests/**/obj
