@@ -77,7 +77,7 @@
                 <label for="editor-executable-path">実行ファイルパス</label>
                 <div class="editor-inline-input">
                     <input id="editor-executable-path" @bind="_editorExecutablePath" @bind:event="oninput" />
-                    <button type="button" class="secondary-button picker-button" @onclick="PickExecutablePathAsync" disabled="_isSaving">
+                    <button type="button" class="secondary-button picker-button" @onclick="PickExecutablePathAsync" disabled="@_isSaving">
                         参照
                     </button>
                 </div>
@@ -93,13 +93,13 @@
                         <button type="button"
                                 class="secondary-button picker-button"
                                 @onclick="PickRepositoryDirectoryPathAsync"
-                                disabled="_isSaving">
+                                disabled="@_isSaving">
                             フォルダ選択
                         </button>
                         <button type="button"
                                 class="secondary-button picker-button"
                                 @onclick="ClearRepositoryPath"
-                                disabled="_isSaving || string.IsNullOrWhiteSpace(_editorRepositoryPath)">
+                                disabled="@(_isSaving || string.IsNullOrWhiteSpace(_editorRepositoryPath))">
                             解除
                         </button>
                     </div>
@@ -112,10 +112,10 @@
             }
 
             <div class="editor-actions">
-                <button type="button" class="launch-button" @onclick="SaveEditorAsync" disabled="_isSaving">
+                <button type="button" class="launch-button" @onclick="SaveEditorAsync" disabled="@_isSaving">
                     @(_isSaving ? "保存中..." : "保存")
                 </button>
-                <button type="button" class="secondary-button" @onclick="() => CloseEditor()" disabled="_isSaving">キャンセル</button>
+                <button type="button" class="secondary-button" @onclick="() => CloseEditor()" disabled="@_isSaving">キャンセル</button>
             </div>
         </section>
     </div>
