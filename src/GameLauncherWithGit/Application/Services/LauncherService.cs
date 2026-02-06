@@ -87,13 +87,113 @@ public sealed class LauncherService : ILauncherService
 			return BuildFailureResult(repositoryPath, "fetch", fetchResult);
 		}
 
-		var pullResult = await _gitService.RunAsync(repositoryPath, "pull --rebase", cancellationToken);
+		var remoteAheadResult = await TryGetRemoteAheadCountAsync(repositoryPath, cancellationToken);
+		if (!remoteAheadResult.IsSuccess)
+		{
+			return BuildFailureResult(repositoryPath, "rev-list --left-right --count HEAD...@{upstream}", remoteAheadResult.Result);
+		}
+
+		if (remoteAheadResult.RemoteAheadCount <= 0)
+		{
+			var addResult = await _gitService.RunAsync(repositoryPath, "add -A", cancellationToken);
+			if (!addResult.IsSuccess)
+			{
+				return BuildFailureResult(repositoryPath, "add -A", addResult);
+			}
+
+			var statusResult = await _gitService.RunAsync(repositoryPath, "status --porcelain", cancellationToken);
+			if (!statusResult.IsSuccess)
+			{
+				return BuildFailureResult(repositoryPath, "status --porcelain", statusResult);
+			}
+
+			if (!string.IsNullOrWhiteSpace(statusResult.StandardOutput))
+			{
+				var timestamp = DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss");
+				var commitResult = await _gitService.RunAsync(
+					repositoryPath,
+					$"commit -m \"auto: save sync {timestamp}\"",
+					cancellationToken);
+				if (!commitResult.IsSuccess && !IsNothingToCommit(commitResult))
+				{
+					return BuildFailureResult(repositoryPath, "commit -m", commitResult);
+				}
+			}
+		}
+		else
+		{
+			_logger.LogInformation(
+				"Skip local auto-commit because remote is ahead. gameId={GameId}, repositoryPath={RepositoryPath}, remoteAheadCount={RemoteAheadCount}",
+				game.Id,
+				repositoryPath,
+				remoteAheadResult.RemoteAheadCount);
+		}
+
+		var pullResult = await _gitService.RunAsync(repositoryPath, "pull --rebase --autostash", cancellationToken);
 		if (!pullResult.IsSuccess)
 		{
-			return BuildFailureResult(repositoryPath, "pull --rebase", pullResult);
+			return BuildFailureResult(repositoryPath, "pull --rebase --autostash", pullResult);
 		}
 
 		return new LaunchResult(true, "起動前同期に成功しました。");
+	}
+
+	private async Task<RemoteAheadResult> TryGetRemoteAheadCountAsync(
+		string repositoryPath,
+		CancellationToken cancellationToken)
+	{
+		var result = await _gitService.RunAsync(
+			repositoryPath,
+			"rev-list --left-right --count HEAD...@{upstream}",
+			cancellationToken);
+		if (!result.IsSuccess)
+		{
+			var detail = $"{result.StandardError}\n{result.StandardOutput}";
+			if (detail.Contains("no upstream configured", StringComparison.OrdinalIgnoreCase)
+				|| detail.Contains("upstream branch", StringComparison.OrdinalIgnoreCase)
+				|| detail.Contains("追跡ブランチ", StringComparison.OrdinalIgnoreCase))
+			{
+				_logger.LogInformation(
+					"Upstream is not configured. Treat remote-ahead count as 0. repositoryPath={RepositoryPath}",
+					repositoryPath);
+				return new RemoteAheadResult(true, 0, result);
+			}
+
+			return new RemoteAheadResult(false, 0, result);
+		}
+
+		if (!TryParseAheadBehindCount(result.StandardOutput, out _, out var remoteAheadCount))
+		{
+			_logger.LogWarning(
+				"Failed to parse ahead/behind output. repositoryPath={RepositoryPath}, output={Output}",
+				repositoryPath,
+				result.StandardOutput);
+			return new RemoteAheadResult(false, 0, result);
+		}
+
+		return new RemoteAheadResult(true, remoteAheadCount, result);
+	}
+
+	private static bool TryParseAheadBehindCount(string output, out int localAheadCount, out int remoteAheadCount)
+	{
+		localAheadCount = 0;
+		remoteAheadCount = 0;
+
+		var firstLine = FirstNonEmptyLine(output);
+		if (string.IsNullOrWhiteSpace(firstLine))
+		{
+			return false;
+		}
+
+		var parts = firstLine
+			.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+		if (parts.Length < 2)
+		{
+			return false;
+		}
+
+		return int.TryParse(parts[0], out localAheadCount)
+			&& int.TryParse(parts[1], out remoteAheadCount);
 	}
 
 	private LaunchResult StartGameProcess(GameCardItem game)
@@ -149,4 +249,23 @@ public sealed class LauncherService : ILauncherService
 			.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
 			.FirstOrDefault(static line => !string.IsNullOrWhiteSpace(line));
 	}
+
+	private static bool IsNothingToCommit(GitCommandResult result)
+	{
+		var text = $"{result.StandardError}\n{result.StandardOutput}";
+		if (string.IsNullOrWhiteSpace(text))
+		{
+			return false;
+		}
+
+		return text.Contains("nothing to commit", StringComparison.OrdinalIgnoreCase)
+			|| text.Contains("no changes added to commit", StringComparison.OrdinalIgnoreCase)
+			|| text.Contains("作業ツリーはクリーン", StringComparison.OrdinalIgnoreCase)
+			|| text.Contains("コミットするものがありません", StringComparison.OrdinalIgnoreCase);
+	}
+
+	private sealed record RemoteAheadResult(
+		bool IsSuccess,
+		int RemoteAheadCount,
+		GitCommandResult Result);
 }

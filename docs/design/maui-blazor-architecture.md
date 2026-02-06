@@ -33,7 +33,8 @@ flowchart LR
   - 監視イベント受信、デバウンス管理、同期ジョブ実行順序制御
   - 失敗分類とリトライポリシー適用
 - `LauncherService`
-  - ゲーム起動前の関連リポジトリ `fetch -> pull --rebase` 実行
+  - ゲーム起動前に `fetch` を実行し、リモート先行でなければ `add -A -> commit(差分時のみ)` を実行
+  - その後 `pull --rebase --autostash` を実行
   - 失敗時の起動ブロックとログ導線制御
 - `GitService`
   - Git コマンド実行と結果収集（exit code / stdout / stderr）
@@ -63,7 +64,7 @@ sequenceDiagram
     O->>O: デバウンス(Repo単位)
     O->>G: git fetch
     G-->>O: result
-    O->>G: git pull --rebase
+    O->>G: git pull --rebase --autostash
     G-->>O: result
     O->>G: git add -A
     G-->>O: result
@@ -84,7 +85,11 @@ sequenceDiagram
 
     UI->>L: 起動要求(gameId)
     L->>G: 関連Repoごとに fetch
-    L->>G: 関連Repoごとに pull --rebase
+    L->>G: remote ahead判定
+    alt remote aheadでない
+        L->>G: add/commit(差分時のみ)
+    end
+    L->>G: pull --rebase --autostash
     alt 全Repo成功
         L->>P: exe起動
         L-->>UI: 起動成功
@@ -150,7 +155,7 @@ sequenceDiagram
   - `GameLibraryStore` による SQLite 永続化（`game-library.db`）
   - DI 登録の初期実装
   - `GitService` の実装（`git` プロセス実行、stdout/stderr/exit code 取得）
-  - `LauncherService` の実装（起動前 `fetch -> pull --rebase`、失敗時の起動ブロック）
+  - `LauncherService` の実装（起動前 `fetch -> remote ahead判定 -> (必要時のみ)add/commit -> pull --rebase --autostash`、失敗時の起動ブロック）
   - ゲーム一覧カードUI（先頭の「+ 新規追加」カード、`▶ 起動`、`設定`、起動結果表示）
   - ゲーム登録/編集モーダル（タイトル/実行ファイル/関連リポジトリ）
   - パス選択UI（実行ファイル参照、関連リポジトリフォルダ追加）
@@ -159,7 +164,7 @@ sequenceDiagram
   - アプリ起動時の Git 利用可否チェック（`git --version`）。未導入/起動不可時は Home でエラー表示し、ランチャーUIを非表示
   - RepositoryWatcherService の FileSystemWatcher 実装（登録/解除、変更イベント通知）
   - SyncOrchestrator の監視イベント購読、10秒デバウンス、リポジトリ単位の単一実行制御
-  - SyncOrchestrator の同期本体（`fetch -> pull --rebase --autostash -> add -A -> status -> commit -> push`）
+  - SyncOrchestrator の同期本体（`fetch -> pull --rebase --autostash -> add -A -> status -> commit(差分時のみ) -> push`）
   - pull/rebase 競合時の `ErrorPaused` 遷移、それ以外の同期失敗時の `Idle` 復帰
   - 監視キーのリポジトリパス統一（同一リポジトリ重複監視の抑止）
   - Home 初期化時/保存後の監視対象再構成（関連リポジトリごとに監視登録）
