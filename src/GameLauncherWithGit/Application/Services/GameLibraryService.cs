@@ -1,79 +1,161 @@
 using GameLauncherWithGit.Application.Abstractions;
 using GameLauncherWithGit.Application.Models;
-using System.Collections.Concurrent;
+using GameLauncherWithGit.Infrastructure.Abstractions;
+using System.Text;
 
 namespace GameLauncherWithGit.Application.Services;
 
 public sealed class GameLibraryService : IGameLibraryService
 {
-	private readonly ConcurrentDictionary<string, GameCardItem> _games = new(StringComparer.OrdinalIgnoreCase);
+	private readonly IGameLibraryStore _store;
 
-	public GameLibraryService()
+	public GameLibraryService(IGameLibraryStore store)
 	{
-		var seedItems = new[]
-		{
-			new GameCardItem(
-				Id: "elden-ring",
-				Title: "Elden Ring",
-				ExecutablePath: @"C:\Games\EldenRing\Game\eldenring.exe",
-				RelatedRepositoryPaths: Array.Empty<string>(),
-				LastPlayedAt: DateTimeOffset.Now.AddDays(-1),
-				Status: GameCardStatus.Synced),
-			new GameCardItem(
-				Id: "monster-hunter-wilds",
-				Title: "Monster Hunter Wilds",
-				ExecutablePath: @"C:\Games\MonsterHunterWilds\mhwilds.exe",
-				RelatedRepositoryPaths: Array.Empty<string>(),
-				LastPlayedAt: null,
-				Status: GameCardStatus.Unknown),
-			new GameCardItem(
-				Id: "hades-ii",
-				Title: "Hades II",
-				ExecutablePath: @"C:\Games\HadesII\hades2.exe",
-				RelatedRepositoryPaths: Array.Empty<string>(),
-				LastPlayedAt: DateTimeOffset.Now.AddDays(-3),
-				Status: GameCardStatus.Error)
-		};
+		_store = store;
+	}
 
-		foreach (var item in seedItems)
-		{
-			_games[item.Id] = item;
-		}
+	public async Task<GameCardItem> CreateAsync(GameEditInput input, CancellationToken cancellationToken = default)
+	{
+		var normalizedInput = NormalizeInput(input);
+		var gameId = await BuildUniqueGameIdAsync(normalizedInput.Title, cancellationToken);
+		var game = new GameCardItem(
+			Id: gameId,
+			Title: normalizedInput.Title,
+			ExecutablePath: normalizedInput.ExecutablePath,
+			RelatedRepositoryPaths: normalizedInput.RelatedRepositoryPaths,
+			LastPlayedAt: null,
+			Status: GameCardStatus.Unknown);
+
+		await _store.UpsertAsync(game, cancellationToken);
+		return game;
 	}
 
 	public Task<GameCardItem?> FindByIdAsync(string gameId, CancellationToken cancellationToken = default)
 	{
-		_games.TryGetValue(gameId, out var game);
-		return Task.FromResult(game);
+		return _store.FindByIdAsync(gameId, cancellationToken);
 	}
 
 	public Task<IReadOnlyList<GameCardItem>> GetGamesAsync(CancellationToken cancellationToken = default)
 	{
-		var snapshot = _games.Values
-			.OrderByDescending(static item => item.LastPlayedAt)
-			.ThenBy(static item => item.Title, StringComparer.OrdinalIgnoreCase)
+		return _store.GetAllAsync(cancellationToken);
+	}
+
+	public async Task MarkLaunchedAsync(string gameId, CancellationToken cancellationToken = default)
+	{
+		var game = await _store.FindByIdAsync(gameId, cancellationToken);
+		if (game is null)
+		{
+			return;
+		}
+
+		await _store.UpsertAsync(
+			game with
+			{
+				LastPlayedAt = DateTimeOffset.Now
+			},
+			cancellationToken);
+	}
+
+	public async Task SetStatusAsync(string gameId, GameCardStatus status, CancellationToken cancellationToken = default)
+	{
+		var game = await _store.FindByIdAsync(gameId, cancellationToken);
+		if (game is null)
+		{
+			return;
+		}
+
+		await _store.UpsertAsync(game with { Status = status }, cancellationToken);
+	}
+
+	public async Task<GameCardItem?> UpdateAsync(string gameId, GameEditInput input, CancellationToken cancellationToken = default)
+	{
+		var game = await _store.FindByIdAsync(gameId, cancellationToken);
+		if (game is null)
+		{
+			return null;
+		}
+
+		var normalizedInput = NormalizeInput(input);
+		var updated = game with
+		{
+			Title = normalizedInput.Title,
+			ExecutablePath = normalizedInput.ExecutablePath,
+			RelatedRepositoryPaths = normalizedInput.RelatedRepositoryPaths
+		};
+
+		await _store.UpsertAsync(updated, cancellationToken);
+		return updated;
+	}
+
+	private async Task<string> BuildUniqueGameIdAsync(string title, CancellationToken cancellationToken)
+	{
+		var baseId = BuildSlug(title);
+		var candidateId = baseId;
+		var suffix = 2;
+
+		while (await _store.FindByIdAsync(candidateId, cancellationToken) is not null)
+		{
+			candidateId = $"{baseId}-{suffix}";
+			suffix++;
+		}
+
+		return candidateId;
+	}
+
+	private static GameEditInput NormalizeInput(GameEditInput input)
+	{
+		var title = input.Title.Trim();
+		if (string.IsNullOrWhiteSpace(title))
+		{
+			throw new InvalidOperationException("タイトルは必須です。");
+		}
+
+		var executablePath = input.ExecutablePath.Trim();
+		if (string.IsNullOrWhiteSpace(executablePath))
+		{
+			throw new InvalidOperationException("実行ファイルパスは必須です。");
+		}
+
+		var repositoryPaths = input.RelatedRepositoryPaths
+			.Select(static value => value.Trim())
+			.Where(static value => !string.IsNullOrWhiteSpace(value))
+			.Distinct(StringComparer.OrdinalIgnoreCase)
 			.ToArray();
 
-		return Task.FromResult<IReadOnlyList<GameCardItem>>(snapshot);
+		return new GameEditInput(title, executablePath, repositoryPaths);
 	}
 
-	public Task MarkLaunchedAsync(string gameId, CancellationToken cancellationToken = default)
+	private static string BuildSlug(string value)
 	{
-		if (_games.TryGetValue(gameId, out var game))
+		if (string.IsNullOrWhiteSpace(value))
 		{
-			_games[gameId] = game with { LastPlayedAt = DateTimeOffset.Now };
+			return $"game-{Guid.NewGuid():N}";
 		}
 
-		return Task.CompletedTask;
-	}
-
-	public Task SetStatusAsync(string gameId, GameCardStatus status, CancellationToken cancellationToken = default)
-	{
-		if (_games.TryGetValue(gameId, out var game))
+		var builder = new StringBuilder(value.Length);
+		var hasPreviousHyphen = false;
+		foreach (var ch in value.Trim().ToLowerInvariant())
 		{
-			_games[gameId] = game with { Status = status };
+			if (char.IsLetterOrDigit(ch))
+			{
+				builder.Append(ch);
+				hasPreviousHyphen = false;
+				continue;
+			}
+
+			if (!hasPreviousHyphen)
+			{
+				builder.Append('-');
+				hasPreviousHyphen = true;
+			}
 		}
 
-		return Task.CompletedTask;
+		var slug = builder.ToString().Trim('-');
+		if (string.IsNullOrWhiteSpace(slug))
+		{
+			return $"game-{Guid.NewGuid():N}";
+		}
+
+		return slug;
 	}
 }

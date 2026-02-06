@@ -12,7 +12,7 @@
 ## Task List
 - [x] 1. アプリケーション層に登録/編集用モデルとサービス契約（追加・更新）を追加する。
 - [x] 2. SQLite 永続化層（DB初期化、テーブル作成、CRUD）を実装する。
-- [ ] 3. `GameLibraryService` を SQLite 利用へ切り替え、関連リポジトリ複数値を保存/読込できるようにする。
+- [x] 3. `GameLibraryService` を SQLite 利用へ切り替え、関連リポジトリ複数値を保存/読込できるようにする。
 - [ ] 4. `Home.razor` に登録/編集モーダルを追加し、保存・キャンセル・バリデーションを実装する。
 - [ ] 5. `Home.razor` / `app.css` を更新して、カード上に設定ボタンと関連リポジトリ表示を追加する。
 - [ ] 6. ビルド確認を実施し、`docs/design/maui-blazor-architecture.md` の実装ステータスを更新する。
@@ -40,3 +40,4 @@
 - 2026-02-06: `GameEditInput` を追加し、`IGameLibraryService` に `CreateAsync` / `UpdateAsync` を追加。
 - 2026-02-06: `IGameLibraryStore` と `SqliteGameLibraryStore` を追加し、SQLite初期化/CRUD（`Games` テーブル）を実装。
 - 2026-02-06: `Microsoft.Data.Sqlite` を `GameLauncherWithGit.csproj` に追加、DIに `IGameLibraryStore` を登録。
+- 2026-02-06: `GameLibraryService` を SQLite 利用に切り替え、登録/更新・状態更新を `IGameLibraryStore` 経由で実行するよう変更。
