@@ -14,7 +14,7 @@
 - [x] 3. `Application/Services/LauncherService.cs` を実装し、`fetch -> pull --rebase` 成功時のみ exe を起動する。
 - [x] 4. `Home.razor` の起動結果メッセージを本実装に合わせて調整する（失敗理由を表示）。
 - [x] 5. ビルドで動作確認し、`docs/design/maui-blazor-architecture.md` の実装ステータスを更新する。
-- [ ] 6. 計画ファイルを完了状態に更新し、`docs/plans/archive/2026/02/` へ移動する。
+- [x] 6. 計画ファイルを完了状態に更新し、`docs/plans/archive/2026/02/` へ移動する。
 
 ## Affected Files
 - `src/GameLauncherWithGit/Application/Models/GameCardItem.cs`
