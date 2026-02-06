@@ -159,10 +159,13 @@ sequenceDiagram
   - アプリ起動時の Git 利用可否チェック（`git --version`）。未導入/起動不可時は Home でエラー表示し、ランチャーUIを非表示
   - RepositoryWatcherService の FileSystemWatcher 実装（登録/解除、変更イベント通知）
   - SyncOrchestrator の監視イベント購読、10秒デバウンス、リポジトリ単位の単一実行制御
+  - SyncOrchestrator の同期本体（`fetch -> pull --rebase -> add -A -> status -> commit -> push`）
+  - pull/rebase 競合時の `ErrorPaused` 遷移、それ以外の同期失敗時の `Idle` 復帰
+  - 監視キーのリポジトリパス統一（同一リポジトリ重複監視の抑止）
   - Home 初期化時/保存後の監視対象再構成（関連リポジトリごとに監視登録）
   - Windows 実行/配布スクリプト（`scripts/run-local-unpackaged.ps1` / `scripts/publish-windows-msix.ps1`）
 - 未実装
-  - 自動同期フロー用の Git 実行実装（`add/commit/push` と失敗分類）
+  - 同期失敗時の指数バックオフ再試行と通知抑制
   - Windows 固有機能（タスクトレイ / Toast / 自動起動）
   - 設定永続化（`settings.json`）とログ画面/運用導線
 

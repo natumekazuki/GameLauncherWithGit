@@ -374,13 +374,14 @@ else
                 continue;
             }
 
-            if (!Directory.Exists(game.RelatedRepositoryPath))
+            var repositoryKey = NormalizeRepositoryKey(game.RelatedRepositoryPath);
+            if (repositoryKey is null)
             {
                 continue;
             }
 
-            RepositoryWatcherService.Register(game.Id, game.RelatedRepositoryPath);
-            activeRepositoryIds.Add(game.Id);
+            RepositoryWatcherService.Register(repositoryKey, repositoryKey);
+            activeRepositoryIds.Add(repositoryKey);
         }
 
         var staleRepositoryIds = _registeredWatcherRepositoryIds
@@ -408,6 +409,24 @@ else
         }
 
         _registeredWatcherRepositoryIds.Clear();
+    }
+
+    private static string? NormalizeRepositoryKey(string? repositoryPath)
+    {
+        if (string.IsNullOrWhiteSpace(repositoryPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            var normalized = Path.GetFullPath(repositoryPath.Trim());
+            return Directory.Exists(normalized) ? normalized : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static string FormatLastPlayed(DateTimeOffset? value)
