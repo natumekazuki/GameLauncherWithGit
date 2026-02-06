@@ -16,7 +16,7 @@
 ## 3. 全体構成
 ```mermaid
 flowchart LR
-    UI["Blazor UI\n(GameGrid / Modal / Settings)"] --> APP["Application Services\n(SyncOrchestrator / LauncherService)"]
+    UI["Blazor UI\n(Single Pane / GameGrid / Modal / Notification Dock)"] --> APP["Application Services\n(SyncOrchestrator / LauncherService)"]
     APP --> CORE["Domain/Core\n(Entities / Policies / State)"]
     APP --> INFRA["Infrastructure\n(Git / Watcher / Storage / Thumbnail)"]
     APP --> WIN["Windows Bridge\n(Tray / Toast / AutoStart)"]
@@ -27,8 +27,9 @@ flowchart LR
 
 ## 4. コンポーネント責務
 - `UI (Blazor)`
-  - ゲーム一覧カード表示、詳細モーダル、操作コマンド発行
+  - 単一ペインレイアウトでゲームカード表示、詳細モーダル、操作コマンド発行
   - ViewModel へのバインドと状態表示（待機/同期中/エラー）
+  - 画面右下固定の通知領域で、操作結果とエラーを表示
 - `SyncOrchestrator`
   - 監視イベント受信、デバウンス管理、同期ジョブ実行順序制御
   - 失敗分類とリトライポリシー適用
@@ -157,6 +158,9 @@ sequenceDiagram
   - `GitService` の実装（`git` プロセス実行、stdout/stderr/exit code 取得）
   - `LauncherService` の実装（起動前 `fetch -> remote ahead判定 -> (必要時のみ)add/commit -> pull --rebase --autostash`、失敗時の起動ブロック）
   - ゲーム一覧カードUI（先頭の「+ 新規追加」カード、`▶ 起動`、`設定`、起動結果表示）
+  - サイドバーを廃止し、`MainLayout` を1画面向けの単一ペイン構成に変更
+  - ホーム画面のダークテーマ化（カード/モーダル/ボタン配色更新）
+  - 通知/エラー表示を右下固定の通知ドックへ集約
   - ゲーム登録/編集モーダル（タイトル/実行ファイル/関連リポジトリ）
   - ゲーム登録/編集モーダルのサムネイル画像選択（参照/解除）
   - `ThumbnailService` の実装（長辺512px・PNG変換、`%AppData%/thumbnails` 保存）

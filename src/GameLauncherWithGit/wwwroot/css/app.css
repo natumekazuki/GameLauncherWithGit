@@ -428,3 +428,197 @@ h1:focus {
     font-size: 0.85rem;
     word-break: break-word;
 }
+
+/* Launcher Dark Theme */
+html,
+body {
+    background: radial-gradient(circle at 20% 10%, #1c2942, #090f18 48%, #070b12 100%);
+    color: #e7eef9;
+}
+
+a,
+.btn-link {
+    color: #8ec8ff;
+}
+
+.content {
+    padding-top: 0;
+}
+
+.library-page {
+    padding-top: 0.65rem;
+}
+
+.startup-check-panel {
+    display: flex;
+    align-items: center;
+    min-height: 8rem;
+    color: #b7c7df;
+}
+
+.game-card {
+    border: 1px solid #263651;
+    background: linear-gradient(165deg, rgba(22, 34, 54, 0.94), rgba(14, 22, 37, 0.95));
+    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.35);
+}
+
+.game-card-header h2 {
+    color: #eff5ff;
+}
+
+.meta-label {
+    color: #8ca0be;
+}
+
+.meta-value {
+    color: #d8e3f7;
+}
+
+.status-syncing {
+    color: #8ff9ce;
+    background: rgba(28, 102, 67, 0.35);
+}
+
+.status-synced {
+    color: #8de6ff;
+    background: rgba(28, 97, 122, 0.35);
+}
+
+.status-error {
+    color: #ffc5cc;
+    background: rgba(132, 32, 41, 0.45);
+}
+
+.status-unknown {
+    color: #d8dfeb;
+    background: rgba(74, 86, 104, 0.45);
+}
+
+.launch-button {
+    background: linear-gradient(135deg, #2b66f5, #1f4dc0);
+    color: #f6f9ff;
+}
+
+.launch-button:hover {
+    background: linear-gradient(135deg, #3a75ff, #2a58cd);
+}
+
+.launch-button:disabled {
+    background: #4f5f85;
+}
+
+.secondary-button {
+    border: 1px solid #445879;
+    background: #182338;
+    color: #d9e5fb;
+}
+
+.secondary-button:hover {
+    background: #202f4a;
+}
+
+.secondary-button:disabled {
+    border-color: #2f3c56;
+    background: #121b2b;
+    color: #7e8da8;
+}
+
+.add-card {
+    border-color: #3d5174;
+    color: #dbe7ff;
+    background: linear-gradient(165deg, rgba(30, 43, 66, 0.9), rgba(17, 26, 40, 0.95));
+}
+
+.loading-card {
+    color: #a4b4cf;
+}
+
+.editor-overlay {
+    background: rgba(4, 8, 14, 0.7);
+}
+
+.editor-modal {
+    background: linear-gradient(160deg, #161f32, #101827);
+    border: 1px solid #2d3f5f;
+    color: #e7eef9;
+}
+
+.editor-field label {
+    color: #93a8c9;
+}
+
+.editor-field input,
+.editor-field textarea {
+    border: 1px solid #385077;
+    background: #0d1524;
+    color: #e6eefb;
+}
+
+.editor-field input:focus,
+.editor-field textarea:focus {
+    outline: 2px solid #4d7ce0;
+    border-color: #4d7ce0;
+}
+
+.single-repo-picker {
+    border: 1px solid #314666;
+    background: #0f1829;
+}
+
+.single-repo-value {
+    color: #d7e3f8;
+}
+
+.startup-error-panel {
+    border: 1px solid #70444f;
+    background: linear-gradient(155deg, #34171d, #251319);
+    color: #ffd9df;
+}
+
+.startup-error-detail {
+    border: 1px solid #824d5b;
+    background: #1c1015;
+    color: #ffd3dc;
+}
+
+.notification-dock {
+    position: fixed;
+    right: 1rem;
+    bottom: 1rem;
+    width: min(420px, calc(100vw - 2rem));
+    min-height: 3.25rem;
+    z-index: 1400;
+    pointer-events: none;
+}
+
+.notification-message {
+    margin: 0;
+    border-radius: 10px;
+    border: 1px solid #3a4d71;
+    background: rgba(20, 31, 49, 0.96);
+    color: #dbe7ff;
+    padding: 0.75rem 0.9rem;
+    font-size: 0.9rem;
+    line-height: 1.35;
+    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.35);
+    pointer-events: auto;
+    backdrop-filter: blur(6px);
+}
+
+.notification-success {
+    border-color: #2f7d55;
+    background: rgba(17, 52, 36, 0.95);
+    color: #abf1cc;
+}
+
+.notification-error {
+    border-color: #8a3b48;
+    background: rgba(63, 24, 31, 0.96);
+    color: #ffd0d7;
+}
+
+.notification-info {
+    border-color: #3f5b8a;
+    background: rgba(17, 34, 59, 0.95);
+    color: #cde1ff;
+}

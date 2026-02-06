@@ -8,15 +8,12 @@
 @inject ISyncOrchestrator SyncOrchestrator
 @inject IRepositoryStateStore RepositoryStateStore
 
-<PageTitle>ゲーム一覧</PageTitle>
+<PageTitle>GameLauncherWithGit</PageTitle>
 
 @if (_isStartupChecking)
 {
-    <section class="library-page">
-        <header class="library-header">
-            <h1>ゲーム一覧</h1>
-            <p>起動要件を確認しています...</p>
-        </header>
+    <section class="library-page startup-check-panel">
+        <p>起動要件を確認しています...</p>
     </section>
 }
 else if (!_isGitReady)
@@ -33,11 +30,6 @@ else if (!_isGitReady)
 else
 {
     <section class="library-page">
-        <header class="library-header">
-            <h1>ゲーム一覧</h1>
-            <p>ゲーム起動時に関連リポジトリの同期を実行します。</p>
-        </header>
-
         <div class="game-grid">
             <button type="button" class="game-card add-card" @onclick="OpenCreateEditor">
                 <span class="add-icon">+</span>
@@ -112,13 +104,15 @@ else
                 }
             }
         </div>
-
-        @if (!string.IsNullOrWhiteSpace(_message))
-        {
-            <p class="action-message @GetMessageClass()">@_message</p>
-        }
     </section>
 }
+
+<div class="notification-dock" aria-live="polite" aria-atomic="true">
+    @if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <p class="notification-message @GetMessageClass()">@_message</p>
+    }
+</div>
 
 @if (_isGitReady && _isEditorOpen)
 {
@@ -185,11 +179,6 @@ else
                 </div>
             </div>
 
-            @if (!string.IsNullOrWhiteSpace(_editorError))
-            {
-                <p class="editor-error">@_editorError</p>
-            }
-
             <div class="editor-actions">
                 <button type="button" class="launch-button" @onclick="SaveEditorAsync" disabled="@_isSaving">
                     @(_isSaving ? "保存中..." : "保存")
@@ -214,7 +203,6 @@ else
     private string? _editorThumbnailSourcePath;
     private bool _editorHasThumbnail;
     private bool _editorClearThumbnail;
-    private string? _editorError;
     private bool _isStartupChecking = true;
     private bool _isGitReady = true;
     private string? _startupError;
@@ -253,14 +241,12 @@ else
 
     private async Task LaunchAsync(string gameId)
     {
-        _message = "起動前同期を実行中です...";
-        _isLastActionSuccess = null;
+        SetNotification("起動前同期を実行中です...", null);
         StateHasChanged();
 
         var result = await LauncherService.LaunchAsync(gameId);
         await ReloadGamesAsync();
-        _message = result.Message;
-        _isLastActionSuccess = result.IsSuccess;
+        SetNotification(result.Message, result.IsSuccess);
     }
 
     private void OpenCreateEditor()
@@ -273,7 +259,6 @@ else
         _editorThumbnailSourcePath = null;
         _editorHasThumbnail = false;
         _editorClearThumbnail = false;
-        _editorError = null;
         _isEditorOpen = true;
     }
 
@@ -287,7 +272,6 @@ else
         _editorThumbnailSourcePath = null;
         _editorHasThumbnail = HasThumbnail(game);
         _editorClearThumbnail = false;
-        _editorError = null;
         _isEditorOpen = true;
     }
 
@@ -299,23 +283,21 @@ else
         }
 
         _isEditorOpen = false;
-        _editorError = null;
     }
 
     private async Task SaveEditorAsync()
     {
         var shouldCloseEditor = false;
-        _editorError = null;
 
         if (string.IsNullOrWhiteSpace(_editorTitle))
         {
-            _editorError = "タイトルは必須です。";
+            SetNotification("タイトルは必須です。", false);
             return;
         }
 
         if (string.IsNullOrWhiteSpace(_editorExecutablePath))
         {
-            _editorError = "実行ファイルパスは必須です。";
+            SetNotification("実行ファイルパスは必須です。", false);
             return;
         }
 
@@ -333,35 +315,32 @@ else
             {
                 if (string.IsNullOrWhiteSpace(_editingGameId))
                 {
-                    _editorError = "編集対象が不正です。";
+                    SetNotification("編集対象が不正です。", false);
                     return;
                 }
 
                 var updated = await GameLibraryService.UpdateAsync(_editingGameId, input);
                 if (updated is null)
                 {
-                    _editorError = "編集対象のゲームが見つかりません。";
+                    SetNotification("編集対象のゲームが見つかりません。", false);
                     return;
                 }
 
-                _message = $"ゲーム設定を更新しました: {updated.Title}";
+                SetNotification($"ゲーム設定を更新しました: {updated.Title}", true);
             }
             else
             {
                 var created = await GameLibraryService.CreateAsync(input);
-                _message = $"ゲームを登録しました: {created.Title}";
+                SetNotification($"ゲームを登録しました: {created.Title}", true);
             }
 
-            _isLastActionSuccess = true;
             await ReloadGamesAsync();
             await RefreshRepositoryWatchersAsync();
             shouldCloseEditor = true;
         }
         catch (Exception ex)
         {
-            _isLastActionSuccess = false;
-            _editorError = ex.Message;
-            _message = "保存に失敗しました。";
+            SetNotification($"保存に失敗しました: {ex.Message}", false);
         }
         finally
         {
@@ -375,30 +354,25 @@ else
 
     private async Task PickExecutablePathAsync()
     {
-        _editorError = null;
-
         try
         {
             var selectedPath = await PathPickerService.PickExecutablePathAsync();
             if (!string.IsNullOrWhiteSpace(selectedPath))
             {
                 _editorExecutablePath = selectedPath;
-                _editorError = null;
                 return;
             }
 
-            _editorError = "実行ファイルが選択されませんでした。";
+            SetNotification("実行ファイルが選択されませんでした。", false);
         }
         catch (Exception ex)
         {
-            _editorError = ex.Message;
+            SetNotification(ex.Message, false);
         }
     }
 
     private async Task PickThumbnailPathAsync()
     {
-        _editorError = null;
-
         try
         {
             var selectedPath = await PathPickerService.PickThumbnailPathAsync();
@@ -406,15 +380,14 @@ else
             {
                 _editorThumbnailSourcePath = selectedPath;
                 _editorClearThumbnail = false;
-                _editorError = null;
                 return;
             }
 
-            _editorError = "サムネイル画像が選択されませんでした。";
+            SetNotification("サムネイル画像が選択されませんでした。", false);
         }
         catch (Exception ex)
         {
-            _editorError = ex.Message;
+            SetNotification(ex.Message, false);
         }
     }
 
@@ -447,23 +420,20 @@ else
 
     private async Task PickRepositoryDirectoryPathAsync()
     {
-        _editorError = null;
-
         try
         {
             var selectedPath = await PathPickerService.PickRepositoryDirectoryPathAsync();
             if (!string.IsNullOrWhiteSpace(selectedPath))
             {
                 _editorRepositoryPath = selectedPath;
-                _editorError = null;
                 return;
             }
 
-            _editorError = "リポジトリフォルダが選択されませんでした。";
+            SetNotification("リポジトリフォルダが選択されませんでした。", false);
         }
         catch (Exception ex)
         {
-            _editorError = ex.Message;
+            SetNotification(ex.Message, false);
         }
     }
 
@@ -705,21 +675,18 @@ else
         var repositoryKey = NormalizeRepositoryKey(game.RelatedRepositoryPath);
         if (repositoryKey is null)
         {
-            _message = "関連リポジトリのパスが無効です。";
-            _isLastActionSuccess = false;
+            SetNotification("関連リポジトリのパスが無効です。", false);
             return;
         }
 
         try
         {
             await SyncOrchestrator.ResumeRepositorySyncAsync(repositoryKey);
-            _message = $"同期を再開しました: {game.Title}";
-            _isLastActionSuccess = true;
+            SetNotification($"同期を再開しました: {game.Title}", true);
         }
         catch (Exception ex)
         {
-            _message = $"同期再開に失敗しました: {ex.Message}";
-            _isLastActionSuccess = false;
+            SetNotification($"同期再開に失敗しました: {ex.Message}", false);
         }
     }
 
@@ -754,10 +721,16 @@ else
     {
         return _isLastActionSuccess switch
         {
-            true => "action-message-success",
-            false => "action-message-error",
-            _ => string.Empty
+            true => "notification-success",
+            false => "notification-error",
+            _ => "notification-info"
         };
+    }
+
+    private void SetNotification(string message, bool? isSuccess)
+    {
+        _message = message;
+        _isLastActionSuccess = isSuccess;
     }
 
     private static string BuildGitStartupError(GitCommandResult result)
