@@ -8,15 +8,18 @@ namespace GameLauncherWithGit.Application.Services;
 public sealed class GameLibraryService : IGameLibraryService
 {
 	private readonly IGameLibraryStore _store;
+	private readonly IGitService _gitService;
 
-	public GameLibraryService(IGameLibraryStore store)
+	public GameLibraryService(IGameLibraryStore store, IGitService gitService)
 	{
 		_store = store;
+		_gitService = gitService;
 	}
 
 	public async Task<GameCardItem> CreateAsync(GameEditInput input, CancellationToken cancellationToken = default)
 	{
 		var normalizedInput = NormalizeInput(input);
+		await EnsureRepositoryPathIsGitAsync(normalizedInput.RelatedRepositoryPath, cancellationToken);
 		var gameId = await BuildUniqueGameIdAsync(normalizedInput.Title, cancellationToken);
 		var game = new GameCardItem(
 			Id: gameId,
@@ -76,6 +79,7 @@ public sealed class GameLibraryService : IGameLibraryService
 		}
 
 		var normalizedInput = NormalizeInput(input);
+		await EnsureRepositoryPathIsGitAsync(normalizedInput.RelatedRepositoryPath, cancellationToken);
 		var updated = game with
 		{
 			Title = normalizedInput.Title,
@@ -123,6 +127,40 @@ public sealed class GameLibraryService : IGameLibraryService
 		}
 
 		return new GameEditInput(title, executablePath, repositoryPath);
+	}
+
+	private async Task EnsureRepositoryPathIsGitAsync(string? repositoryPath, CancellationToken cancellationToken)
+	{
+		if (string.IsNullOrWhiteSpace(repositoryPath))
+		{
+			return;
+		}
+
+		var result = await _gitService.RunAsync(repositoryPath, "rev-parse --is-inside-work-tree", cancellationToken);
+		var output = FirstNonEmptyLine(result.StandardOutput);
+		if (result.IsSuccess && string.Equals(output, "true", StringComparison.OrdinalIgnoreCase))
+		{
+			return;
+		}
+
+		var reason = FirstNonEmptyLine(result.StandardError)
+			?? output
+			?? $"exit code: {result.ExitCode}";
+
+		throw new InvalidOperationException(
+			$"関連リポジトリとして登録できません。Git リポジトリを選択してください。path={repositoryPath}, reason={reason}");
+	}
+
+	private static string? FirstNonEmptyLine(string value)
+	{
+		if (string.IsNullOrWhiteSpace(value))
+		{
+			return null;
+		}
+
+		return value
+			.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+			.FirstOrDefault(static line => !string.IsNullOrWhiteSpace(line));
 	}
 
 	private static string BuildSlug(string value)

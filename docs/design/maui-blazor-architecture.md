@@ -155,6 +155,7 @@ sequenceDiagram
   - ゲーム登録/編集モーダル（タイトル/実行ファイル/関連リポジトリ）
   - パス選択UI（実行ファイル参照、関連リポジトリフォルダ追加）
   - 単一リポジトリ選択UI（フォルダ選択/解除、手入力なし）
+  - ゲーム登録/更新時の関連リポジトリ検証（`git rev-parse --is-inside-work-tree`）
   - Windows 実行/配布スクリプト（`scripts/run-local-unpackaged.ps1` / `scripts/publish-windows-msix.ps1`）
 - 未実装
   - 自動同期フロー用の Git 実行実装（`add/commit/push` と失敗分類）
