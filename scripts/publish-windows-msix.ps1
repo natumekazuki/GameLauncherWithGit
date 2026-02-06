@@ -58,12 +58,9 @@ if ($enableSigning) {
     if (![string]::IsNullOrWhiteSpace($PackageCertificateKeyFile)) {
         $resolvedPfxPath = Resolve-Path -Path $PackageCertificateKeyFile
         $args += "-p:PackageCertificateKeyFile=$($resolvedPfxPath.Path)"
-
-        if ([string]::IsNullOrWhiteSpace($PackageCertificatePassword)) {
-            throw "PFX ファイルを使う場合は PackageCertificatePassword または MSIX_CERT_PASSWORD を指定してください。"
+        if (![string]::IsNullOrWhiteSpace($PackageCertificatePassword)) {
+            $args += "-p:PackageCertificatePassword=$PackageCertificatePassword"
         }
-
-        $args += "-p:PackageCertificatePassword=$PackageCertificatePassword"
     }
 }
 else {

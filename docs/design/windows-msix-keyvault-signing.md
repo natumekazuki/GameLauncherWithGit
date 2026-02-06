@@ -92,11 +92,9 @@ az keyvault secret download `
 ### 4.4 配布/ビルド用マシンへ証明書登録
 ```powershell
 # PFX を個人ストアへ登録（署名用）
-$pfxPass = Read-Host -AsSecureString "PFX password"
 Import-PfxCertificate `
   -FilePath ".\codesign.pfx" `
-  -CertStoreLocation "Cert:\CurrentUser\My" `
-  -Password $pfxPass
+  -CertStoreLocation "Cert:\CurrentUser\My"
 
 # 自己署名の場合は信頼ストアにも登録（配布先PC）
 Import-Certificate `
@@ -106,12 +104,12 @@ Import-Certificate `
 
 ### 4.5 MSIX を署名付きで発行
 ```powershell
-$env:MSIX_CERT_PASSWORD = "<PFXのパスワード>"
 pwsh -File scripts/publish-windows-msix.ps1 `
   -PackageCertificateKeyFile ".\codesign.pfx"
 ```
 
 補足:
+- Key Vault からエクスポートした PFX はパスワード空のケースがある。必要な場合のみ `MSIX_CERT_PASSWORD` または `-PackageCertificatePassword` を指定する。
 - `PackageCertificateThumbprint` を使う場合は、事前に証明書ストアへ登録しておく。
 - `Platforms/Windows/Package.appxmanifest` の `Identity Publisher` は証明書 Subject と一致させる。
 
@@ -129,3 +127,9 @@ Add-AppxPackage $msix.FullName
 - Key Vault で自己署名を使う場合、配布先PCへの信頼証明書配布が必須。
 - 証明書ローテーション時は、失効/更新手順と `Publisher` の整合を維持する。
 - CI/CD で利用する場合は、Key Vault アクセス権を最小化（Managed Identity / RBAC 最小権限）。
+
+## 6. 参考（公式ドキュメント）
+- Azure Key Vault 証明書作成（Azure CLI）: https://learn.microsoft.com/cli/azure/keyvault/certificate
+- Azure Key Vault から secret ダウンロード（PFX 取得）: https://learn.microsoft.com/cli/azure/keyvault/secret
+- Import-Certificate: https://learn.microsoft.com/powershell/module/pki/import-certificate
+- SignTool（MSIX 署名/検証）: https://learn.microsoft.com/windows/msix/package/sign-app-package-using-signtool

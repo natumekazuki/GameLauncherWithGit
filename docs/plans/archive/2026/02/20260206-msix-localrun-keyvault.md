@@ -38,3 +38,4 @@
   - `pwsh -File scripts/publish-windows-msix.ps1` 成功（MSIX生成）
 - 2026-02-06: `docs/design/maui-blazor-architecture.md` に配布モデル節を追加。
 - 2026-02-06: `docs/design/windows-msix-keyvault-signing.md` を新規作成し、証明書発行から署名・配布手順を記載。
+- 2026-02-06: Key Vault 由来 PFX のパスワード未設定ケースに対応し、`scripts/publish-windows-msix.ps1` を修正（パスワード任意化）。
