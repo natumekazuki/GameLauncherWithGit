@@ -146,9 +146,22 @@ sequenceDiagram
   - `Domain` / `Application` / `Infrastructure` の基本フォルダとインターフェース
   - DI 登録の初期実装（設計書のライフサイクル方針に沿った仮実装を登録）
   - ゲーム一覧カードのプレースホルダーUI（先頭の「+ 新規追加」カードと `▶ 起動` 導線）
+  - Windows 実行/配布スクリプト（`scripts/run-local-unpackaged.ps1` / `scripts/publish-windows-msix.ps1`）
 - 未実装
   - Git 実行の本実装（`fetch/pull --rebase/add/commit/push`）
   - FileSystemWatcher による変更監視とリポジトリ単位デバウンス制御
   - 起動前 Pull の本実装と exe 起動制御
   - Windows 固有機能（タスクトレイ / Toast / 自動起動）
   - 設定永続化（`settings.json`）とログ画面/運用導線
+
+## 13. Windows 配布モデル（Unpackaged / MSIX）
+- 開発時（ローカル実行）は Unpackaged を採用する。
+  - `WindowsPackageType=None`
+  - コマンド: `pwsh -File scripts/run-local-unpackaged.ps1`
+- 配布時のみ MSIX を採用する。
+  - コマンド: `pwsh -File scripts/publish-windows-msix.ps1`
+- 「ローカルでアプリがインストールされる」主因は、MSIX 発行/実行経路を使っていること。
+  - `dotnet publish` で `WindowsPackageType=MSIX` を使った場合
+  - Visual Studio 側でパッケージ配布用プロファイルを利用した場合
+
+詳細手順は `docs/design/windows-msix-keyvault-signing.md` を参照。

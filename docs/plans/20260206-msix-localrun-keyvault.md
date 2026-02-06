@@ -11,8 +11,8 @@
 ## Task List
 - [x] 1. 現在の Windows ビルド設定を確認し、ローカル実行（Unpackaged）と配布（MSIX）の設定方針を確定する。
 - [x] 2. ローカル実行用コマンド（インストールなし）と MSIX 生成用コマンド（配布用）をスクリプト化する。
-- [ ] 3. `docs/design/maui-blazor-architecture.md` に配布モデル（Unpackaged と MSIX の使い分け）を追記する。
-- [ ] 4. Azure Key Vault 証明書の発行/登録/利用手順を `docs/design/` に新規作成する。
+- [x] 3. `docs/design/maui-blazor-architecture.md` に配布モデル（Unpackaged と MSIX の使い分け）を追記する。
+- [x] 4. Azure Key Vault 証明書の発行/登録/利用手順を `docs/design/` に新規作成する。
 - [x] 5. 手順の再現性確認として、ローカル実行コマンドとMSIX生成コマンドを実行し、結果を記録する。
 - [ ] 6. 計画ファイルを完了状態に更新し、`docs/plans/archive/2026/02/` へ移動する。
 
@@ -36,3 +36,5 @@
 - 2026-02-06: 検証コマンドを実行。
   - `pwsh -File scripts/run-local-unpackaged.ps1 -BuildOnly` 成功
   - `pwsh -File scripts/publish-windows-msix.ps1` 成功（MSIX生成）
+- 2026-02-06: `docs/design/maui-blazor-architecture.md` に配布モデル節を追加。
+- 2026-02-06: `docs/design/windows-msix-keyvault-signing.md` を新規作成し、証明書発行から署名・配布手順を記載。

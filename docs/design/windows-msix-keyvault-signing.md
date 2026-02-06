@@ -1,0 +1,131 @@
+# Windows 配布運用: MSIX と Azure Key Vault 証明書
+
+更新日: 2026-02-06
+対象: `src/GameLauncherWithGit`（.NET MAUI Blazor Hybrid / Windows 11）
+
+## 1. 目的
+- ローカル開発時は「インストールなし（Unpackaged）」で実行する。
+- 配布時のみ「MSIX」を生成し、Azure Key Vault 管理の証明書で署名する。
+
+## 2. ローカルでインストールされる理由
+- Windows アプリがインストールされるのは、`MSIX` としてビルド/発行し、そのパッケージを実行した場合。
+- `WindowsPackageType=None` の `dotnet run` / `dotnet build` は Unpackaged 実行であり、通常はインストールされない。
+- Visual Studio の発行プロファイルや `dotnet publish` で `WindowsPackageType=MSIX` を使うと、配布用パッケージ経路になる。
+
+## 3. このリポジトリの運用ルール
+- ローカル実行（非インストール）:
+  - `pwsh -File scripts/run-local-unpackaged.ps1`
+- ローカル確認用ビルド（GUI起動なし）:
+  - `pwsh -File scripts/run-local-unpackaged.ps1 -BuildOnly`
+- MSIX 発行（配布用）:
+  - `pwsh -File scripts/publish-windows-msix.ps1`
+
+## 4. Azure Key Vault 証明書の発行から登録まで
+
+### 4.1 前提
+- Azure CLI ログイン済み
+- Key Vault 作成権限がある
+- 配布先PCに証明書を配布できる運用がある
+
+### 4.2 Key Vault と証明書を作成
+```powershell
+# 1) 変数
+$ResourceGroup = "rg-gamelauncher-prod"
+$Location = "japaneast"
+$VaultName = "kv-gamelauncher-prod"
+$CertName = "msix-code-signing"
+
+# 2) リソース作成
+az group create --name $ResourceGroup --location $Location
+az keyvault create --name $VaultName --resource-group $ResourceGroup --location $Location
+```
+
+`certificate-policy.json`（例: Key Vault で自己署名を発行、PFX エクスポート可能）
+```json
+{
+  "issuerParameters": {
+    "name": "Self"
+  },
+  "x509CertificateProperties": {
+    "subject": "CN=GameLauncherWithGit",
+    "validityInMonths": 12,
+    "keyUsage": [
+      "digitalSignature"
+    ]
+  },
+  "keyProperties": {
+    "exportable": true,
+    "keyType": "RSA",
+    "keySize": 2048,
+    "reuseKey": false
+  },
+  "secretProperties": {
+    "contentType": "application/x-pkcs12"
+  }
+}
+```
+
+証明書発行:
+```powershell
+az keyvault certificate create `
+  --vault-name $VaultName `
+  --name $CertName `
+  --policy "@certificate-policy.json"
+```
+
+### 4.3 証明書をダウンロード（PFX / CER）
+```powershell
+# 公開証明書（CER）
+az keyvault certificate download `
+  --vault-name $VaultName `
+  --name $CertName `
+  --file ".\codesign.cer"
+
+# PFX（秘密鍵付き、secret から取得）
+az keyvault secret download `
+  --vault-name $VaultName `
+  --name $CertName `
+  --file ".\codesign.pfx" `
+  --encoding base64
+```
+
+### 4.4 配布/ビルド用マシンへ証明書登録
+```powershell
+# PFX を個人ストアへ登録（署名用）
+$pfxPass = Read-Host -AsSecureString "PFX password"
+Import-PfxCertificate `
+  -FilePath ".\codesign.pfx" `
+  -CertStoreLocation "Cert:\CurrentUser\My" `
+  -Password $pfxPass
+
+# 自己署名の場合は信頼ストアにも登録（配布先PC）
+Import-Certificate `
+  -FilePath ".\codesign.cer" `
+  -CertStoreLocation "Cert:\CurrentUser\TrustedPeople"
+```
+
+### 4.5 MSIX を署名付きで発行
+```powershell
+$env:MSIX_CERT_PASSWORD = "<PFXのパスワード>"
+pwsh -File scripts/publish-windows-msix.ps1 `
+  -PackageCertificateKeyFile ".\codesign.pfx"
+```
+
+補足:
+- `PackageCertificateThumbprint` を使う場合は、事前に証明書ストアへ登録しておく。
+- `Platforms/Windows/Package.appxmanifest` の `Identity Publisher` は証明書 Subject と一致させる。
+
+### 4.6 署名とインストール確認
+```powershell
+$msix = Get-ChildItem ".\artifacts\msix\AppPackages" -Recurse -Filter *.msix | Select-Object -First 1
+Get-AuthenticodeSignature $msix.FullName | Format-List
+
+# インストール検証
+Add-AppxPackage $msix.FullName
+```
+
+## 5. 運用上の注意
+- 本番配布で警告を抑えるには、公開信頼チェーンを持つコード署名証明書（CA発行）を使う。
+- Key Vault で自己署名を使う場合、配布先PCへの信頼証明書配布が必須。
+- 証明書ローテーション時は、失効/更新手順と `Publisher` の整合を維持する。
+- CI/CD で利用する場合は、Key Vault アクセス権を最小化（Managed Identity / RBAC 最小権限）。
