@@ -2,67 +2,91 @@
 @inject IGameLibraryService GameLibraryService
 @inject ILauncherService LauncherService
 @inject IPathPickerService PathPickerService
+@inject IGitService GitService
 
 <PageTitle>ゲーム一覧</PageTitle>
 
-<section class="library-page">
-    <header class="library-header">
-        <h1>ゲーム一覧</h1>
-        <p>ゲーム起動時に関連リポジトリの同期を実行します。</p>
-    </header>
-
-    <div class="game-grid">
-        <button type="button" class="game-card add-card" @onclick="OpenCreateEditor">
-            <span class="add-icon">+</span>
-            <span class="add-label">新規追加</span>
-        </button>
-
-        @if (_games is null)
+@if (_isStartupChecking)
+{
+    <section class="library-page">
+        <header class="library-header">
+            <h1>ゲーム一覧</h1>
+            <p>起動要件を確認しています...</p>
+        </header>
+    </section>
+}
+else if (!_isGitReady)
+{
+    <section class="startup-error-panel">
+        <h1>Git が利用できません</h1>
+        <p>Git のインストールまたは PATH 設定を確認してから、アプリを再起動してください。</p>
+        @if (!string.IsNullOrWhiteSpace(_startupError))
         {
-            <div class="game-card loading-card">読み込み中...</div>
+            <p class="startup-error-detail">@_startupError</p>
         }
-        else
-        {
-            @foreach (var game in _games)
+    </section>
+}
+else
+{
+    <section class="library-page">
+        <header class="library-header">
+            <h1>ゲーム一覧</h1>
+            <p>ゲーム起動時に関連リポジトリの同期を実行します。</p>
+        </header>
+
+        <div class="game-grid">
+            <button type="button" class="game-card add-card" @onclick="OpenCreateEditor">
+                <span class="add-icon">+</span>
+                <span class="add-label">新規追加</span>
+            </button>
+
+            @if (_games is null)
             {
-                <article class="game-card">
-                    <div class="game-card-header">
-                        <h2>@game.Title</h2>
-                        <span class="status-badge @GetStatusClass(game.Status)">@GetStatusLabel(game.Status)</span>
-                    </div>
-
-                    <div class="game-card-body">
-                        <p class="meta-label">実行ファイル</p>
-                        <p class="meta-value">@game.ExecutablePath</p>
-                        <p class="meta-label">関連リポジトリ</p>
-                        @if (string.IsNullOrWhiteSpace(game.RelatedRepositoryPath))
-                        {
-                            <p class="meta-value">未設定</p>
-                        }
-                        else
-                        {
-                            <p class="meta-value">@game.RelatedRepositoryPath</p>
-                        }
-                        <p class="meta-label">最終プレイ</p>
-                        <p class="meta-value">@FormatLastPlayed(game.LastPlayedAt)</p>
-                    </div>
-
-                    <div class="game-card-actions">
-                        <button type="button" class="launch-button" @onclick="() => LaunchAsync(game.Id)">▶ 起動</button>
-                        <button type="button" class="secondary-button" @onclick="() => OpenEditEditor(game)">設定</button>
-                    </div>
-                </article>
+                <div class="game-card loading-card">読み込み中...</div>
             }
+            else
+            {
+                @foreach (var game in _games)
+                {
+                    <article class="game-card">
+                        <div class="game-card-header">
+                            <h2>@game.Title</h2>
+                            <span class="status-badge @GetStatusClass(game.Status)">@GetStatusLabel(game.Status)</span>
+                        </div>
+
+                        <div class="game-card-body">
+                            <p class="meta-label">実行ファイル</p>
+                            <p class="meta-value">@game.ExecutablePath</p>
+                            <p class="meta-label">関連リポジトリ</p>
+                            @if (string.IsNullOrWhiteSpace(game.RelatedRepositoryPath))
+                            {
+                                <p class="meta-value">未設定</p>
+                            }
+                            else
+                            {
+                                <p class="meta-value">@game.RelatedRepositoryPath</p>
+                            }
+                            <p class="meta-label">最終プレイ</p>
+                            <p class="meta-value">@FormatLastPlayed(game.LastPlayedAt)</p>
+                        </div>
+
+                        <div class="game-card-actions">
+                            <button type="button" class="launch-button" @onclick="() => LaunchAsync(game.Id)">▶ 起動</button>
+                            <button type="button" class="secondary-button" @onclick="() => OpenEditEditor(game)">設定</button>
+                        </div>
+                    </article>
+                }
+            }
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(_message))
+        {
+            <p class="action-message @GetMessageClass()">@_message</p>
         }
-    </div>
+    </section>
+}
 
-    @if (!string.IsNullOrWhiteSpace(_message))
-    {
-        <p class="action-message @GetMessageClass()">@_message</p>
-    }
-</section>
-
-@if (_isEditorOpen)
+@if (_isGitReady && _isEditorOpen)
 {
     <div class="editor-overlay" @onclick="() => CloseEditor()">
         <section class="editor-modal" @onclick:stopPropagation="true">
@@ -133,10 +157,32 @@
     private string _editorExecutablePath = string.Empty;
     private string? _editorRepositoryPath;
     private string? _editorError;
+    private bool _isStartupChecking = true;
+    private bool _isGitReady = true;
+    private string? _startupError;
 
     protected override async Task OnInitializedAsync()
     {
-        await ReloadGamesAsync();
+        _isStartupChecking = true;
+        _isGitReady = true;
+        _startupError = null;
+
+        try
+        {
+            var gitCheckResult = await GitService.RunAsync(AppContext.BaseDirectory, "--version");
+            if (!gitCheckResult.IsSuccess)
+            {
+                _isGitReady = false;
+                _startupError = BuildGitStartupError(gitCheckResult);
+                return;
+            }
+
+            await ReloadGamesAsync();
+        }
+        finally
+        {
+            _isStartupChecking = false;
+        }
     }
 
     private async Task LaunchAsync(string gameId)
@@ -341,5 +387,25 @@
             false => "action-message-error",
             _ => string.Empty
         };
+    }
+
+    private static string BuildGitStartupError(GitCommandResult result)
+    {
+        var reason = FirstNonEmptyLine(result.StandardError)
+            ?? FirstNonEmptyLine(result.StandardOutput)
+            ?? $"exit code: {result.ExitCode}";
+        return $"Git の起動確認に失敗しました。reason={reason}";
+    }
+
+    private static string? FirstNonEmptyLine(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        return value
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault(static line => !string.IsNullOrWhiteSpace(line));
     }
 }
