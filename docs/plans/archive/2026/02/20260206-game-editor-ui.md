@@ -15,8 +15,8 @@
 - [x] 3. `GameLibraryService` を SQLite 利用へ切り替え、関連リポジトリ複数値を保存/読込できるようにする。
 - [x] 4. `Home.razor` に登録/編集モーダルを追加し、保存・キャンセル・バリデーションを実装する。
 - [x] 5. `Home.razor` / `app.css` を更新して、カード上に設定ボタンと関連リポジトリ表示を追加する。
-- [ ] 6. ビルド確認を実施し、`docs/design/maui-blazor-architecture.md` の実装ステータスを更新する。
-- [ ] 7. 計画ファイルを完了状態に更新し、`docs/plans/archive/2026/02/` へ移動する。
+- [x] 6. ビルド確認を実施し、`docs/design/maui-blazor-architecture.md` の実装ステータスを更新する。
+- [x] 7. 計画ファイルを完了状態に更新し、`docs/plans/archive/2026/02/` へ移動する。
 
 ## Affected Files
 - `src/GameLauncherWithGit/Application/Models/` 配下（新規）
@@ -43,3 +43,5 @@
 - 2026-02-06: `GameLibraryService` を SQLite 利用に切り替え、登録/更新・状態更新を `IGameLibraryStore` 経由で実行するよう変更。
 - 2026-02-06: `Home.razor` にゲーム追加/編集モーダルを実装し、`CreateAsync` / `UpdateAsync` を接続。
 - 2026-02-06: カード上に「設定」ボタン、関連リポジトリ一覧表示、モーダル用スタイルを `app.css` へ追加。
+- 2026-02-06: `dotnet build GameLauncherWithGit.sln -f net9.0-windows10.0.19041.0` で 0 エラーを確認。
+- 2026-02-06: `docs/design/maui-blazor-architecture.md` に SQLite 永続化と登録/編集UIの実装反映を追記。
