@@ -1,6 +1,7 @@
 using GameLauncherWithGit.Application.Abstractions;
 using GameLauncherWithGit.Application.Models;
 using GameLauncherWithGit.Infrastructure.Abstractions;
+using Microsoft.Extensions.Logging;
 using System.Text;
 
 namespace GameLauncherWithGit.Application.Services;
@@ -9,11 +10,19 @@ public sealed class GameLibraryService : IGameLibraryService
 {
 	private readonly IGameLibraryStore _store;
 	private readonly IGitService _gitService;
+	private readonly IThumbnailService _thumbnailService;
+	private readonly ILogger<GameLibraryService> _logger;
 
-	public GameLibraryService(IGameLibraryStore store, IGitService gitService)
+	public GameLibraryService(
+		IGameLibraryStore store,
+		IGitService gitService,
+		IThumbnailService thumbnailService,
+		ILogger<GameLibraryService> logger)
 	{
 		_store = store;
 		_gitService = gitService;
+		_thumbnailService = thumbnailService;
+		_logger = logger;
 	}
 
 	public async Task<GameCardItem> CreateAsync(GameEditInput input, CancellationToken cancellationToken = default)
@@ -21,11 +30,17 @@ public sealed class GameLibraryService : IGameLibraryService
 		var normalizedInput = NormalizeInput(input);
 		await EnsureRepositoryPathIsGitAsync(normalizedInput.RelatedRepositoryPath, cancellationToken);
 		var gameId = await BuildUniqueGameIdAsync(normalizedInput.Title, cancellationToken);
+		var thumbnailPath = await TryCreateThumbnailAsync(
+			sourceImagePath: normalizedInput.ThumbnailSourcePath,
+			fallbackPath: null,
+			cancellationToken);
+
 		var game = new GameCardItem(
 			Id: gameId,
 			Title: normalizedInput.Title,
 			ExecutablePath: normalizedInput.ExecutablePath,
 			RelatedRepositoryPath: normalizedInput.RelatedRepositoryPath,
+			ThumbnailPath: thumbnailPath,
 			LastPlayedAt: null,
 			Status: GameCardStatus.Unknown);
 
@@ -80,11 +95,19 @@ public sealed class GameLibraryService : IGameLibraryService
 
 		var normalizedInput = NormalizeInput(input);
 		await EnsureRepositoryPathIsGitAsync(normalizedInput.RelatedRepositoryPath, cancellationToken);
+		var thumbnailPath = normalizedInput.ClearThumbnail
+			? null
+			: await TryCreateThumbnailAsync(
+				sourceImagePath: normalizedInput.ThumbnailSourcePath,
+				fallbackPath: game.ThumbnailPath,
+				cancellationToken);
+
 		var updated = game with
 		{
 			Title = normalizedInput.Title,
 			ExecutablePath = normalizedInput.ExecutablePath,
-			RelatedRepositoryPath = normalizedInput.RelatedRepositoryPath
+			RelatedRepositoryPath = normalizedInput.RelatedRepositoryPath,
+			ThumbnailPath = thumbnailPath
 		};
 
 		await _store.UpsertAsync(updated, cancellationToken);
@@ -126,7 +149,39 @@ public sealed class GameLibraryService : IGameLibraryService
 			repositoryPath = null;
 		}
 
-		return new GameEditInput(title, executablePath, repositoryPath);
+		var thumbnailSourcePath = input.ThumbnailSourcePath?.Trim();
+		if (string.IsNullOrWhiteSpace(thumbnailSourcePath))
+		{
+			thumbnailSourcePath = null;
+		}
+
+		return new GameEditInput(
+			Title: title,
+			ExecutablePath: executablePath,
+			RelatedRepositoryPath: repositoryPath,
+			ThumbnailSourcePath: thumbnailSourcePath,
+			ClearThumbnail: input.ClearThumbnail);
+	}
+
+	private async Task<string?> TryCreateThumbnailAsync(
+		string? sourceImagePath,
+		string? fallbackPath,
+		CancellationToken cancellationToken)
+	{
+		if (string.IsNullOrWhiteSpace(sourceImagePath))
+		{
+			return fallbackPath;
+		}
+
+		try
+		{
+			return await _thumbnailService.CreateThumbnailAsync(sourceImagePath, cancellationToken) ?? fallbackPath;
+		}
+		catch (Exception ex)
+		{
+			_logger.LogWarning(ex, "Thumbnail generation failed. source={SourceImagePath}", sourceImagePath);
+			return fallbackPath;
+		}
 	}
 
 	private async Task EnsureRepositoryPathIsGitAsync(string? repositoryPath, CancellationToken cancellationToken)

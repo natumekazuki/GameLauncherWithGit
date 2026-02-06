@@ -53,27 +53,47 @@ else
                 @foreach (var game in _games)
                 {
                     var effectiveStatus = GetEffectiveStatus(game);
-                    <article class="game-card">
-                        <div class="game-card-header">
-                            <h2>@game.Title</h2>
-                            <span class="status-badge @GetStatusClass(effectiveStatus)">@GetStatusLabel(effectiveStatus)</span>
-                        </div>
+                    var hasThumbnail = HasThumbnail(game);
+                    var thumbnailDataUri = hasThumbnail ? GetThumbnailDataUri(game) : null;
+                    <article class="game-card @(hasThumbnail ? "thumbnail-mode-card" : string.Empty)">
+                        @if (hasThumbnail)
+                        {
+                            <div class="game-thumbnail-panel">
+                                @if (string.IsNullOrWhiteSpace(thumbnailDataUri))
+                                {
+                                    <div class="game-thumbnail-missing" title="@game.Title"></div>
+                                }
+                                else
+                                {
+                                    <img class="game-thumbnail-image"
+                                         src="@thumbnailDataUri"
+                                         alt="@($"{game.Title} サムネイル")" />
+                                }
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="game-card-header">
+                                <h2>@game.Title</h2>
+                                <span class="status-badge @GetStatusClass(effectiveStatus)">@GetStatusLabel(effectiveStatus)</span>
+                            </div>
 
-                        <div class="game-card-body">
-                            <p class="meta-label">実行ファイル</p>
-                            <p class="meta-value">@game.ExecutablePath</p>
-                            <p class="meta-label">関連リポジトリ</p>
-                            @if (string.IsNullOrWhiteSpace(game.RelatedRepositoryPath))
-                            {
-                                <p class="meta-value">未設定</p>
-                            }
-                            else
-                            {
-                                <p class="meta-value">@game.RelatedRepositoryPath</p>
-                            }
-                            <p class="meta-label">最終プレイ</p>
-                            <p class="meta-value">@FormatLastPlayed(game.LastPlayedAt)</p>
-                        </div>
+                            <div class="game-card-body">
+                                <p class="meta-label">実行ファイル</p>
+                                <p class="meta-value">@game.ExecutablePath</p>
+                                <p class="meta-label">関連リポジトリ</p>
+                                @if (string.IsNullOrWhiteSpace(game.RelatedRepositoryPath))
+                                {
+                                    <p class="meta-value">未設定</p>
+                                }
+                                else
+                                {
+                                    <p class="meta-value">@game.RelatedRepositoryPath</p>
+                                }
+                                <p class="meta-label">最終プレイ</p>
+                                <p class="meta-value">@FormatLastPlayed(game.LastPlayedAt)</p>
+                            </div>
+                        }
 
                         <div class="game-card-actions">
                             <button type="button" class="launch-button" @onclick="() => LaunchAsync(game.Id)">▶ 起動</button>
@@ -118,6 +138,27 @@ else
                     <button type="button" class="secondary-button picker-button" @onclick="PickExecutablePathAsync" disabled="@_isSaving">
                         参照
                     </button>
+                </div>
+            </div>
+
+            <div class="editor-field">
+                <label>サムネイル画像</label>
+                <div class="single-repo-picker">
+                    <p class="single-repo-value">@GetThumbnailEditorLabel()</p>
+                    <div class="single-repo-actions">
+                        <button type="button"
+                                class="secondary-button picker-button"
+                                @onclick="PickThumbnailPathAsync"
+                                disabled="@_isSaving">
+                            参照
+                        </button>
+                        <button type="button"
+                                class="secondary-button picker-button"
+                                @onclick="ClearThumbnailSelection"
+                                disabled="@(!CanClearThumbnailSelection() || _isSaving)">
+                            解除
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -170,11 +211,15 @@ else
     private string _editorTitle = string.Empty;
     private string _editorExecutablePath = string.Empty;
     private string? _editorRepositoryPath;
+    private string? _editorThumbnailSourcePath;
+    private bool _editorHasThumbnail;
+    private bool _editorClearThumbnail;
     private string? _editorError;
     private bool _isStartupChecking = true;
     private bool _isGitReady = true;
     private string? _startupError;
     private readonly HashSet<string> _registeredWatcherRepositoryIds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _thumbnailDataUriCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenSource _stateRefreshCts = new();
     private Task? _stateRefreshTask;
 
@@ -225,6 +270,9 @@ else
         _editorTitle = string.Empty;
         _editorExecutablePath = string.Empty;
         _editorRepositoryPath = null;
+        _editorThumbnailSourcePath = null;
+        _editorHasThumbnail = false;
+        _editorClearThumbnail = false;
         _editorError = null;
         _isEditorOpen = true;
     }
@@ -236,6 +284,9 @@ else
         _editorTitle = game.Title;
         _editorExecutablePath = game.ExecutablePath;
         _editorRepositoryPath = game.RelatedRepositoryPath;
+        _editorThumbnailSourcePath = null;
+        _editorHasThumbnail = HasThumbnail(game);
+        _editorClearThumbnail = false;
         _editorError = null;
         _isEditorOpen = true;
     }
@@ -271,7 +322,9 @@ else
         var input = new GameEditInput(
             Title: _editorTitle,
             ExecutablePath: _editorExecutablePath,
-            RelatedRepositoryPath: _editorRepositoryPath);
+            RelatedRepositoryPath: _editorRepositoryPath,
+            ThumbnailSourcePath: _editorThumbnailSourcePath,
+            ClearThumbnail: _editorClearThumbnail);
 
         _isSaving = true;
         try
@@ -342,6 +395,56 @@ else
         }
     }
 
+    private async Task PickThumbnailPathAsync()
+    {
+        _editorError = null;
+
+        try
+        {
+            var selectedPath = await PathPickerService.PickThumbnailPathAsync();
+            if (!string.IsNullOrWhiteSpace(selectedPath))
+            {
+                _editorThumbnailSourcePath = selectedPath;
+                _editorClearThumbnail = false;
+                _editorError = null;
+                return;
+            }
+
+            _editorError = "サムネイル画像が選択されませんでした。";
+        }
+        catch (Exception ex)
+        {
+            _editorError = ex.Message;
+        }
+    }
+
+    private void ClearThumbnailSelection()
+    {
+        _editorThumbnailSourcePath = null;
+        _editorHasThumbnail = false;
+        _editorClearThumbnail = true;
+    }
+
+    private bool CanClearThumbnailSelection()
+    {
+        return _editorHasThumbnail || !string.IsNullOrWhiteSpace(_editorThumbnailSourcePath);
+    }
+
+    private string GetThumbnailEditorLabel()
+    {
+        if (!string.IsNullOrWhiteSpace(_editorThumbnailSourcePath))
+        {
+            return _editorThumbnailSourcePath;
+        }
+
+        if (_editorHasThumbnail && !_editorClearThumbnail)
+        {
+            return "登録済み（変更なし）";
+        }
+
+        return "未設定";
+    }
+
     private async Task PickRepositoryDirectoryPathAsync()
     {
         _editorError = null;
@@ -372,6 +475,7 @@ else
     private async Task ReloadGamesAsync()
     {
         _games = await GameLibraryService.GetGamesAsync();
+        SyncThumbnailCache();
     }
 
     private Task RefreshRepositoryWatchersAsync()
@@ -449,6 +553,7 @@ else
         _stateRefreshCts.Cancel();
         _stateRefreshCts.Dispose();
         UnregisterAllWatchers();
+        _thumbnailDataUriCache.Clear();
     }
 
     private void StartStateRefreshLoop()
@@ -511,6 +616,88 @@ else
     {
         var state = GetRepositorySyncState(game);
         return state is RepositorySyncState.Debouncing or RepositorySyncState.Syncing;
+    }
+
+    private static bool HasThumbnail(GameCardItem game)
+    {
+        return !string.IsNullOrWhiteSpace(game.ThumbnailPath);
+    }
+
+    private string? GetThumbnailDataUri(GameCardItem game)
+    {
+        var path = NormalizeThumbnailPath(game.ThumbnailPath);
+        if (path is null)
+        {
+            return null;
+        }
+
+        if (_thumbnailDataUriCache.TryGetValue(path, out var cached))
+        {
+            return cached;
+        }
+
+        try
+        {
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            var bytes = File.ReadAllBytes(path);
+            if (bytes.Length == 0)
+            {
+                return null;
+            }
+
+            var dataUri = $"data:image/png;base64,{Convert.ToBase64String(bytes)}";
+            _thumbnailDataUriCache[path] = dataUri;
+            return dataUri;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private void SyncThumbnailCache()
+    {
+        if (_games is null)
+        {
+            _thumbnailDataUriCache.Clear();
+            return;
+        }
+
+        var activePaths = _games
+            .Select(game => NormalizeThumbnailPath(game.ThumbnailPath))
+            .Where(static path => !string.IsNullOrWhiteSpace(path))
+            .Select(static path => path!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var stalePaths = _thumbnailDataUriCache.Keys
+            .Where(path => !activePaths.Contains(path))
+            .ToArray();
+
+        foreach (var stalePath in stalePaths)
+        {
+            _thumbnailDataUriCache.Remove(stalePath);
+        }
+    }
+
+    private static string? NormalizeThumbnailPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            return Path.GetFullPath(path.Trim());
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private async Task ResumeRepositorySyncAsync(GameCardItem game)

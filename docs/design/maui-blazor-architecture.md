@@ -45,12 +45,12 @@ flowchart LR
 - `TrayService`
   - 常駐・状態アイコン・コンテキストメニュー（今すぐ同期/設定/ログ/終了）
 - `ThumbnailService`
-  - 画像を長辺 512px の PNG に変換して `%AppData%` に保存
+  - 画像を長辺 512px の PNG に変換して `%AppData%/thumbnails` に保存
 - `PathPickerService`
   - 実行ファイル、サムネイル画像、関連リポジトリフォルダの選択をOSピッカー経由で提供
   - UI層から Windows API へ直接依存しないための抽象境界を維持
 - `GameLibraryStore (SQLite)`
-  - ゲーム設定（タイトル/実行ファイル/関連リポジトリ/状態）をSQLiteへ保存・読込
+  - ゲーム設定（タイトル/実行ファイル/関連リポジトリ/サムネイルパス/状態）をSQLiteへ保存・読込
 
 ## 5. 同期フロー
 ```mermaid
@@ -108,7 +108,7 @@ sequenceDiagram
   - `Unknown`, `Syncing`, `Synced`, `Error`
 - ゲーム設定モデル
   - `ExecutablePath`: 実行ファイルパス（必須）
-  - `ThumbnailSourcePath`: サムネイル元画像パス（任意）
+  - `ThumbnailPath`: 生成済みサムネイル画像パス（任意）
   - `RelatedRepositoryPath`: 関連リポジトリフォルダ（任意、単一）
 
 ## 8. DI ライフサイクル（MVP）
@@ -127,7 +127,7 @@ sequenceDiagram
 ## 9. 永続化
 - 保存先: `%AppData%/GameLauncherWithGit/`
 - 保存対象
-  - `game-library.db`: ゲーム設定（タイトル、実行ファイル、関連リポジトリ、状態、最終プレイ日時）
+  - `game-library.db`: ゲーム設定（タイトル、実行ファイル、関連リポジトリ、サムネイルパス、状態、最終プレイ日時）
   - `settings.json`: リポジトリ設定、デバウンス秒数（予定）
   - `logs/*.log`: Git 実行ログ、障害ログ
   - `thumbnails/*.png`: 変換済みサムネイル
@@ -158,6 +158,9 @@ sequenceDiagram
   - `LauncherService` の実装（起動前 `fetch -> remote ahead判定 -> (必要時のみ)add/commit -> pull --rebase --autostash`、失敗時の起動ブロック）
   - ゲーム一覧カードUI（先頭の「+ 新規追加」カード、`▶ 起動`、`設定`、起動結果表示）
   - ゲーム登録/編集モーダル（タイトル/実行ファイル/関連リポジトリ）
+  - ゲーム登録/編集モーダルのサムネイル画像選択（参照/解除）
+  - `ThumbnailService` の実装（長辺512px・PNG変換、`%AppData%/thumbnails` 保存）
+  - サムネイル登録済みカードの表示モード切替（文字情報非表示、画像+操作ボタンのみ表示）
   - パス選択UI（実行ファイル参照、関連リポジトリフォルダ追加）
   - 単一リポジトリ選択UI（フォルダ選択/解除、手入力なし）
   - ゲーム登録/更新時の関連リポジトリ検証（`git rev-parse --is-inside-work-tree`）
