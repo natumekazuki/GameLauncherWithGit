@@ -254,19 +254,35 @@
 
     private async Task PickExecutablePathAsync()
     {
-        var selectedPath = await PathPickerService.PickExecutablePathAsync();
-        if (!string.IsNullOrWhiteSpace(selectedPath))
+        try
         {
-            _editorExecutablePath = selectedPath;
+            var selectedPath = await PathPickerService.PickExecutablePathAsync();
+            if (!string.IsNullOrWhiteSpace(selectedPath))
+            {
+                _editorExecutablePath = selectedPath;
+                _editorError = null;
+            }
+        }
+        catch (Exception ex)
+        {
+            _editorError = ex.Message;
         }
     }
 
     private async Task PickRepositoryDirectoryPathAsync()
     {
-        var selectedPath = await PathPickerService.PickRepositoryDirectoryPathAsync();
-        if (!string.IsNullOrWhiteSpace(selectedPath))
+        try
         {
-            _editorRepositoryPath = selectedPath;
+            var selectedPath = await PathPickerService.PickRepositoryDirectoryPathAsync();
+            if (!string.IsNullOrWhiteSpace(selectedPath))
+            {
+                _editorRepositoryPath = selectedPath;
+                _editorError = null;
+            }
+        }
+        catch (Exception ex)
+        {
+            _editorError = ex.Message;
         }
     }
 
