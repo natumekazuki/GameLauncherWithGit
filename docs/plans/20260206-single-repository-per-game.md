@@ -10,7 +10,7 @@
 
 ## Task List
 - [x] 1. アプリケーションモデルを単一リポジトリ仕様へ変更する（`GameCardItem` / `GameEditInput`）。
-- [ ] 2. `GameLibraryService` と `LauncherService` を単一リポジトリ仕様へ更新する。
+- [x] 2. `GameLibraryService` と `LauncherService` を単一リポジトリ仕様へ更新する。
 - [ ] 3. SQLite保存ロジックを単一リポジトリ仕様へ更新する（既存データ互換を維持）。
 - [ ] 4. `Home.razor` の関連リポジトリUIを単一選択仕様へ変更し、手入力を削除する。
 - [ ] 5. `app.css` を調整し、不要な一覧編集スタイルを整理する。
@@ -35,3 +35,4 @@
 ## Notes / Logs
 - 2026-02-06: ユーザー指示「手入力は不要」「ゲームに紐づけるリポジトリは1つだけ」を反映するため計画開始。
 - 2026-02-06: `GameCardItem` / `GameEditInput` の関連リポジトリを単一パス（`RelatedRepositoryPath`）へ変更。
+- 2026-02-06: `GameLibraryService` / `LauncherService` を単一リポジトリ仕様へ更新。

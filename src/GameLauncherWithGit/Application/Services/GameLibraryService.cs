@@ -22,7 +22,7 @@ public sealed class GameLibraryService : IGameLibraryService
 			Id: gameId,
 			Title: normalizedInput.Title,
 			ExecutablePath: normalizedInput.ExecutablePath,
-			RelatedRepositoryPaths: normalizedInput.RelatedRepositoryPaths,
+			RelatedRepositoryPath: normalizedInput.RelatedRepositoryPath,
 			LastPlayedAt: null,
 			Status: GameCardStatus.Unknown);
 
@@ -80,7 +80,7 @@ public sealed class GameLibraryService : IGameLibraryService
 		{
 			Title = normalizedInput.Title,
 			ExecutablePath = normalizedInput.ExecutablePath,
-			RelatedRepositoryPaths = normalizedInput.RelatedRepositoryPaths
+			RelatedRepositoryPath = normalizedInput.RelatedRepositoryPath
 		};
 
 		await _store.UpsertAsync(updated, cancellationToken);
@@ -116,13 +116,13 @@ public sealed class GameLibraryService : IGameLibraryService
 			throw new InvalidOperationException("実行ファイルパスは必須です。");
 		}
 
-		var repositoryPaths = input.RelatedRepositoryPaths
-			.Select(static value => value.Trim())
-			.Where(static value => !string.IsNullOrWhiteSpace(value))
-			.Distinct(StringComparer.OrdinalIgnoreCase)
-			.ToArray();
+		var repositoryPath = input.RelatedRepositoryPath?.Trim();
+		if (string.IsNullOrWhiteSpace(repositoryPath))
+		{
+			repositoryPath = null;
+		}
 
-		return new GameEditInput(title, executablePath, repositoryPaths);
+		return new GameEditInput(title, executablePath, repositoryPath);
 	}
 
 	private static string BuildSlug(string value)

@@ -74,25 +74,23 @@ public sealed class LauncherService : ILauncherService
 
 	private async Task<LaunchResult> SynchronizeBeforeLaunchAsync(GameCardItem game, CancellationToken cancellationToken)
 	{
-		if (game.RelatedRepositoryPaths.Count == 0)
+		if (string.IsNullOrWhiteSpace(game.RelatedRepositoryPath))
 		{
-			_logger.LogInformation("Related repositories are not configured. gameId={GameId}", game.Id);
+			_logger.LogInformation("Related repository is not configured. gameId={GameId}", game.Id);
 			return new LaunchResult(true, "関連リポジトリ未設定のため、同期をスキップして起動します。");
 		}
 
-		foreach (var repositoryPath in game.RelatedRepositoryPaths)
+		var repositoryPath = game.RelatedRepositoryPath;
+		var fetchResult = await _gitService.RunAsync(repositoryPath, "fetch", cancellationToken);
+		if (!fetchResult.IsSuccess)
 		{
-			var fetchResult = await _gitService.RunAsync(repositoryPath, "fetch", cancellationToken);
-			if (!fetchResult.IsSuccess)
-			{
-				return BuildFailureResult(repositoryPath, "fetch", fetchResult);
-			}
+			return BuildFailureResult(repositoryPath, "fetch", fetchResult);
+		}
 
-			var pullResult = await _gitService.RunAsync(repositoryPath, "pull --rebase", cancellationToken);
-			if (!pullResult.IsSuccess)
-			{
-				return BuildFailureResult(repositoryPath, "pull --rebase", pullResult);
-			}
+		var pullResult = await _gitService.RunAsync(repositoryPath, "pull --rebase", cancellationToken);
+		if (!pullResult.IsSuccess)
+		{
+			return BuildFailureResult(repositoryPath, "pull --rebase", pullResult);
 		}
 
 		return new LaunchResult(true, "起動前同期に成功しました。");
