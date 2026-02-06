@@ -13,8 +13,8 @@
 - [x] 2. `PathPickerService` を実装し、実行ファイル選択・サムネイル選択・リポジトリフォルダ選択をWindowsで動作させる。
 - [x] 3. `Home.razor` の登録/編集モーダルに「実行ファイル参照」「リポジトリ追加参照」ボタンを追加し、入力欄へ反映する。
 - [x] 4. `app.css` を更新し、モーダル内の参照操作UIスタイルを調整する。
-- [ ] 5. ビルド確認を実施し、`docs/design/maui-blazor-architecture.md` の実装ステータスを更新する。
-- [ ] 6. 計画ファイルを完了状態に更新し、`docs/plans/archive/2026/02/` へ移動する。
+- [x] 5. ビルド確認を実施し、`docs/design/maui-blazor-architecture.md` の実装ステータスを更新する。
+- [x] 6. 計画ファイルを完了状態に更新し、`docs/plans/archive/2026/02/` へ移動する。
 
 ## Affected Files
 - `src/GameLauncherWithGit/Infrastructure/Abstractions/IPathPickerService.cs`
@@ -35,3 +35,5 @@
 - 2026-02-06: `PathPickerService` を実装し、ファイル選択（exe/thumbnail）とWindowsフォルダ選択を追加。
 - 2026-02-06: `Home.razor` のモーダルに `参照` / `フォルダ追加` ボタンを接続。
 - 2026-02-06: `app.css` にモーダル内インライン入力・Pickerボタン用スタイルを追加。
+- 2026-02-06: `dotnet build GameLauncherWithGit.sln -f net9.0-windows10.0.19041.0` で 0 エラーを確認。
+- 2026-02-06: `docs/design/maui-blazor-architecture.md` にパス選択UIの実装反映を追記。
