@@ -4,6 +4,6 @@ public sealed record GameCardItem(
 	string Id,
 	string Title,
 	string ExecutablePath,
-	IReadOnlyList<string> RelatedRepositoryPaths,
+	string? RelatedRepositoryPath,
 	DateTimeOffset? LastPlayedAt,
 	GameCardStatus Status);
