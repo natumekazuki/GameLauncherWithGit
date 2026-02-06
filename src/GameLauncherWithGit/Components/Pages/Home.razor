@@ -3,6 +3,8 @@
 @inject ILauncherService LauncherService
 @inject IPathPickerService PathPickerService
 @inject IGitService GitService
+@inject IRepositoryWatcherService RepositoryWatcherService
+@inject ISyncOrchestrator SyncOrchestrator
 
 <PageTitle>ゲーム一覧</PageTitle>
 
@@ -160,6 +162,7 @@ else
     private bool _isStartupChecking = true;
     private bool _isGitReady = true;
     private string? _startupError;
+    private readonly HashSet<string> _registeredWatcherRepositoryIds = new(StringComparer.OrdinalIgnoreCase);
 
     protected override async Task OnInitializedAsync()
     {
@@ -174,10 +177,13 @@ else
             {
                 _isGitReady = false;
                 _startupError = BuildGitStartupError(gitCheckResult);
+                UnregisterAllWatchers();
                 return;
             }
 
+            _ = SyncOrchestrator;
             await ReloadGamesAsync();
+            await RefreshRepositoryWatchersAsync();
         }
         finally
         {
@@ -280,6 +286,7 @@ else
 
             _isLastActionSuccess = true;
             await ReloadGamesAsync();
+            await RefreshRepositoryWatchersAsync();
             shouldCloseEditor = true;
         }
         catch (Exception ex)
@@ -350,6 +357,57 @@ else
     private async Task ReloadGamesAsync()
     {
         _games = await GameLibraryService.GetGamesAsync();
+    }
+
+    private Task RefreshRepositoryWatchersAsync()
+    {
+        if (_games is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        var activeRepositoryIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var game in _games)
+        {
+            if (string.IsNullOrWhiteSpace(game.RelatedRepositoryPath))
+            {
+                continue;
+            }
+
+            if (!Directory.Exists(game.RelatedRepositoryPath))
+            {
+                continue;
+            }
+
+            RepositoryWatcherService.Register(game.Id, game.RelatedRepositoryPath);
+            activeRepositoryIds.Add(game.Id);
+        }
+
+        var staleRepositoryIds = _registeredWatcherRepositoryIds
+            .Where(id => !activeRepositoryIds.Contains(id))
+            .ToArray();
+        foreach (var repositoryId in staleRepositoryIds)
+        {
+            RepositoryWatcherService.Unregister(repositoryId);
+        }
+
+        _registeredWatcherRepositoryIds.Clear();
+        foreach (var repositoryId in activeRepositoryIds)
+        {
+            _registeredWatcherRepositoryIds.Add(repositoryId);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private void UnregisterAllWatchers()
+    {
+        foreach (var repositoryId in _registeredWatcherRepositoryIds.ToArray())
+        {
+            RepositoryWatcherService.Unregister(repositoryId);
+        }
+
+        _registeredWatcherRepositoryIds.Clear();
     }
 
     private static string FormatLastPlayed(DateTimeOffset? value)

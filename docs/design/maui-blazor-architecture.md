@@ -157,10 +157,12 @@ sequenceDiagram
   - 単一リポジトリ選択UI（フォルダ選択/解除、手入力なし）
   - ゲーム登録/更新時の関連リポジトリ検証（`git rev-parse --is-inside-work-tree`）
   - アプリ起動時の Git 利用可否チェック（`git --version`）。未導入/起動不可時は Home でエラー表示し、ランチャーUIを非表示
+  - RepositoryWatcherService の FileSystemWatcher 実装（登録/解除、変更イベント通知）
+  - SyncOrchestrator の監視イベント購読、10秒デバウンス、リポジトリ単位の単一実行制御
+  - Home 初期化時/保存後の監視対象再構成（関連リポジトリごとに監視登録）
   - Windows 実行/配布スクリプト（`scripts/run-local-unpackaged.ps1` / `scripts/publish-windows-msix.ps1`）
 - 未実装
   - 自動同期フロー用の Git 実行実装（`add/commit/push` と失敗分類）
-  - FileSystemWatcher による変更監視とリポジトリ単位デバウンス制御
   - Windows 固有機能（タスクトレイ / Toast / 自動起動）
   - 設定永続化（`settings.json`）とログ画面/運用導線
 
