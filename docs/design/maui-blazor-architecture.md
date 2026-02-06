@@ -163,6 +163,7 @@ sequenceDiagram
   - pull/rebase 競合時の `ErrorPaused` 遷移、それ以外の同期失敗時の `Idle` 復帰
   - 監視キーのリポジトリパス統一（同一リポジトリ重複監視の抑止）
   - Home 初期化時/保存後の監視対象再構成（関連リポジトリごとに監視登録）
+  - Home で `ErrorPaused` を検知したゲームカードに「再開」ボタンを表示し、手動で即時同期再開可能
   - Windows 実行/配布スクリプト（`scripts/run-local-unpackaged.ps1` / `scripts/publish-windows-msix.ps1`）
 - 未実装
   - 同期失敗時の指数バックオフ再試行と通知抑制

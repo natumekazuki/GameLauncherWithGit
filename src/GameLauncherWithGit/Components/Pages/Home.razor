@@ -1,10 +1,12 @@
 @page "/"
+@implements IDisposable
 @inject IGameLibraryService GameLibraryService
 @inject ILauncherService LauncherService
 @inject IPathPickerService PathPickerService
 @inject IGitService GitService
 @inject IRepositoryWatcherService RepositoryWatcherService
 @inject ISyncOrchestrator SyncOrchestrator
+@inject IRepositoryStateStore RepositoryStateStore
 
 <PageTitle>ゲーム一覧</PageTitle>
 
@@ -50,10 +52,11 @@ else
             {
                 @foreach (var game in _games)
                 {
+                    var effectiveStatus = GetEffectiveStatus(game);
                     <article class="game-card">
                         <div class="game-card-header">
                             <h2>@game.Title</h2>
-                            <span class="status-badge @GetStatusClass(game.Status)">@GetStatusLabel(game.Status)</span>
+                            <span class="status-badge @GetStatusClass(effectiveStatus)">@GetStatusLabel(effectiveStatus)</span>
                         </div>
 
                         <div class="game-card-body">
@@ -74,6 +77,15 @@ else
 
                         <div class="game-card-actions">
                             <button type="button" class="launch-button" @onclick="() => LaunchAsync(game.Id)">▶ 起動</button>
+                            @if (CanResumeRepositorySync(game))
+                            {
+                                <button type="button"
+                                        class="secondary-button"
+                                        @onclick="() => ResumeRepositorySyncAsync(game)"
+                                        disabled="@IsRepositoryBusy(game)">
+                                    再開
+                                </button>
+                            }
                             <button type="button" class="secondary-button" @onclick="() => OpenEditEditor(game)">設定</button>
                         </div>
                     </article>
@@ -163,6 +175,8 @@ else
     private bool _isGitReady = true;
     private string? _startupError;
     private readonly HashSet<string> _registeredWatcherRepositoryIds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly CancellationTokenSource _stateRefreshCts = new();
+    private Task? _stateRefreshTask;
 
     protected override async Task OnInitializedAsync()
     {
@@ -184,6 +198,7 @@ else
             _ = SyncOrchestrator;
             await ReloadGamesAsync();
             await RefreshRepositoryWatchersAsync();
+            StartStateRefreshLoop();
         }
         finally
         {
@@ -426,6 +441,98 @@ else
         catch
         {
             return null;
+        }
+    }
+
+    public void Dispose()
+    {
+        _stateRefreshCts.Cancel();
+        _stateRefreshCts.Dispose();
+        UnregisterAllWatchers();
+    }
+
+    private void StartStateRefreshLoop()
+    {
+        if (_stateRefreshTask is not null)
+        {
+            return;
+        }
+
+        _stateRefreshTask = Task.Run(async () =>
+        {
+            while (!_stateRefreshCts.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(1), _stateRefreshCts.Token);
+                    await InvokeAsync(StateHasChanged);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (ObjectDisposedException)
+                {
+                    break;
+                }
+            }
+        });
+    }
+
+    private RepositorySyncState GetRepositorySyncState(GameCardItem game)
+    {
+        var repositoryKey = NormalizeRepositoryKey(game.RelatedRepositoryPath);
+        if (repositoryKey is null)
+        {
+            return RepositorySyncState.Idle;
+        }
+
+        return RepositoryStateStore.GetStateOrDefault(repositoryKey);
+    }
+
+    private GameCardStatus GetEffectiveStatus(GameCardItem game)
+    {
+        return GetRepositorySyncState(game) switch
+        {
+            RepositorySyncState.Syncing => GameCardStatus.Syncing,
+            RepositorySyncState.Debouncing => GameCardStatus.Syncing,
+            RepositorySyncState.ErrorPaused => GameCardStatus.Error,
+            _ => game.Status
+        };
+    }
+
+    private bool CanResumeRepositorySync(GameCardItem game)
+    {
+        return !string.IsNullOrWhiteSpace(game.RelatedRepositoryPath)
+            && GetRepositorySyncState(game) == RepositorySyncState.ErrorPaused;
+    }
+
+    private bool IsRepositoryBusy(GameCardItem game)
+    {
+        var state = GetRepositorySyncState(game);
+        return state is RepositorySyncState.Debouncing or RepositorySyncState.Syncing;
+    }
+
+    private async Task ResumeRepositorySyncAsync(GameCardItem game)
+    {
+        var repositoryKey = NormalizeRepositoryKey(game.RelatedRepositoryPath);
+        if (repositoryKey is null)
+        {
+            _message = "関連リポジトリのパスが無効です。";
+            _isLastActionSuccess = false;
+            return;
+        }
+
+        try
+        {
+            await SyncOrchestrator.ResumeRepositorySyncAsync(repositoryKey);
+            _message = $"同期を再開しました: {game.Title}";
+            _isLastActionSuccess = true;
+        }
+        catch (Exception ex)
+        {
+            _message = $"同期再開に失敗しました: {ex.Message}";
+            _isLastActionSuccess = false;
         }
     }
 

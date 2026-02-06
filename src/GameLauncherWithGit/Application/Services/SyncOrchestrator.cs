@@ -32,6 +32,25 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 
 	public Task QueueRepositorySyncAsync(string repositoryId, CancellationToken cancellationToken = default)
 	{
+		return QueueRepositorySyncCoreAsync(repositoryId, runImmediately: false, cancellationToken);
+	}
+
+	public Task ResumeRepositorySyncAsync(string repositoryId, CancellationToken cancellationToken = default)
+	{
+		if (string.IsNullOrWhiteSpace(repositoryId))
+		{
+			return Task.CompletedTask;
+		}
+
+		_repositoryStateStore.SetState(repositoryId.Trim(), RepositorySyncState.Idle);
+		return QueueRepositorySyncCoreAsync(repositoryId, runImmediately: true, cancellationToken);
+	}
+
+	private Task QueueRepositorySyncCoreAsync(
+		string repositoryId,
+		bool runImmediately,
+		CancellationToken cancellationToken)
+	{
 		if (string.IsNullOrWhiteSpace(repositoryId))
 		{
 			return Task.CompletedTask;
@@ -48,6 +67,11 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 			if (queue.IsSyncRunning)
 			{
 				queue.RerunRequested = true;
+				if (runImmediately)
+				{
+					queue.RerunImmediately = true;
+				}
+
 				_logger.LogDebug("Sync is running; rerun requested. repositoryId={RepositoryId}", normalizedId);
 				return Task.CompletedTask;
 			}
@@ -58,8 +82,10 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 			queue.DebounceCts = debounceCts;
 		}
 
-		_repositoryStateStore.SetState(normalizedId, RepositorySyncState.Debouncing);
-		_ = DebounceAndRunAsync(normalizedId, queue, debounceCts);
+		_repositoryStateStore.SetState(
+			normalizedId,
+			runImmediately ? RepositorySyncState.Syncing : RepositorySyncState.Debouncing);
+		_ = DebounceAndRunAsync(normalizedId, queue, debounceCts, runImmediately);
 		return Task.CompletedTask;
 	}
 
@@ -93,15 +119,19 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 	private async Task DebounceAndRunAsync(
 		string repositoryId,
 		RepositorySyncQueue queue,
-		CancellationTokenSource debounceCts)
+		CancellationTokenSource debounceCts,
+		bool runImmediately)
 	{
-		try
+		if (!runImmediately)
 		{
-			await Task.Delay(_debounceDuration, debounceCts.Token);
-		}
-		catch (OperationCanceledException)
-		{
-			return;
+			try
+			{
+				await Task.Delay(_debounceDuration, debounceCts.Token);
+			}
+			catch (OperationCanceledException)
+			{
+				return;
+			}
 		}
 
 		lock (queue.Gate)
@@ -140,12 +170,15 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		finally
 		{
 			var shouldRerun = false;
+			var rerunImmediately = false;
 			lock (queue.Gate)
 			{
 				queue.IsSyncRunning = false;
 				if (queue.RerunRequested)
 				{
 					queue.RerunRequested = false;
+					rerunImmediately = queue.RerunImmediately;
+					queue.RerunImmediately = false;
 					shouldRerun = true;
 				}
 			}
@@ -153,7 +186,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 			debounceCts.Dispose();
 			if (shouldRerun)
 			{
-				_ = QueueRepositorySyncAsync(repositoryId);
+				_ = QueueRepositorySyncCoreAsync(repositoryId, rerunImmediately, CancellationToken.None);
 			}
 		}
 	}
@@ -295,6 +328,8 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		public bool IsSyncRunning { get; set; }
 
 		public bool RerunRequested { get; set; }
+
+		public bool RerunImmediately { get; set; }
 	}
 
 	private sealed class SyncCommandException : Exception
