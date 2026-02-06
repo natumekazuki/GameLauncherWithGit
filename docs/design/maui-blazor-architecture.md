@@ -1,7 +1,7 @@
 # MAUI Blazor アーキテクチャ設計（MVP）
 
-更新日: 2026-02-04
-対象: Windows 11 / .NET 8 / .NET MAUI Blazor Hybrid
+更新日: 2026-02-06
+対象: Windows 11 / .NET 9 / .NET MAUI Blazor Hybrid
 
 ## 1. 目的
 - `docs/要件定義.md` のMVP要件を、MAUI Blazor Hybrid で実装可能な構成に落とし込む。
@@ -102,7 +102,7 @@ sequenceDiagram
 - ゲーム設定モデル
   - `ExecutablePath`: 実行ファイルパス（必須）
   - `ThumbnailSourcePath`: サムネイル元画像パス（任意）
-  - `RelatedRepositoryPath`: 関連リポジトリフォルダ（任意、単一）
+  - `RelatedRepositoryPaths`: 関連リポジトリフォルダ（任意、複数）
 
 ## 8. DI ライフサイクル（MVP）
 | サービス | ライフサイクル | 理由 |
@@ -140,12 +140,15 @@ sequenceDiagram
 - Windows連携: トレイ状態遷移、Toast 発火、自動起動設定
 - サムネイル: 512px変換、PNG化、失敗時フォールバック
 
-## 12. 実装ステータス（2026-02-04）
+## 12. 実装ステータス（2026-02-06）
 - 実装済み
-  - `SyncOrchestrator` による同期フロー、失敗分類、指数バックオフ
-  - `GameLibraryService` とランチャーUI（カード表示・詳細モーダル）
-  - `ThumbnailService` による 512px PNG 生成
+  - MAUI Blazor Hybrid の初期スキャフォールド（`GameLauncherWithGit.sln` / `src/GameLauncherWithGit`）
+  - `Domain` / `Application` / `Infrastructure` の基本フォルダとインターフェース
+  - DI 登録の初期実装（設計書のライフサイクル方針に沿った仮実装を登録）
+  - ゲーム一覧カードのプレースホルダーUI（先頭の「+ 新規追加」カードと `▶ 起動` 導線）
 - 未実装
-  - 起動前 `fetch/pull --rebase` の本実装（現在はexe起動のみ）
+  - Git 実行の本実装（`fetch/pull --rebase/add/commit/push`）
+  - FileSystemWatcher による変更監視とリポジトリ単位デバウンス制御
+  - 起動前 Pull の本実装と exe 起動制御
   - Windows 固有機能（タスクトレイ / Toast / 自動起動）
-  - ログビュー画面と「今すぐ同期」操作の実動作
+  - 設定永続化（`settings.json`）とログ画面/運用導線
