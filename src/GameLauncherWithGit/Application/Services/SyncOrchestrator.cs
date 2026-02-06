@@ -12,6 +12,9 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 	private readonly IRepositoryStateStore _repositoryStateStore;
 	private readonly IRepositoryWatcherService _repositoryWatcherService;
 	private readonly IGitService _gitService;
+	private readonly INotificationService _notificationService;
+	private readonly ITrayService _trayService;
+	private readonly ILogAccessService _logAccessService;
 	private readonly ILogger<SyncOrchestrator> _logger;
 	private readonly ConcurrentDictionary<string, RepositorySyncQueue> _queues = new(StringComparer.OrdinalIgnoreCase);
 	private readonly TimeSpan _debounceDuration = TimeSpan.FromSeconds(10);
@@ -21,13 +24,20 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		IRepositoryStateStore repositoryStateStore,
 		IRepositoryWatcherService repositoryWatcherService,
 		IGitService gitService,
+		INotificationService notificationService,
+		ITrayService trayService,
+		ILogAccessService logAccessService,
 		ILogger<SyncOrchestrator> logger)
 	{
 		_repositoryStateStore = repositoryStateStore;
 		_repositoryWatcherService = repositoryWatcherService;
 		_gitService = gitService;
+		_notificationService = notificationService;
+		_trayService = trayService;
+		_logAccessService = logAccessService;
 		_logger = logger;
 		_repositoryWatcherService.RepositoryChanged += OnRepositoryChanged;
+		_trayService.SetState(RepositorySyncState.Idle);
 	}
 
 	public Task QueueRepositorySyncAsync(string repositoryId, CancellationToken cancellationToken = default)
@@ -42,7 +52,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 			return Task.CompletedTask;
 		}
 
-		_repositoryStateStore.SetState(repositoryId.Trim(), RepositorySyncState.Idle);
+		SetRepositoryState(repositoryId.Trim(), RepositorySyncState.Idle);
 		return QueueRepositorySyncCoreAsync(repositoryId, runImmediately: true, cancellationToken);
 	}
 
@@ -82,7 +92,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 			queue.DebounceCts = debounceCts;
 		}
 
-		_repositoryStateStore.SetState(
+		SetRepositoryState(
 			normalizedId,
 			runImmediately ? RepositorySyncState.Syncing : RepositorySyncState.Debouncing);
 		_ = DebounceAndRunAsync(normalizedId, queue, debounceCts, runImmediately);
@@ -147,25 +157,35 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 
 		try
 		{
-			_repositoryStateStore.SetState(repositoryId, RepositorySyncState.Syncing);
+			SetRepositoryState(repositoryId, RepositorySyncState.Syncing);
 			await ExecuteSyncCoreAsync(repositoryId, debounceCts.Token);
-			_repositoryStateStore.SetState(repositoryId, RepositorySyncState.Idle);
+			SetRepositoryState(repositoryId, RepositorySyncState.Idle);
 		}
 		catch (OperationCanceledException)
 		{
-			_repositoryStateStore.SetState(repositoryId, RepositorySyncState.Idle);
+			SetRepositoryState(repositoryId, RepositorySyncState.Idle);
 		}
 		catch (SyncCommandException ex)
 		{
-			_repositoryStateStore.SetState(
-				repositoryId,
-				ex.ShouldPauseRepository ? RepositorySyncState.ErrorPaused : RepositorySyncState.Idle);
+			var targetState = ex.ShouldPauseRepository ? RepositorySyncState.ErrorPaused : RepositorySyncState.Idle;
+			SetRepositoryState(repositoryId, targetState);
 			_logger.LogError(ex, "Repository sync command failed. repositoryId={RepositoryId}", repositoryId);
+
+			var title = ex.ShouldPauseRepository
+				? "自動同期を停止しました"
+				: "同期に失敗しました";
+			var message = ex.ShouldPauseRepository
+				? $"競合または致命的なエラーにより同期を停止しました。repo={repositoryId}"
+				: $"次回変更時に再試行します。repo={repositoryId}";
+			await NotifyAndLogErrorAsync(title, $"{message} / {ex.Message}");
 		}
 		catch (Exception ex)
 		{
-			_repositoryStateStore.SetState(repositoryId, RepositorySyncState.ErrorPaused);
+			SetRepositoryState(repositoryId, RepositorySyncState.ErrorPaused);
 			_logger.LogError(ex, "Repository sync failed. repositoryId={RepositoryId}", repositoryId);
+			await NotifyAndLogErrorAsync(
+				"自動同期を停止しました",
+				$"予期しないエラーで同期を停止しました。repo={repositoryId} / {ex.Message}");
 		}
 		finally
 		{
@@ -244,7 +264,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		}
 
 		await EnsureCommandSuccessAsync(repositoryPath, "push", shouldPauseRepository: false, cancellationToken);
-		_logger.LogInformation("Repository sync placeholder completed. repositoryId={RepositoryId}", repositoryId);
+		_logger.LogInformation("Repository sync completed. repositoryId={RepositoryId}", repositoryId);
 	}
 
 	private async Task EnsureCommandSuccessAsync(
@@ -312,6 +332,49 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		return value
 			.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
 			.FirstOrDefault(static line => !string.IsNullOrWhiteSpace(line));
+	}
+
+	private void SetRepositoryState(string repositoryId, RepositorySyncState state)
+	{
+		_repositoryStateStore.SetState(repositoryId, state);
+		_trayService.SetState(GetAggregateState());
+	}
+
+	private RepositorySyncState GetAggregateState()
+	{
+		var snapshot = _repositoryStateStore.Snapshot();
+		if (snapshot.Values.Any(static state => state == RepositorySyncState.ErrorPaused))
+		{
+			return RepositorySyncState.ErrorPaused;
+		}
+
+		if (snapshot.Values.Any(static state => state is RepositorySyncState.Syncing or RepositorySyncState.Debouncing))
+		{
+			return RepositorySyncState.Syncing;
+		}
+
+		return RepositorySyncState.Idle;
+	}
+
+	private async Task NotifyAndLogErrorAsync(string title, string message)
+	{
+		try
+		{
+			await _notificationService.NotifyAsync(title, message);
+		}
+		catch (Exception ex)
+		{
+			_logger.LogWarning(ex, "Failed to notify sync error. title={Title}", title);
+		}
+
+		try
+		{
+			await _logAccessService.AppendErrorAsync($"{title}: {message}");
+		}
+		catch (Exception ex)
+		{
+			_logger.LogWarning(ex, "Failed to append sync error log.");
+		}
 	}
 
 	private void ThrowIfDisposed()

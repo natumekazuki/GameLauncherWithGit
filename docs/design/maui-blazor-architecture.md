@@ -42,9 +42,11 @@ flowchart LR
 - `RepositoryWatcherService`
   - FileSystemWatcher で変更イベントを集約して通知
 - `NotificationService`
-  - 成功/失敗/停止/復旧通知の制御（抑制ルール含む）
+  - Windows通知（`AppNotificationManager`）の発火と重複通知抑制
+  - 通知API失敗時はログ出力へフォールバック
 - `TrayService`
-  - 常駐・状態アイコン・コンテキストメニュー（今すぐ同期/設定/ログ/終了）
+  - Win32トレイアイコン（`Shell_NotifyIcon`）で同期状態を表示（待機/同期中/エラー停止）
+  - エラー停止時はトレイバルーンで注意喚起
 - `ThumbnailService`
   - 画像を長辺 512px の PNG に変換して `%AppData%/thumbnails` に保存
 - `PathPickerService`
@@ -181,10 +183,12 @@ sequenceDiagram
   - 監視キーのリポジトリパス統一（同一リポジトリ重複監視の抑止）
   - Home 初期化時/保存後の監視対象再構成（関連リポジトリごとに監視登録）
   - Home で `ErrorPaused` を検知したゲームカードに「再開」ボタンを表示し、手動で即時同期再開可能
+  - NotificationService のWindows通知実装（重複抑制・失敗時フォールバック）
+  - TrayService のトレイ状態表示実装（Win32 `Shell_NotifyIcon`）
+  - SyncOrchestrator から通知/トレイ更新を連携（失敗通知と状態反映）
   - Windows 実行/配布スクリプト（`scripts/run-local-unpackaged.ps1` / `scripts/publish-windows-msix.ps1`）
 - 未実装
   - 同期失敗時の指数バックオフ再試行と通知抑制
-  - Windows 固有機能（タスクトレイ / Toast / 自動起動）
   - 設定永続化（`settings.json`）とログ画面/運用導線
 
 ## 13. Windows 配布モデル（Unpackaged / MSIX）
