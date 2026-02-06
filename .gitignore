@@ -1,5 +1,5 @@
-/src/GameLauncherWithGit.App/obj
-/src/GameLauncherWithGit.App/bin
-/src/GameLauncherWithGit.App/.vs
+/src/**/obj
+/src/**/bin
+/src/**/.vs
 /tests/**/bin
 /tests/**/obj

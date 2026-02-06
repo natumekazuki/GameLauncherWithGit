@@ -1,0 +1,104 @@
+@page "/"
+@inject IGameLibraryService GameLibraryService
+@inject ILauncherService LauncherService
+
+<PageTitle>ゲーム一覧</PageTitle>
+
+<section class="library-page">
+    <header class="library-header">
+        <h1>ゲーム一覧</h1>
+        <p>最小実装として、カード表示と起動前同期フローのプレースホルダーを提供しています。</p>
+    </header>
+
+    <div class="game-grid">
+        <button type="button" class="game-card add-card" @onclick="HandleAddGame">
+            <span class="add-icon">+</span>
+            <span class="add-label">新規追加</span>
+        </button>
+
+        @if (_games is null)
+        {
+            <div class="game-card loading-card">読み込み中...</div>
+        }
+        else
+        {
+            @foreach (var game in _games)
+            {
+                <article class="game-card">
+                    <div class="game-card-header">
+                        <h2>@game.Title</h2>
+                        <span class="status-badge @GetStatusClass(game.Status)">@GetStatusLabel(game.Status)</span>
+                    </div>
+
+                    <div class="game-card-body">
+                        <p class="meta-label">実行ファイル</p>
+                        <p class="meta-value">@game.ExecutablePath</p>
+                        <p class="meta-label">最終プレイ</p>
+                        <p class="meta-value">@FormatLastPlayed(game.LastPlayedAt)</p>
+                    </div>
+
+                    <div class="game-card-actions">
+                        <button type="button" class="launch-button" @onclick="() => LaunchAsync(game.Id)">▶ 起動</button>
+                    </div>
+                </article>
+            }
+        }
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <p class="action-message">@_message</p>
+    }
+</section>
+
+@code {
+    private IReadOnlyList<GameCardItem>? _games;
+    private string? _message;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _games = await GameLibraryService.GetGamesAsync();
+    }
+
+    private void HandleAddGame()
+    {
+        _message = "新規追加フローは次ステップで実装予定です。";
+    }
+
+    private async Task LaunchAsync(string gameId)
+    {
+        _message = "起動前同期を実行中です...";
+        StateHasChanged();
+
+        var result = await LauncherService.LaunchAsync(gameId);
+        _games = await GameLibraryService.GetGamesAsync();
+        _message = result.Message;
+    }
+
+    private static string FormatLastPlayed(DateTimeOffset? value)
+    {
+        return value?.LocalDateTime.ToString("yyyy-MM-dd HH:mm") ?? "未プレイ";
+    }
+
+    private static string GetStatusLabel(GameCardStatus status)
+    {
+        return status switch
+        {
+            GameCardStatus.Syncing => "同期中",
+            GameCardStatus.Synced => "同期OK",
+            GameCardStatus.Error => "エラー",
+            _ => "未同期"
+        };
+    }
+
+    private static string GetStatusClass(GameCardStatus status)
+    {
+        return status switch
+        {
+            GameCardStatus.Syncing => "status-syncing",
+            GameCardStatus.Synced => "status-synced",
+            GameCardStatus.Error => "status-error",
+            _ => "status-unknown"
+        };
+    }
+}
