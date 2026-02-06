@@ -2,6 +2,7 @@
 
 更新日: 2026-02-06
 対象: Windows 11 / .NET 9 / .NET MAUI Blazor Hybrid
+関連: `docs/design/resume-roadmap.md`（中断後の再開用メモ）
 
 ## 1. 目的
 - `docs/要件定義.md` のMVP要件を、MAUI Blazor Hybrid で実装可能な構成に落とし込む。
