@@ -15,8 +15,8 @@
 - [x] `LogAccessService` に JSONL 読込・簡易フィルタ（レベル/キーワード）処理を実装
 - [x] `Home.razor` の環境設定に「ログビューア」UIを追加（件数指定、フィルタ、更新、コピー）
 - [x] ログ読込失敗時の通知とフォールバック動作を実装
-- [ ] `docs/design/maui-blazor-architecture.md` を実装内容に同期
-- [ ] Windowsターゲットでビルド検証
+- [x] `docs/design/maui-blazor-architecture.md` を実装内容に同期
+- [x] Windowsターゲットでビルド検証
 
 # 変更対象ファイル
 - `src/GameLauncherWithGit/Application/Models/`（ログ表示モデル追加）
@@ -30,3 +30,6 @@
 - ログ件数が多い環境でUI描画が重くなる可能性
 - JSONLの破損行がある場合にパース例外で全件表示できなくなる可能性
 - UIからコピーできる情報に機微情報が含まれる可能性
+
+# Notes / Logs
+- `GameLauncherWithGit.exe` が起動中で出力ファイルロックされるため、検証は `dotnet build src/GameLauncherWithGit/GameLauncherWithGit.csproj -f net9.0-windows10.0.19041.0 --no-dependencies -p:CopyBuildOutputToOutputDirectory=false` を使用。
