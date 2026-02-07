@@ -47,8 +47,11 @@ az keyvault create --name $VaultName --resource-group $ResourceGroup --location 
     "name": "Self"
   },
   "x509CertificateProperties": {
-    "subject": "CN=GameLauncherWithGit",
+    "subject": "CN=MonochromeMemory",
     "validityInMonths": 12,
+    "ekus": [
+      "1.3.6.1.5.5.7.3.3"
+    ],
     "keyUsage": [
       "digitalSignature"
     ]
@@ -112,6 +115,13 @@ pwsh -File scripts/publish-windows-msix.ps1 `
 - Key Vault からエクスポートした PFX はパスワード空のケースがある。必要な場合のみ `MSIX_CERT_PASSWORD` または `-PackageCertificatePassword` を指定する。
 - `PackageCertificateThumbprint` を使う場合は、事前に証明書ストアへ登録しておく。
 - `Platforms/Windows/Package.appxmanifest` の `Identity Publisher` は証明書 Subject と一致させる。
+- APPX0107 が出る場合の主因は「Code Signing EKU不足」または「証明書 Subject と Publisher 不一致」。
+
+事前確認（PFX）:
+```powershell
+$cert = Get-PfxCertificate -FilePath ".\codesign.pfx"
+$cert | Format-List Subject,HasPrivateKey,EnhancedKeyUsageList
+```
 
 ### 4.6 署名とインストール確認
 ```powershell
@@ -123,6 +133,7 @@ Add-AppxPackage $msix.FullName
 ```
 
 ## 5. 運用上の注意
+- .NET 9 の MAUI Windows MSIX 発行では `-r` 指定を避け、`RuntimeIdentifierOverride=win10-x64`（または `win10-arm64` / `win10-x86`）を使用する。
 - 本番配布で警告を抑えるには、公開信頼チェーンを持つコード署名証明書（CA発行）を使う。
 - Key Vault で自己署名を使う場合、配布先PCへの信頼証明書配布が必須。
 - 証明書ローテーション時は、失効/更新手順と `Publisher` の整合を維持する。
