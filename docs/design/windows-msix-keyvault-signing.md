@@ -1,6 +1,6 @@
 # Windows 配布運用: MSIX と Azure Key Vault 証明書
 
-更新日: 2026-02-06
+更新日: 2026-02-08
 対象: `src/GameLauncherWithGit`（.NET MAUI Blazor Hybrid / Windows 11）
 
 ## 1. 目的
@@ -103,6 +103,10 @@ Import-PfxCertificate `
 Import-Certificate `
   -FilePath ".\codesign.cer" `
   -CertStoreLocation "Cert:\CurrentUser\TrustedPeople"
+
+Import-Certificate `
+  -FilePath ".\codesign.cer" `
+  -CertStoreLocation "Cert:\CurrentUser\Root"
 ```
 
 ### 4.5 MSIX を署名付きで発行
@@ -130,6 +134,34 @@ Get-AuthenticodeSignature $msix.FullName | Format-List
 
 # インストール検証
 Add-AppxPackage $msix.FullName
+```
+
+### 4.7 0x800B0109（ルート証明書未信頼）対処
+配布先PCで `0x800B0109` が出る場合は、インストール対象のMSIXから署名証明書を直接抽出し、`Thumbprint` 一致で信頼登録を確認する。
+
+```powershell
+# インストール対象MSIX（絶対パス推奨）
+$msix = "C:\path\to\GameLauncherWithGit_1.0.0.1_x64.msix"
+
+# 1) MSIX署名証明書を取得
+$sig = Get-AuthenticodeSignature $msix
+$thumb = $sig.SignerCertificate.Thumbprint
+$sig | Format-List Status,StatusMessage
+
+# 2) MSIXから証明書をエクスポート
+$cer = "$env:TEMP\gamelauncher-signer.cer"
+Export-Certificate -Cert $sig.SignerCertificate -FilePath $cer -Force | Out-Null
+
+# 3) 管理者PowerShellで LocalMachine へ登録
+Import-Certificate -FilePath $cer -CertStoreLocation "Cert:\LocalMachine\TrustedPeople" | Out-Null
+Import-Certificate -FilePath $cer -CertStoreLocation "Cert:\LocalMachine\Root" | Out-Null
+
+# 4) Thumbprint一致確認（両方に存在すること）
+Get-ChildItem Cert:\LocalMachine\TrustedPeople | Where-Object Thumbprint -eq $thumb | Select-Object Subject,Thumbprint
+Get-ChildItem Cert:\LocalMachine\Root         | Where-Object Thumbprint -eq $thumb | Select-Object Subject,Thumbprint
+
+# 5) 再インストール
+Add-AppxPackage -Path $msix -ForceApplicationShutdown
 ```
 
 ## 5. 運用上の注意
