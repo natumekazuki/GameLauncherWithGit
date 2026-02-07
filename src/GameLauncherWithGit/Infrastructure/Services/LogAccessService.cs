@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Text.Encodings.Web;
 using System.Text;
 using System.Text.Json;
 using GameLauncherWithGit.Application.Abstractions;
@@ -17,6 +18,11 @@ public sealed class LogAccessService : ILogAccessService
 	private const string StructuredLogFileName = "app-events.jsonl";
 	private const string StructuredLogArchivePattern = "app-events-*.jsonl";
 	private const string ServiceName = "GameLauncherWithGit";
+	private static readonly JsonSerializerOptions DisplayJsonOptions = new()
+	{
+		WriteIndented = true,
+		Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+	};
 
 	private readonly IAppSettingsService _appSettingsService;
 	private readonly ILogDispatcher _logDispatcher;
@@ -317,7 +323,7 @@ public sealed class LogAccessService : ILogAccessService
 				: string.IsNullOrWhiteSpace(type) ? message! : $"{type}: {message}";
 			var detail = !string.IsNullOrWhiteSpace(stackTrace)
 				? stackTrace
-				: IsTrivialJson(rawData) ? null : rawData;
+				: IsTrivialJson(rawData) ? null : FormatJsonForDisplay(rawData);
 
 			repositoryId ??= ExtractTokenValue(normalizedMessage, "repo=", ",", " /");
 			repositoryId ??= ExtractTokenValue(detail, "repo=", ",", " /");
@@ -343,7 +349,7 @@ public sealed class LogAccessService : ILogAccessService
 		var repositoryIdFromText = ExtractTokenValue(dataText, "repo=", ",", " /");
 		var commandFromText = ExtractTokenValue(dataText, "command=", ", reason=", ",", " /");
 		var exitCodeFromText = ExtractTokenInt(dataText, "exitCode=", ",", " /");
-		return (record.Name, dataText, repositoryIdFromText, commandFromText, exitCodeFromText, null, null);
+		return (record.Name, FormatJsonForDisplay(dataText), repositoryIdFromText, commandFromText, exitCodeFromText, null, null);
 	}
 
 	private static string? TryGetString(JsonElement element, string propertyName)
@@ -366,6 +372,24 @@ public sealed class LogAccessService : ILogAccessService
 		return string.Equals(value, "null", StringComparison.OrdinalIgnoreCase)
 			|| value == "{}"
 			|| value == "[]";
+	}
+
+	private static string FormatJsonForDisplay(string value)
+	{
+		if (string.IsNullOrWhiteSpace(value))
+		{
+			return value;
+		}
+
+		try
+		{
+			using var doc = JsonDocument.Parse(value);
+			return JsonSerializer.Serialize(doc.RootElement, DisplayJsonOptions);
+		}
+		catch (JsonException)
+		{
+			return value;
+		}
 	}
 
 	private static string? NormalizeKeyword(string? keyword)
