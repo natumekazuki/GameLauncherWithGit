@@ -131,6 +131,12 @@ else
                                 </button>
                             }
                             <button type="button" class="secondary-button" @onclick="() => OpenEditEditor(game)">設定</button>
+                            <button type="button"
+                                    class="danger-button"
+                                    @onclick="() => OpenDeleteConfirm(game)"
+                                    disabled="@_isDeleting">
+                                削除
+                            </button>
                         </div>
                     </article>
                 }
@@ -342,6 +348,31 @@ else
     </div>
 }
 
+@if (_isDeleteConfirmOpen)
+{
+    <div class="editor-overlay" @onclick="() => CloseDeleteConfirm()">
+        <section class="delete-confirm-modal" @onclick:stopPropagation="true">
+            <h2>ゲームを削除しますか？</h2>
+            <p class="delete-confirm-title">@_deleteTargetGameTitle</p>
+            <p class="delete-confirm-note">この操作は取り消せません。ゲーム設定と関連サムネイルを削除します。</p>
+            <div class="editor-actions">
+                <button type="button"
+                        class="danger-button"
+                        @onclick="DeleteGameAsync"
+                        disabled="@_isDeleting">
+                    @(_isDeleting ? "削除中..." : "削除する")
+                </button>
+                <button type="button"
+                        class="secondary-button"
+                        @onclick="() => CloseDeleteConfirm()"
+                        disabled="@_isDeleting">
+                    キャンセル
+                </button>
+            </div>
+        </section>
+    </div>
+}
+
 @if (_isGitReady && _isEditorOpen)
 {
     <div class="editor-overlay" @onclick="() => CloseEditor()">
@@ -424,7 +455,11 @@ else
     private bool _isEditorOpen;
     private bool _isEditMode;
     private bool _isSaving;
+    private bool _isDeleteConfirmOpen;
+    private bool _isDeleting;
     private string? _editingGameId;
+    private string? _deleteTargetGameId;
+    private string _deleteTargetGameTitle = string.Empty;
     private string _editorTitle = string.Empty;
     private string _editorExecutablePath = string.Empty;
     private string? _editorRepositoryPath;
@@ -809,6 +844,25 @@ else
         _isEditorOpen = true;
     }
 
+    private void OpenDeleteConfirm(GameCardItem game)
+    {
+        _deleteTargetGameId = game.Id;
+        _deleteTargetGameTitle = game.Title;
+        _isDeleteConfirmOpen = true;
+    }
+
+    private void CloseDeleteConfirm(bool force = false)
+    {
+        if (_isDeleting && !force)
+        {
+            return;
+        }
+
+        _isDeleteConfirmOpen = false;
+        _deleteTargetGameId = null;
+        _deleteTargetGameTitle = string.Empty;
+    }
+
     private void OpenEditEditor(GameCardItem game)
     {
         _isEditMode = true;
@@ -820,6 +874,53 @@ else
         _editorHasThumbnail = HasThumbnail(game);
         _editorClearThumbnail = false;
         _isEditorOpen = true;
+    }
+
+    private async Task DeleteGameAsync()
+    {
+        if (_isDeleting)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_deleteTargetGameId))
+        {
+            SetNotification("削除対象が不正です。", false);
+            return;
+        }
+
+        _isDeleting = true;
+        var targetGameId = _deleteTargetGameId;
+        var targetTitle = _deleteTargetGameTitle;
+        try
+        {
+            var deleted = await GameLibraryService.DeleteAsync(targetGameId);
+            if (!deleted)
+            {
+                SetNotification("削除対象のゲームが見つかりません。", false);
+                return;
+            }
+
+            if (_isEditorOpen
+                && !string.IsNullOrWhiteSpace(_editingGameId)
+                && string.Equals(_editingGameId, targetGameId, StringComparison.OrdinalIgnoreCase))
+            {
+                CloseEditor(force: true);
+            }
+
+            await ReloadGamesAsync();
+            await RefreshRepositoryWatchersAsync();
+            SetNotification($"ゲームを削除しました: {targetTitle}", true);
+            CloseDeleteConfirm(force: true);
+        }
+        catch (Exception ex)
+        {
+            SetNotification($"ゲーム削除に失敗しました: {ex.Message}", false);
+        }
+        finally
+        {
+            _isDeleting = false;
+        }
     }
 
     private void CloseEditor(bool force = false)
