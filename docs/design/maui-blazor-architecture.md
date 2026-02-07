@@ -55,6 +55,8 @@ flowchart LR
   - 通知API失敗時はログ出力へフォールバック
 - `TrayService`
   - Win32トレイアイコン（`Shell_NotifyIcon`）で同期状態を表示（待機/同期中/エラー停止）
+  - `Resources/TrayIcon/*.ico`（待機/同期中/エラー停止）を読み込み、状態に応じて切替表示する
+  - アイコン読み込みに失敗した場合はシステム既定アイコンへフォールバックする
   - エラー停止時はトレイバルーンで注意喚起
   - 右クリックメニュー（今すぐ同期 / 設定 / ログを開く / 終了）を提供
   - `WM_CLOSE` 捕捉により「閉じる=非表示、終了=明示操作のみ」を実現
@@ -174,6 +176,11 @@ sequenceDiagram
   - `logs/app-events.jsonl`: 構造化エラーログ（MonochromeMemory.Log）
   - `logs/app-events-*.jsonl`: ローテーション済みログ
   - `thumbnails/*.png`: 変換済みサムネイル
+- 資産
+  - `Resources/AppIcon/appicon.svg` + `appiconfg.svg`: アプリ本体アイコン（ゲームパッドモチーフ）
+  - `Resources/TrayIcon/tray-idle.ico`: 待機状態トレイアイコン
+  - `Resources/TrayIcon/tray-syncing.ico`: 同期中トレイアイコン
+  - `Resources/TrayIcon/tray-error.ico`: エラー停止トレイアイコン
 
 ## 10. エラーハンドリング方針
 - 競合（rebase conflict）
@@ -238,6 +245,7 @@ sequenceDiagram
   - Home で `ErrorPaused` を検知したゲームカードに「再開」ボタンを表示し、手動で即時同期再開可能
   - NotificationService のWindows通知実装（重複抑制・失敗時フォールバック）
   - TrayService のトレイ状態表示実装（Win32 `Shell_NotifyIcon`）
+  - AppIcon / TrayIcon のブランド資産反映（独自デザイン + 状態別トレイアイコン）
   - TrayService のトレイメニュー実装（今すぐ同期 / 設定 / ログを開く / 終了）
   - TrayService の `WM_CLOSE` 捕捉による常駐継続（閉じる時は非表示、終了は明示操作のみ）
   - SyncOrchestrator から通知/トレイ更新を連携（失敗通知と状態反映）
