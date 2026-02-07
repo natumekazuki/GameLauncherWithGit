@@ -14,8 +14,8 @@
 - [x] `IGameLibraryService` / `GameLibraryService` にゲーム削除処理を追加（サムネイル削除含む）
 - [x] `Home.razor` に削除ボタンと確認モーダルを追加
 - [x] 削除後の一覧再読込・監視再構成・通知表示を実装
-- [ ] `docs/design/maui-blazor-architecture.md` を実装内容へ同期
-- [ ] Windowsターゲットでビルド検証
+- [x] `docs/design/maui-blazor-architecture.md` を実装内容へ同期
+- [x] Windowsターゲットでビルド検証
 
 # 変更対象ファイル
 - `src/GameLauncherWithGit/Infrastructure/Abstractions/IGameLibraryStore.cs`
@@ -30,3 +30,7 @@
 - 使用中ゲームの削除によるユーザー混乱
 - サムネイル削除失敗で孤児ファイルが残る可能性
 - 削除対象の競合更新時に UI 状態が崩れる可能性
+
+# Notes / Logs
+- 削除対象サムネイルは安全性のため `FileSystem.AppDataDirectory/thumbnails` 配下のみ削除対象に限定。
+- ビルド検証は `dotnet build src/GameLauncherWithGit/GameLauncherWithGit.csproj -f net9.0-windows10.0.19041.0 --no-dependencies -p:CopyBuildOutputToOutputDirectory=false` を使用。
