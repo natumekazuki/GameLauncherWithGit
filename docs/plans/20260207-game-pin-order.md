@@ -13,8 +13,8 @@
 - [x] `GameCardItem` にピン留め状態（`IsPinned`）を追加
 - [x] `SqliteGameLibraryStore` に `IsPinned` カラムのマイグレーションと並び順（ピン優先）を実装
 - [x] `IGameLibraryService` / `GameLibraryService` にピン留め更新APIを追加
-- [ ] `Home.razor` にピン留めトグルボタンを追加し、更新後に再読込する
-- [ ] `app.css` にピン留め状態の視覚スタイルを追加
+- [x] `Home.razor` にピン留めトグルボタンを追加し、更新後に再読込する
+- [x] `app.css` にピン留め状態の視覚スタイルを追加
 - [ ] `docs/design/maui-blazor-architecture.md` を実装内容へ同期
 - [ ] Windowsターゲットでビルド検証
 

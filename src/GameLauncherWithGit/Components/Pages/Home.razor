@@ -136,6 +136,12 @@ else
 
                             <div class="game-card-actions">
                                 <button type="button" class="launch-button" @onclick="() => LaunchAsync(game.Id)">▶ 起動</button>
+                                <button type="button"
+                                        class="secondary-button pin-toggle-button @(game.IsPinned ? "pin-toggle-active" : string.Empty)"
+                                        @onclick="() => TogglePinnedAsync(game)"
+                                        disabled="@IsPinToggleBusy(game)">
+                                    @(game.IsPinned ? "ピン解除" : "ピン留め")
+                                </button>
                                 @if (CanResumeRepositorySync(game))
                                 {
                                     <button type="button"
@@ -509,6 +515,7 @@ else
     private bool _isGitReady = true;
     private string? _startupError;
     private readonly HashSet<string> _registeredWatcherRepositoryIds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _pinningGameIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _thumbnailDataUriCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenSource _stateRefreshCts = new();
     private Task? _stateRefreshTask;
@@ -1197,6 +1204,39 @@ else
         _registeredWatcherRepositoryIds.Clear();
     }
 
+    private bool IsPinToggleBusy(GameCardItem game)
+    {
+        return _pinningGameIds.Contains(game.Id);
+    }
+
+    private async Task TogglePinnedAsync(GameCardItem game)
+    {
+        if (string.IsNullOrWhiteSpace(game.Id) || !_pinningGameIds.Add(game.Id))
+        {
+            return;
+        }
+
+        var nextPinned = !game.IsPinned;
+        try
+        {
+            await GameLibraryService.SetPinnedAsync(game.Id, nextPinned);
+            await ReloadGamesAsync();
+            SetNotification(
+                nextPinned
+                    ? $"ピン留めしました: {game.Title}"
+                    : $"ピン留めを解除しました: {game.Title}",
+                true);
+        }
+        catch (Exception ex)
+        {
+            SetNotification($"ピン留め更新に失敗しました: {ex.Message}", false);
+        }
+        finally
+        {
+            _pinningGameIds.Remove(game.Id);
+        }
+    }
+
     private static string? NormalizeRepositoryKey(string? repositoryPath)
     {
         if (string.IsNullOrWhiteSpace(repositoryPath))
@@ -1221,6 +1261,7 @@ else
         _stateRefreshCts.Cancel();
         _stateRefreshCts.Dispose();
         UnregisterAllWatchers();
+        _pinningGameIds.Clear();
         _thumbnailDataUriCache.Clear();
     }
 

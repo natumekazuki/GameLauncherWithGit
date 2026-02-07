@@ -277,6 +277,21 @@ h1:focus {
     color: #9f7f86;
 }
 
+.pin-toggle-button {
+    min-width: 5.6rem;
+    width: auto;
+}
+
+.pin-toggle-active {
+    border-color: #8a7638;
+    background: #2d2814;
+    color: #ffe5a3;
+}
+
+.pin-toggle-active:hover {
+    background: #38301a;
+}
+
 .add-card {
     border-style: dashed;
     color: #2f3f59;
