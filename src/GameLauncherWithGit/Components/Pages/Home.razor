@@ -131,12 +131,6 @@ else
                                 </button>
                             }
                             <button type="button" class="secondary-button" @onclick="() => OpenEditEditor(game)">設定</button>
-                            <button type="button"
-                                    class="danger-button"
-                                    @onclick="() => OpenDeleteConfirm(game)"
-                                    disabled="@_isDeleting">
-                                削除
-                            </button>
                         </div>
                     </article>
                 }
@@ -443,6 +437,15 @@ else
                     @(_isSaving ? "保存中..." : "保存")
                 </button>
                 <button type="button" class="secondary-button" @onclick="() => CloseEditor()" disabled="@_isSaving">キャンセル</button>
+                @if (_isEditMode && !string.IsNullOrWhiteSpace(_editingGameId))
+                {
+                    <button type="button"
+                            class="danger-button"
+                            @onclick="OpenDeleteConfirmForEditingGame"
+                            disabled="@(_isSaving || _isDeleting)">
+                        このゲームを削除
+                    </button>
+                }
             </div>
         </section>
     </div>
@@ -844,11 +847,22 @@ else
         _isEditorOpen = true;
     }
 
-    private void OpenDeleteConfirm(GameCardItem game)
+    private void OpenDeleteConfirm(string gameId, string gameTitle)
     {
-        _deleteTargetGameId = game.Id;
-        _deleteTargetGameTitle = game.Title;
+        _deleteTargetGameId = gameId;
+        _deleteTargetGameTitle = gameTitle;
         _isDeleteConfirmOpen = true;
+    }
+
+    private void OpenDeleteConfirmForEditingGame()
+    {
+        if (!_isEditMode || string.IsNullOrWhiteSpace(_editingGameId))
+        {
+            SetNotification("削除対象が不正です。", false);
+            return;
+        }
+
+        OpenDeleteConfirm(_editingGameId, _editorTitle);
     }
 
     private void CloseDeleteConfirm(bool force = false)
