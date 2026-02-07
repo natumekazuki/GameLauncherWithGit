@@ -34,12 +34,14 @@ flowchart LR
   - Home ユーティリティバーの検索入力でゲームタイトルを即時絞り込み
   - カード上のピン留めトグルで表示優先順を即時更新
   - Home の `+` / `-` でゲームカード表示サイズを即時変更し、設定へ反映
+  - カード上で関連リポジトリの同期履歴タイムライン（直近3件）を表示
   - カード上の削除操作で確認モーダルを表示し、削除完了後に一覧と監視状態を更新
   - 環境設定モーダルにログビューア（件数/レベル/キーワードフィルタ、更新、コピー）を提供
   - ログビューアは `repo/command/exitCode` を行内表示し、`detail/stdout/stderr` を折りたたみ表示する
 - `SyncOrchestrator`
   - 監視イベント受信、デバウンス管理、同期ジョブ実行順序制御
   - 失敗分類とリトライポリシー適用（指数バックオフ再試行、通知抑制、復旧通知）
+  - 同期結果（成功/失敗/停止）をリポジトリ単位の履歴ストアへ記録
 - `LauncherService`
   - ゲーム起動前に `fetch` を実行し、リモート先行でなければ `add -A -> commit(差分時のみ)` を実行
   - その後 `pull --rebase --autostash` を実行
@@ -77,6 +79,9 @@ flowchart LR
 - `GameLibraryStore (SQLite)`
   - ゲーム設定（タイトル/実行ファイル/関連リポジトリ/サムネイルパス/状態/ピン留め）をSQLiteへ保存・読込
   - 並び順を `IsPinned DESC -> LastPlayedAt DESC -> Title` で返却
+- `RepositorySyncHistoryStore (SQLite)`
+  - 同期履歴（`RepositoryId`、`Status`、`StartedAt`、`FinishedAt`、`DurationMs`、`Command`、`Reason`）を保存
+  - カード表示向けにリポジトリ単位で直近N件を取得
 
 ## 5. 同期フロー
 ```mermaid
@@ -164,6 +169,7 @@ sequenceDiagram
 - 保存先: `FileSystem.AppDataDirectory`
 - 保存対象
   - `game-library.db`: ゲーム設定（タイトル、実行ファイル、関連リポジトリ、サムネイルパス、状態、最終プレイ日時）
+    - `RepositorySyncHistory` テーブル: リポジトリ単位の同期履歴（最新50件/リポジトリ）
   - `settings.json`: 同期/通知/ログ/表示設定（デバウンス秒、再試行初期秒、再試行最大秒、通知抑制秒、ログ保持日数、ログ最大サイズMB、カードサイズ%）
   - `logs/app-events.jsonl`: 構造化エラーログ（MonochromeMemory.Log）
   - `logs/app-events-*.jsonl`: ローテーション済みログ
@@ -187,6 +193,7 @@ sequenceDiagram
 - ログビューア: JSONL破損行スキップ、フィルタ結果表示、`repo/command/exitCode` 表示、`detail/stdout/stderr` 折りたたみ、拡張メタデータ込みクリップボードコピー
 - ログ運用: 保持日数削除、サイズ超過ローテーション
 - 表示設定: カードサイズ変更の即時反映と再起動後復元
+- 同期履歴: 成功/失敗/停止の記録、カードへの最新履歴表示、所要時間表示
 - 削除操作: 確認モーダル、SQLite削除、サムネイル削除、監視再構成
 - 検索操作: タイトル部分一致の即時絞り込みと0件表示
 - ピン操作: ピン留め状態更新とピン優先表示
@@ -206,6 +213,7 @@ sequenceDiagram
   - ホーム画面に「環境設定」導線を追加（自動起動トグル、最新エラーログ/ログフォルダを開く）
   - Home ユーティリティバーにタイトル検索導線を追加（入力中に即時フィルタ）
   - Home ユーティリティバーにカードサイズ変更導線を追加（`+` / `-`、即時保存）
+  - Homeカードに同期履歴タイムライン（直近3件、所要時間/command/reason表示）を追加
   - カード操作にピン留め導線を追加（SQLite永続化、ピン優先並び）
   - 環境設定モーダルにログビューア追加（件数/レベル/キーワード、更新、コピー）
   - ログビューアで `repo/command/exitCode` の表示、`detail/stdout/stderr` の折りたたみ表示、拡張メタデータ込みコピーを実装
