@@ -136,11 +136,14 @@ else
 
                             <div class="game-card-actions">
                                 <button type="button" class="launch-button" @onclick="() => LaunchAsync(game.Id)">▶ 起動</button>
+                                <button type="button" class="secondary-button" @onclick="() => OpenEditEditor(game)">設定</button>
                                 <button type="button"
                                         class="secondary-button pin-toggle-button @(game.IsPinned ? "pin-toggle-active" : string.Empty)"
                                         @onclick="() => TogglePinnedAsync(game)"
+                                        title="@(game.IsPinned ? "ピン留めを解除" : "ピン留め")"
+                                        aria-label="@(game.IsPinned ? "ピン留めを解除" : "ピン留め")"
                                         disabled="@IsPinToggleBusy(game)">
-                                    @(game.IsPinned ? "ピン解除" : "ピン留め")
+                                    <span class="pin-toggle-icon" aria-hidden="true"></span>
                                 </button>
                                 @if (CanResumeRepositorySync(game))
                                 {
@@ -151,7 +154,6 @@ else
                                         再開
                                     </button>
                                 }
-                                <button type="button" class="secondary-button" @onclick="() => OpenEditEditor(game)">設定</button>
                             </div>
                         </article>
                     }
