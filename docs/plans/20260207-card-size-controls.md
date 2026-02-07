@@ -10,7 +10,7 @@
   - `AppSettingsService` 管理項目にカードサイズ設定を追記
 
 # タスクリスト
-- [ ] `AppSettings` にカードサイズ設定値（例: `GameCardSizePercent`）を追加し正規化範囲を定義
+- [x] `AppSettings` にカードサイズ設定値（例: `GameCardSizePercent`）を追加し正規化範囲を定義
 - [ ] `Home.razor` に `+` / `-` ボタンを追加し、カードサイズを即時反映する状態管理を実装
 - [ ] `Home.razor` の設定保存処理にカードサイズ設定を統合し永続化する
 - [ ] `app.css` を更新し、カード幅・高さ・余白をカードサイズ設定に追従させる
