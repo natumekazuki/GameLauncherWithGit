@@ -37,3 +37,4 @@
 - 設定導線は `ISettingsPanelService` イベントを介して `Home.razor` の設定モーダルを開く方式を採用した。
 - 実行コマンド: `dotnet build GameLauncherWithGit.sln -f net9.0-windows10.0.19041.0 -p:UseAppHost=false`
 - 結果: ビルド成功（0 warnings / 0 errors）
+- 追加修正: `WM_TRAY_CALLBACK` の `lParam` を下位16bitで判定するよう修正し、トレイ右クリックイベント取りこぼしを解消。

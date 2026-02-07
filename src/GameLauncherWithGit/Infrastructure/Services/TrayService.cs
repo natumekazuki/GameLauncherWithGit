@@ -176,7 +176,7 @@ public sealed class TrayService : ITrayService, IDisposable
 		{
 			case WM_TRAY_CALLBACK:
 			{
-				var eventId = unchecked((uint)lParam.ToInt64());
+				var eventId = unchecked((uint)lParam.ToInt64()) & 0xFFFF;
 				if (eventId is WM_RBUTTONUP or WM_CONTEXTMENU)
 				{
 					ShowContextMenu(hwnd);
