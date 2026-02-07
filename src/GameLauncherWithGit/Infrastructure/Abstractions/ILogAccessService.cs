@@ -7,6 +7,8 @@ public interface ILogAccessService
 {
 	Task AppendErrorAsync(string message, CancellationToken cancellationToken = default);
 
+	Task MaintainLogFilesAsync(CancellationToken cancellationToken = default);
+
 	Task<IReadOnlyList<LogViewerEntry>> GetLatestEntriesAsync(
 		int limit,
 		LogLevel? severity = null,

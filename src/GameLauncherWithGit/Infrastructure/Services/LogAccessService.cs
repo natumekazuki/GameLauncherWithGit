@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using GameLauncherWithGit.Application.Abstractions;
 using GameLauncherWithGit.Application.Models;
 using GameLauncherWithGit.Infrastructure.Abstractions;
 using Microsoft.Extensions.Logging;
@@ -13,8 +14,10 @@ public sealed class LogAccessService : ILogAccessService
 {
 	private const string LogsDirectoryName = "logs";
 	private const string StructuredLogFileName = "app-events.jsonl";
+	private const string StructuredLogArchivePattern = "app-events-*.jsonl";
 	private const string ServiceName = "GameLauncherWithGit";
 
+	private readonly IAppSettingsService _appSettingsService;
 	private readonly ILogDispatcher _logDispatcher;
 	private readonly ILogger<LogAccessService> _logger;
 	private readonly string _logsDirectoryPath;
@@ -23,9 +26,11 @@ public sealed class LogAccessService : ILogAccessService
 	private readonly IReadOnlyDictionary<string, object?> _resource;
 
 	public LogAccessService(
+		IAppSettingsService appSettingsService,
 		ILogDispatcher logDispatcher,
 		ILogger<LogAccessService> logger)
 	{
+		_appSettingsService = appSettingsService;
 		_logDispatcher = logDispatcher;
 		_logger = logger;
 		_logsDirectoryPath = Path.Combine(FileSystem.AppDataDirectory, LogsDirectoryName);
@@ -62,6 +67,17 @@ public sealed class LogAccessService : ILogAccessService
 			Resource: _resource,
 			Data: payload);
 		await _logDispatcher.SendAsync(logEvent, cancellationToken);
+	}
+
+	public Task MaintainLogFilesAsync(CancellationToken cancellationToken = default)
+	{
+		cancellationToken.ThrowIfCancellationRequested();
+		EnsureLogsDirectory();
+
+		var settings = _appSettingsService.Get().Normalize();
+		DeleteExpiredLogs(settings.LogRetentionDays, cancellationToken);
+		RotateStructuredLogIfNeeded(settings.LogMaxFileSizeMb, cancellationToken);
+		return Task.CompletedTask;
 	}
 
 	public async Task<IReadOnlyList<LogViewerEntry>> GetLatestEntriesAsync(
@@ -147,6 +163,114 @@ public sealed class LogAccessService : ILogAccessService
 			[ResourceKeys.HostName] = Environment.MachineName,
 			[ResourceKeys.ProcessId] = Environment.ProcessId
 		};
+	}
+
+	private void DeleteExpiredLogs(int retentionDays, CancellationToken cancellationToken)
+	{
+		if (retentionDays <= 0)
+		{
+			return;
+		}
+
+		var thresholdUtc = DateTimeOffset.UtcNow.AddDays(-retentionDays).UtcDateTime;
+		var targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		if (File.Exists(_structuredLogPath))
+		{
+			targets.Add(_structuredLogPath);
+		}
+
+		foreach (var path in Directory.EnumerateFiles(_logsDirectoryPath, StructuredLogArchivePattern, SearchOption.TopDirectoryOnly))
+		{
+			targets.Add(path);
+		}
+
+		foreach (var path in targets)
+		{
+			cancellationToken.ThrowIfCancellationRequested();
+
+			try
+			{
+				var lastWrite = File.GetLastWriteTimeUtc(path);
+				if (lastWrite >= thresholdUtc)
+				{
+					continue;
+				}
+
+				File.Delete(path);
+			}
+			catch (FileNotFoundException)
+			{
+				// 別スレッドで削除済みなら無視する。
+			}
+			catch (Exception ex)
+			{
+				_logger.LogWarning(ex, "Failed to delete expired log file. path={Path}", path);
+			}
+		}
+	}
+
+	private void RotateStructuredLogIfNeeded(int maxFileSizeMb, CancellationToken cancellationToken)
+	{
+		cancellationToken.ThrowIfCancellationRequested();
+		if (maxFileSizeMb <= 0 || !File.Exists(_structuredLogPath))
+		{
+			return;
+		}
+
+		long maxBytes;
+		try
+		{
+			maxBytes = checked(maxFileSizeMb * 1024L * 1024L);
+		}
+		catch (OverflowException)
+		{
+			maxBytes = 1024L * 1024L * 1024L;
+		}
+
+		var info = new FileInfo(_structuredLogPath);
+		if (info.Length <= maxBytes)
+		{
+			return;
+		}
+
+		var moved = false;
+		var timestamp = DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss");
+		for (var suffix = 0; suffix <= 99; suffix++)
+		{
+			cancellationToken.ThrowIfCancellationRequested();
+			var archiveName = suffix == 0
+				? $"app-events-{timestamp}.jsonl"
+				: $"app-events-{timestamp}-{suffix:D2}.jsonl";
+			var archivePath = Path.Combine(_logsDirectoryPath, archiveName);
+			if (File.Exists(archivePath))
+			{
+				continue;
+			}
+
+			try
+			{
+				File.Move(_structuredLogPath, archivePath);
+				moved = true;
+			}
+			catch (FileNotFoundException)
+			{
+				return;
+			}
+			catch (Exception ex)
+			{
+				_logger.LogWarning(ex, "Failed to rotate structured log file. source={Source}, target={Target}", _structuredLogPath, archivePath);
+			}
+
+			if (moved)
+			{
+				break;
+			}
+		}
+
+		if (!moved)
+		{
+			throw new InvalidOperationException("ログローテーションに失敗しました。");
+		}
 	}
 
 	private static LogViewerEntry ConvertRecord(LogRecord record)

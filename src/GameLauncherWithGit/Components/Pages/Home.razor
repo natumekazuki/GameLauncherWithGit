@@ -461,6 +461,7 @@ else
                 return;
             }
 
+            await RunStartupLogMaintenanceAsync();
             _ = SyncOrchestrator;
             await ReloadGamesAsync();
             await RefreshRepositoryWatchersAsync();
@@ -608,6 +609,18 @@ else
         catch (Exception ex)
         {
             SetNotification(ex.Message, false);
+        }
+    }
+
+    private async Task RunStartupLogMaintenanceAsync()
+    {
+        try
+        {
+            await LogAccessService.MaintainLogFilesAsync();
+        }
+        catch (Exception ex)
+        {
+            SetNotification($"ログメンテナンスに失敗しました: {ex.Message}", false);
         }
     }
 
