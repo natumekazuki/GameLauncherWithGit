@@ -344,7 +344,7 @@ else
 
 @if (_isDeleteConfirmOpen)
 {
-    <div class="editor-overlay" @onclick="() => CloseDeleteConfirm()">
+    <div class="editor-overlay delete-confirm-overlay" @onclick="() => CloseDeleteConfirm()">
         <section class="delete-confirm-modal" @onclick:stopPropagation="true">
             <h2>ゲームを削除しますか？</h2>
             <p class="delete-confirm-title">@_deleteTargetGameTitle</p>

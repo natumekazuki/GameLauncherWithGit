@@ -893,6 +893,10 @@ a,
     box-shadow: 0 12px 30px rgba(14, 24, 48, 0.2);
 }
 
+.delete-confirm-overlay {
+    z-index: 1300;
+}
+
 .delete-confirm-modal h2 {
     margin: 0;
     font-size: 1.15rem;
