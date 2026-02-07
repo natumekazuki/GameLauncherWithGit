@@ -17,6 +17,23 @@
 @if (!_isStartupChecking)
 {
     <section class="utility-bar">
+        <div class="card-size-control">
+            <button type="button"
+                    class="secondary-button utility-icon-button"
+                    title="カードサイズを小さくする"
+                    @onclick="DecreaseGameCardSizeAsync"
+                    disabled="@(!_isGitReady || _isCardSizeSaving || _gameCardSizePercent <= AppSettings.GameCardSizePercentMin)">
+                -
+            </button>
+            <span class="card-size-label">@_gameCardSizePercent%</span>
+            <button type="button"
+                    class="secondary-button utility-icon-button"
+                    title="カードサイズを大きくする"
+                    @onclick="IncreaseGameCardSizeAsync"
+                    disabled="@(!_isGitReady || _isCardSizeSaving || _gameCardSizePercent >= AppSettings.GameCardSizePercentMax)">
+                +
+            </button>
+        </div>
         <button type="button"
                 class="secondary-button utility-button"
                 @onclick="OpenSettingsAsync">
@@ -45,7 +62,7 @@ else if (!_isGitReady)
 else
 {
     <section class="library-page">
-        <div class="game-grid">
+        <div class="game-grid" style="@GetGameGridStyle()">
             <button type="button" class="game-card add-card" @onclick="OpenCreateEditor">
                 <span class="add-icon">+</span>
                 <span class="add-label">新規追加</span>
@@ -317,7 +334,7 @@ else
                 <button type="button"
                         class="secondary-button"
                         @onclick="() => CloseSettings()"
-                        disabled="@(_isSettingsLoading || _isAutoStartSaving || _isAppSettingsSaving)">
+                        disabled="@(_isSettingsLoading || _isAutoStartSaving || _isAppSettingsSaving || _isCardSizeSaving)">
                     閉じる
                 </button>
             </div>
@@ -418,6 +435,7 @@ else
     private bool _isSettingsLoading;
     private bool _isAutoStartSaving;
     private bool _isAppSettingsSaving;
+    private bool _isCardSizeSaving;
     private bool _autoStartEnabled;
     private int _syncDebounceSeconds = AppSettings.Default.SyncDebounceSeconds;
     private int _syncRetryInitialSeconds = AppSettings.Default.SyncRetryInitialSeconds;
@@ -425,6 +443,7 @@ else
     private int _notificationSuppressSeconds = AppSettings.Default.NotificationSuppressSeconds;
     private int _logRetentionDays = AppSettings.Default.LogRetentionDays;
     private int _logMaxFileSizeMb = AppSettings.Default.LogMaxFileSizeMb;
+    private int _gameCardSizePercent = AppSettings.Default.GameCardSizePercent;
     private int _logViewerLimit = 100;
     private string _logViewerSeverityFilter = "all";
     private string _logViewerKeyword = string.Empty;
@@ -491,7 +510,7 @@ else
 
     private void CloseSettings(bool force = false)
     {
-        if ((_isSettingsLoading || _isAutoStartSaving || _isAppSettingsSaving) && !force)
+        if ((_isSettingsLoading || _isAutoStartSaving || _isAppSettingsSaving || _isCardSizeSaving) && !force)
         {
             return;
         }
@@ -552,17 +571,7 @@ else
         _isAppSettingsSaving = true;
         try
         {
-            var requested = new AppSettings(
-                SyncDebounceSeconds: _syncDebounceSeconds,
-                SyncRetryInitialSeconds: _syncRetryInitialSeconds,
-                SyncRetryMaxSeconds: _syncRetryMaxSeconds,
-                NotificationSuppressSeconds: _notificationSuppressSeconds,
-                LogRetentionDays: _logRetentionDays,
-                LogMaxFileSizeMb: _logMaxFileSizeMb);
-            var normalized = requested.Normalize();
-
-            await AppSettingsService.SaveAsync(normalized);
-            ApplyAppSettings(normalized);
+            await SaveCurrentAppSettingsAsync();
             SetNotification("設定を保存しました。", true);
         }
         catch (Exception ex)
@@ -584,6 +593,75 @@ else
         _notificationSuppressSeconds = normalized.NotificationSuppressSeconds;
         _logRetentionDays = normalized.LogRetentionDays;
         _logMaxFileSizeMb = normalized.LogMaxFileSizeMb;
+        _gameCardSizePercent = normalized.GameCardSizePercent;
+    }
+
+    private async Task SaveCurrentAppSettingsAsync()
+    {
+        var requested = new AppSettings(
+            SyncDebounceSeconds: _syncDebounceSeconds,
+            SyncRetryInitialSeconds: _syncRetryInitialSeconds,
+            SyncRetryMaxSeconds: _syncRetryMaxSeconds,
+            NotificationSuppressSeconds: _notificationSuppressSeconds,
+            LogRetentionDays: _logRetentionDays,
+            LogMaxFileSizeMb: _logMaxFileSizeMb,
+            GameCardSizePercent: _gameCardSizePercent);
+        var normalized = requested.Normalize();
+
+        await AppSettingsService.SaveAsync(normalized);
+        ApplyAppSettings(normalized);
+    }
+
+    private Task DecreaseGameCardSizeAsync()
+    {
+        return AdjustGameCardSizeAsync(-10);
+    }
+
+    private Task IncreaseGameCardSizeAsync()
+    {
+        return AdjustGameCardSizeAsync(10);
+    }
+
+    private async Task AdjustGameCardSizeAsync(int delta)
+    {
+        if (_isCardSizeSaving)
+        {
+            return;
+        }
+
+        var next = Math.Clamp(
+            _gameCardSizePercent + delta,
+            AppSettings.GameCardSizePercentMin,
+            AppSettings.GameCardSizePercentMax);
+        if (next == _gameCardSizePercent)
+        {
+            return;
+        }
+
+        var previous = _gameCardSizePercent;
+        _gameCardSizePercent = next;
+        _isCardSizeSaving = true;
+
+        try
+        {
+            await SaveCurrentAppSettingsAsync();
+        }
+        catch (Exception ex)
+        {
+            _gameCardSizePercent = previous;
+            SetNotification($"カードサイズ設定の保存に失敗しました: {ex.Message}", false);
+        }
+        finally
+        {
+            _isCardSizeSaving = false;
+        }
+    }
+
+    private string GetGameGridStyle()
+    {
+        var scale = _gameCardSizePercent / 100d;
+        var scaleText = scale.ToString("0.00", global::System.Globalization.CultureInfo.InvariantCulture);
+        return $"--game-card-scale:{scaleText};";
     }
 
     private async Task OpenLatestErrorLogAsync()

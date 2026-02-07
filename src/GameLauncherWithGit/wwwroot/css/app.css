@@ -102,9 +102,10 @@ h1:focus {
 }
 
 .game-grid {
+    --game-card-scale: 1;
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-    gap: 1rem;
+    grid-template-columns: repeat(auto-fill, minmax(calc(260px * var(--game-card-scale)), 1fr));
+    gap: calc(1rem * var(--game-card-scale));
 }
 
 .game-card {
@@ -114,19 +115,19 @@ h1:focus {
     border: 1px solid #d7deea;
     border-radius: 12px;
     background: #ffffff;
-    min-height: 220px;
-    padding: 0.9rem;
+    min-height: calc(220px * var(--game-card-scale));
+    padding: calc(0.9rem * var(--game-card-scale));
     box-shadow: 0 3px 10px rgba(15, 23, 42, 0.07);
 }
 
 .thumbnail-mode-card {
-    min-height: 320px;
-    padding: 0.6rem;
+    min-height: calc(320px * var(--game-card-scale));
+    padding: calc(0.6rem * var(--game-card-scale));
 }
 
 .game-thumbnail-panel {
     flex: 1;
-    min-height: 220px;
+    min-height: calc(220px * var(--game-card-scale));
     border-radius: 10px;
     overflow: hidden;
     background: #0d1628;
@@ -626,12 +627,43 @@ a,
 .utility-bar {
     display: flex;
     justify-content: flex-end;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.55rem;
     margin-bottom: 0.55rem;
 }
 
 .utility-button {
     width: auto;
     min-width: 7.5rem;
+}
+
+.card-size-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    border: 1px solid #344862;
+    border-radius: 999px;
+    background: rgba(12, 24, 40, 0.9);
+    padding: 0.2rem;
+}
+
+.utility-icon-button {
+    width: 2rem;
+    min-width: 2rem;
+    height: 2rem;
+    padding: 0;
+    border-radius: 999px;
+    font-size: 1.1rem;
+    line-height: 1;
+}
+
+.card-size-label {
+    min-width: 3.3rem;
+    text-align: center;
+    color: #dbe7ff;
+    font-size: 0.8rem;
+    font-weight: 700;
 }
 
 .settings-modal {
