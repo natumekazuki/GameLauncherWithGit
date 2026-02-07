@@ -653,6 +653,31 @@ a,
     margin-bottom: 0.55rem;
 }
 
+.search-control {
+    flex: 1 1 16rem;
+    min-width: min(100%, 16rem);
+    max-width: 24rem;
+}
+
+.search-input {
+    width: 100%;
+    border: 1px solid #3f5678;
+    border-radius: 999px;
+    background: rgba(11, 23, 40, 0.95);
+    color: #e1ebff;
+    padding: 0.5rem 0.85rem;
+    font-size: 0.9rem;
+}
+
+.search-input::placeholder {
+    color: #8ea4c6;
+}
+
+.search-input:focus {
+    outline: 2px solid #4d7ce0;
+    border-color: #4d7ce0;
+}
+
 .utility-button {
     width: auto;
     min-width: 7.5rem;

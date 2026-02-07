@@ -17,6 +17,14 @@
 @if (!_isStartupChecking)
 {
     <section class="utility-bar">
+        <div class="search-control">
+            <input type="search"
+                   class="search-input"
+                   @bind="_gameSearchText"
+                   @bind:event="oninput"
+                   placeholder="ゲームを検索"
+                   aria-label="ゲーム検索" />
+        </div>
         <div class="card-size-control">
             <button type="button"
                     class="secondary-button utility-icon-button"
@@ -74,65 +82,73 @@ else
             }
             else
             {
-                @foreach (var game in _games)
+                var filteredGames = GetFilteredGames();
+                if (filteredGames.Count == 0)
                 {
-                    var effectiveStatus = GetEffectiveStatus(game);
-                    var hasThumbnail = HasThumbnail(game);
-                    var thumbnailDataUri = hasThumbnail ? GetThumbnailDataUri(game) : null;
-                    <article class="game-card @(hasThumbnail ? "thumbnail-mode-card" : string.Empty)">
-                        @if (hasThumbnail)
-                        {
-                            <div class="game-thumbnail-panel">
-                                @if (string.IsNullOrWhiteSpace(thumbnailDataUri))
-                                {
-                                    <div class="game-thumbnail-missing" title="@game.Title"></div>
-                                }
-                                else
-                                {
-                                    <img class="game-thumbnail-image"
-                                         src="@thumbnailDataUri"
-                                         alt="@($"{game.Title} サムネイル")" />
-                                }
-                            </div>
-                        }
-                        else
-                        {
-                            <div class="game-card-header">
-                                <h2>@game.Title</h2>
-                                <span class="status-badge @GetStatusClass(effectiveStatus)">@GetStatusLabel(effectiveStatus)</span>
-                            </div>
-
-                            <div class="game-card-body">
-                                <p class="meta-label">実行ファイル</p>
-                                <p class="meta-value">@game.ExecutablePath</p>
-                                <p class="meta-label">関連リポジトリ</p>
-                                @if (string.IsNullOrWhiteSpace(game.RelatedRepositoryPath))
-                                {
-                                    <p class="meta-value">未設定</p>
-                                }
-                                else
-                                {
-                                    <p class="meta-value">@game.RelatedRepositoryPath</p>
-                                }
-                                <p class="meta-label">最終プレイ</p>
-                                <p class="meta-value">@FormatLastPlayed(game.LastPlayedAt)</p>
-                            </div>
-                        }
-
-                        <div class="game-card-actions">
-                            <button type="button" class="launch-button" @onclick="() => LaunchAsync(game.Id)">▶ 起動</button>
-                            @if (CanResumeRepositorySync(game))
+                    <div class="game-card loading-card">検索条件に一致するゲームがありません。</div>
+                }
+                else
+                {
+                    @foreach (var game in filteredGames)
+                    {
+                        var effectiveStatus = GetEffectiveStatus(game);
+                        var hasThumbnail = HasThumbnail(game);
+                        var thumbnailDataUri = hasThumbnail ? GetThumbnailDataUri(game) : null;
+                        <article class="game-card @(hasThumbnail ? "thumbnail-mode-card" : string.Empty)">
+                            @if (hasThumbnail)
                             {
-                                <button type="button"
-                                        class="secondary-button"
-                                        @onclick="() => ResumeRepositorySyncAsync(game)"
-                                        disabled="@IsRepositoryBusy(game)">
-                                    再開
-                                </button>
+                                <div class="game-thumbnail-panel">
+                                    @if (string.IsNullOrWhiteSpace(thumbnailDataUri))
+                                    {
+                                        <div class="game-thumbnail-missing" title="@game.Title"></div>
+                                    }
+                                    else
+                                    {
+                                        <img class="game-thumbnail-image"
+                                             src="@thumbnailDataUri"
+                                             alt="@($"{game.Title} サムネイル")" />
+                                    }
+                                </div>
                             }
-                            <button type="button" class="secondary-button" @onclick="() => OpenEditEditor(game)">設定</button>
-                        </div>
-                    </article>
+                            else
+                            {
+                                <div class="game-card-header">
+                                    <h2>@game.Title</h2>
+                                    <span class="status-badge @GetStatusClass(effectiveStatus)">@GetStatusLabel(effectiveStatus)</span>
+                                </div>
+
+                                <div class="game-card-body">
+                                    <p class="meta-label">実行ファイル</p>
+                                    <p class="meta-value">@game.ExecutablePath</p>
+                                    <p class="meta-label">関連リポジトリ</p>
+                                    @if (string.IsNullOrWhiteSpace(game.RelatedRepositoryPath))
+                                    {
+                                        <p class="meta-value">未設定</p>
+                                    }
+                                    else
+                                    {
+                                        <p class="meta-value">@game.RelatedRepositoryPath</p>
+                                    }
+                                    <p class="meta-label">最終プレイ</p>
+                                    <p class="meta-value">@FormatLastPlayed(game.LastPlayedAt)</p>
+                                </div>
+                            }
+
+                            <div class="game-card-actions">
+                                <button type="button" class="launch-button" @onclick="() => LaunchAsync(game.Id)">▶ 起動</button>
+                                @if (CanResumeRepositorySync(game))
+                                {
+                                    <button type="button"
+                                            class="secondary-button"
+                                            @onclick="() => ResumeRepositorySyncAsync(game)"
+                                            disabled="@IsRepositoryBusy(game)">
+                                        再開
+                                    </button>
+                                }
+                                <button type="button" class="secondary-button" @onclick="() => OpenEditEditor(game)">設定</button>
+                            </div>
+                        </article>
+                    }
                 }
             }
         </div>
@@ -485,6 +501,7 @@ else
     private int _logViewerLimit = 100;
     private string _logViewerSeverityFilter = "all";
     private string _logViewerKeyword = string.Empty;
+    private string _gameSearchText = string.Empty;
     private bool _isLogLoading;
     private string? _logViewerError;
     private IReadOnlyList<LogViewerEntry> _logViewerEntries = Array.Empty<LogViewerEntry>();
@@ -1108,6 +1125,24 @@ else
     {
         _games = await GameLibraryService.GetGamesAsync();
         SyncThumbnailCache();
+    }
+
+    private IReadOnlyList<GameCardItem> GetFilteredGames()
+    {
+        if (_games is null || _games.Count == 0)
+        {
+            return Array.Empty<GameCardItem>();
+        }
+
+        if (string.IsNullOrWhiteSpace(_gameSearchText))
+        {
+            return _games;
+        }
+
+        var keyword = _gameSearchText.Trim();
+        return _games
+            .Where(game => game.Title.Contains(keyword, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
     }
 
     private Task RefreshRepositoryWatchersAsync()
