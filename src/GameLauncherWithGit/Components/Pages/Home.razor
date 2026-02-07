@@ -11,6 +11,7 @@
 @inject ISyncOrchestrator SyncOrchestrator
 @inject IRepositoryStateStore RepositoryStateStore
 @inject ISettingsPanelService SettingsPanelService
+@inject IRepositorySyncHistoryStore RepositorySyncHistoryStore
 
 <PageTitle>GameLauncherWithGit</PageTitle>
 
@@ -93,6 +94,7 @@ else
                     @foreach (var game in filteredGames)
                     {
                         var effectiveStatus = GetEffectiveStatus(game);
+                        var syncHistory = GetSyncHistoryTimeline(game);
                         var hasThumbnail = HasThumbnail(game);
                         var thumbnailDataUri = hasThumbnail ? GetThumbnailDataUri(game) : null;
                         <article class="game-card @(hasThumbnail ? "thumbnail-mode-card" : string.Empty)">
@@ -132,6 +134,35 @@ else
                                     }
                                     <p class="meta-label">最終プレイ</p>
                                     <p class="meta-value">@FormatLastPlayed(game.LastPlayedAt)</p>
+
+                                    <p class="meta-label">同期履歴</p>
+                                    @if (syncHistory.Count == 0)
+                                    {
+                                        <p class="meta-value">履歴なし</p>
+                                    }
+                                    else
+                                    {
+                                        <ul class="sync-timeline-list">
+                                            @foreach (var history in syncHistory)
+                                            {
+                                                <li class="sync-timeline-item @GetSyncHistoryStatusClass(history.Status)">
+                                                    <div class="sync-timeline-head">
+                                                        <span>@GetSyncHistoryStatusLabel(history.Status)</span>
+                                                        <span>@FormatSyncHistoryTimestamp(history.FinishedAt)</span>
+                                                    </div>
+                                                    <p class="sync-timeline-meta">所要時間: @FormatSyncHistoryDuration(history.DurationMs)</p>
+                                                    @if (!string.IsNullOrWhiteSpace(history.Command))
+                                                    {
+                                                        <p class="sync-timeline-meta">command: @history.Command</p>
+                                                    }
+                                                    @if (!string.IsNullOrWhiteSpace(history.Reason))
+                                                    {
+                                                        <p class="sync-timeline-reason">@history.Reason</p>
+                                                    }
+                                                </li>
+                                            }
+                                        </ul>
+                                    }
                                 </div>
                             }
 
@@ -525,6 +556,9 @@ else
 }
 
 @code {
+    private const int SyncHistoryTimelineLimit = 3;
+    private const int SyncHistoryRefreshIntervalSeconds = 5;
+
     private IReadOnlyList<GameCardItem>? _games;
     private string? _message;
     private bool? _isLastActionSuccess;
@@ -568,6 +602,7 @@ else
     private readonly HashSet<string> _registeredWatcherRepositoryIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _pinningGameIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _thumbnailDataUriCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, IReadOnlyList<RepositorySyncHistoryItem>> _syncHistoryByRepository = new(StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenSource _stateRefreshCts = new();
     private Task? _stateRefreshTask;
 
@@ -1195,6 +1230,7 @@ else
     {
         _games = await GameLibraryService.GetGamesAsync();
         SyncThumbnailCache();
+        await RefreshRepositorySyncHistoriesAsync();
     }
 
     private IReadOnlyList<GameCardItem> GetFilteredGames()
@@ -1326,6 +1362,7 @@ else
         UnregisterAllWatchers();
         _pinningGameIds.Clear();
         _thumbnailDataUriCache.Clear();
+        _syncHistoryByRepository.Clear();
     }
 
     private void StartStateRefreshLoop()
@@ -1337,11 +1374,19 @@ else
 
         _stateRefreshTask = Task.Run(async () =>
         {
+            var elapsedSeconds = 0;
             while (!_stateRefreshCts.IsCancellationRequested)
             {
                 try
                 {
                     await Task.Delay(TimeSpan.FromSeconds(1), _stateRefreshCts.Token);
+                    elapsedSeconds++;
+                    if (elapsedSeconds >= SyncHistoryRefreshIntervalSeconds)
+                    {
+                        elapsedSeconds = 0;
+                        await InvokeAsync(async () => await RefreshRepositorySyncHistoriesAsync(_stateRefreshCts.Token));
+                    }
+
                     await InvokeAsync(StateHasChanged);
                 }
                 catch (OperationCanceledException)
@@ -1354,6 +1399,47 @@ else
                 }
             }
         });
+    }
+
+    private async Task RefreshRepositorySyncHistoriesAsync(CancellationToken cancellationToken = default)
+    {
+        _syncHistoryByRepository.Clear();
+
+        if (_games is null || _games.Count == 0)
+        {
+            return;
+        }
+
+        var repositoryIds = _games
+            .Select(game => NormalizeRepositoryKey(game.RelatedRepositoryPath))
+            .Where(static repositoryId => !string.IsNullOrWhiteSpace(repositoryId))
+            .Select(static repositoryId => repositoryId!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (repositoryIds.Length == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            var histories = await RepositorySyncHistoryStore.GetLatestByRepositoryIdsAsync(
+                repositoryIds,
+                SyncHistoryTimelineLimit,
+                cancellationToken);
+            foreach (var pair in histories)
+            {
+                _syncHistoryByRepository[pair.Key] = pair.Value;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            // 履歴取得失敗時はカード描画を継続する。
+        }
     }
 
     private RepositorySyncState GetRepositorySyncState(GameCardItem game)
@@ -1388,6 +1474,19 @@ else
     {
         var state = GetRepositorySyncState(game);
         return state is RepositorySyncState.Debouncing or RepositorySyncState.Syncing;
+    }
+
+    private IReadOnlyList<RepositorySyncHistoryItem> GetSyncHistoryTimeline(GameCardItem game)
+    {
+        var repositoryKey = NormalizeRepositoryKey(game.RelatedRepositoryPath);
+        if (repositoryKey is null)
+        {
+            return Array.Empty<RepositorySyncHistoryItem>();
+        }
+
+        return _syncHistoryByRepository.TryGetValue(repositoryKey, out var entries)
+            ? entries
+            : Array.Empty<RepositorySyncHistoryItem>();
     }
 
     private static bool HasThumbnail(GameCardItem game)
@@ -1495,6 +1594,42 @@ else
     private static string FormatLastPlayed(DateTimeOffset? value)
     {
         return value?.LocalDateTime.ToString("yyyy-MM-dd HH:mm") ?? "未プレイ";
+    }
+
+    private static string FormatSyncHistoryTimestamp(DateTimeOffset value)
+    {
+        return value.LocalDateTime.ToString("MM-dd HH:mm:ss");
+    }
+
+    private static string FormatSyncHistoryDuration(long durationMs)
+    {
+        if (durationMs < 1_000)
+        {
+            return $"{durationMs}ms";
+        }
+
+        var seconds = durationMs / 1000d;
+        return $"{seconds:0.0}s";
+    }
+
+    private static string GetSyncHistoryStatusLabel(RepositorySyncHistoryStatus status)
+    {
+        return status switch
+        {
+            RepositorySyncHistoryStatus.Succeeded => "成功",
+            RepositorySyncHistoryStatus.Paused => "停止",
+            _ => "失敗"
+        };
+    }
+
+    private static string GetSyncHistoryStatusClass(RepositorySyncHistoryStatus status)
+    {
+        return status switch
+        {
+            RepositorySyncHistoryStatus.Succeeded => "sync-timeline-success",
+            RepositorySyncHistoryStatus.Paused => "sync-timeline-paused",
+            _ => "sync-timeline-failed"
+        };
     }
 
     private static string GetStatusLabel(GameCardStatus status)

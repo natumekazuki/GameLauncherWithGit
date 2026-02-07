@@ -215,6 +215,59 @@ h1:focus {
     word-break: break-all;
 }
 
+.sync-timeline-list {
+    list-style: none;
+    margin: 0.35rem 0 0.7rem;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.sync-timeline-item {
+    border: 1px solid #31455f;
+    border-radius: 8px;
+    background: rgba(14, 24, 40, 0.92);
+    padding: 0.35rem 0.45rem;
+}
+
+.sync-timeline-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.6rem;
+    color: #d6e4fb;
+    font-size: 0.74rem;
+    font-weight: 700;
+}
+
+.sync-timeline-meta {
+    margin: 0.2rem 0 0;
+    color: #98aecf;
+    font-size: 0.7rem;
+    line-height: 1.3;
+    word-break: break-all;
+}
+
+.sync-timeline-reason {
+    margin: 0.2rem 0 0;
+    color: #f6c3cb;
+    font-size: 0.72rem;
+    line-height: 1.3;
+    word-break: break-word;
+}
+
+.sync-timeline-success {
+    border-color: #2f7d55;
+}
+
+.sync-timeline-failed {
+    border-color: #8a3b48;
+}
+
+.sync-timeline-paused {
+    border-color: #8f6b2c;
+}
+
 .game-card-actions {
     margin-top: 0.5rem;
     display: flex;
