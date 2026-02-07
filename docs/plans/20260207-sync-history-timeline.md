@@ -11,7 +11,7 @@
 - [x] 同期履歴のデータモデルを定義する（`RepositoryId`、`Status`、`StartedAt`、`FinishedAt`、`DurationMs`、`Command`、`Reason` など）。
 - [x] `IGameLibraryStore` とは分離した同期履歴ストア抽象（例: `IRepositorySyncHistoryStore`）を追加する。
 - [x] SQLite 実装に同期履歴テーブル作成とCRUD（最新N件取得、追加、古い履歴削除）を実装する。
-- [ ] `SyncOrchestrator` に履歴記録ポイントを追加する（成功時、再試行失敗時、ErrorPaused遷移時）。
+- [x] `SyncOrchestrator` に履歴記録ポイントを追加する（成功時、再試行失敗時、ErrorPaused遷移時）。
 - [ ] `Home.razor` のカードUIに「同期履歴タイムライン」表示領域を追加する（直近3件程度）。
 - [ ] タイムライン表示用の整形ロジックを実装する（時刻表示、所要時間表示、失敗理由の短縮）。
 - [ ] 必要なCSSを追加し、既存カードUI（サムネイルあり/なし）と干渉しないことを確認する。
@@ -39,3 +39,4 @@
 - 2026-02-07: 既存の `RepositoryStateStore` は現在状態のみ保持し、履歴は保持していない。
 - 2026-02-07: 既存ログビューア強化は完了済みのため、今回は「カード単位で素早く見る同期履歴」にフォーカスする。
 - 2026-02-07: `SqliteGameLibraryStore` に `RepositorySyncHistory` テーブルを追加し、`IRepositorySyncHistoryStore` の `AppendAsync` / `GetLatestByRepositoryIdsAsync` を実装。1リポジトリあたり最新50件保持に制限。
+- 2026-02-07: `SyncOrchestrator` に同期履歴記録を追加（成功、失敗、ErrorPaused）。履歴記録失敗は同期処理を止めず警告ログで継続。

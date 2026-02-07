@@ -1,4 +1,5 @@
 using GameLauncherWithGit.Application.Abstractions;
+using GameLauncherWithGit.Application.Models;
 using GameLauncherWithGit.Domain.Models;
 using GameLauncherWithGit.Infrastructure.Abstractions;
 using GameLauncherWithGit.Infrastructure.Models;
@@ -16,6 +17,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 	private readonly INotificationService _notificationService;
 	private readonly ITrayService _trayService;
 	private readonly ILogAccessService _logAccessService;
+	private readonly IRepositorySyncHistoryStore _repositorySyncHistoryStore;
 	private readonly ILogger<SyncOrchestrator> _logger;
 	private readonly ConcurrentDictionary<string, RepositorySyncQueue> _queues = new(StringComparer.OrdinalIgnoreCase);
 	private bool _isDisposed;
@@ -28,6 +30,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		INotificationService notificationService,
 		ITrayService trayService,
 		ILogAccessService logAccessService,
+		IRepositorySyncHistoryStore repositorySyncHistoryStore,
 		ILogger<SyncOrchestrator> logger)
 	{
 		_repositoryStateStore = repositoryStateStore;
@@ -37,6 +40,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		_notificationService = notificationService;
 		_trayService = trayService;
 		_logAccessService = logAccessService;
+		_repositorySyncHistoryStore = repositorySyncHistoryStore;
 		_logger = logger;
 		_repositoryWatcherService.RepositoryChanged += OnRepositoryChanged;
 		_trayService.SetState(RepositorySyncState.Idle);
@@ -166,10 +170,18 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 			queue.IsSyncRunning = true;
 		}
 
+		var syncStartedAt = DateTimeOffset.Now;
 		try
 		{
 			SetRepositoryState(repositoryId, RepositorySyncState.Syncing);
-			await ExecuteSyncCoreAsync(repositoryId, debounceCts.Token);
+			await ExecuteSyncCoreAsync(repositoryId, syncStartedAt, debounceCts.Token);
+			await AppendSyncHistorySafeAsync(
+				repositoryId,
+				RepositorySyncHistoryStatus.Succeeded,
+				syncStartedAt,
+				DateTimeOffset.Now,
+				command: null,
+				reason: null);
 			var hadTransientFailure = ClearTransientFailureState(queue);
 			SetRepositoryState(repositoryId, RepositorySyncState.Idle);
 			if (hadTransientFailure)
@@ -185,8 +197,16 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		}
 		catch (SyncCommandException ex)
 		{
+			var finishedAt = DateTimeOffset.Now;
 			var targetState = ex.ShouldPauseRepository ? RepositorySyncState.ErrorPaused : RepositorySyncState.Idle;
 			SetRepositoryState(repositoryId, targetState);
+			await AppendSyncHistorySafeAsync(
+				repositoryId,
+				ex.ShouldPauseRepository ? RepositorySyncHistoryStatus.Paused : RepositorySyncHistoryStatus.Failed,
+				syncStartedAt,
+				finishedAt,
+				ex.Command,
+				ex.Reason);
 			if (ex.ShouldPauseRepository)
 			{
 				ResetTransientFailureState(queue);
@@ -221,8 +241,16 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		}
 		catch (Exception ex)
 		{
+			var finishedAt = DateTimeOffset.Now;
 			ResetTransientFailureState(queue);
 			SetRepositoryState(repositoryId, RepositorySyncState.ErrorPaused);
+			await AppendSyncHistorySafeAsync(
+				repositoryId,
+				RepositorySyncHistoryStatus.Paused,
+				syncStartedAt,
+				finishedAt,
+				command: "unknown",
+				reason: ex.Message);
 			_logger.LogError(ex, "Repository sync failed. repositoryId={RepositoryId}", repositoryId);
 			await NotifyAndLogErrorAsync(
 				"自動同期を停止しました",
@@ -252,7 +280,10 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		}
 	}
 
-	private async Task ExecuteSyncCoreAsync(string repositoryId, CancellationToken cancellationToken)
+	private async Task ExecuteSyncCoreAsync(
+		string repositoryId,
+		DateTimeOffset startedAt,
+		CancellationToken cancellationToken)
 	{
 		var repositoryPath = repositoryId;
 		if (string.IsNullOrWhiteSpace(repositoryPath) || !Directory.Exists(repositoryPath))
@@ -261,10 +292,11 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 				repositoryPath,
 				"validate-path",
 				"監視対象のリポジトリパスが存在しません。",
+				startedAt,
 				shouldPauseRepository: false);
 		}
 
-		await EnsureCommandSuccessAsync(repositoryPath, "fetch", shouldPauseRepository: false, cancellationToken);
+		await EnsureCommandSuccessAsync(repositoryPath, "fetch", startedAt, shouldPauseRepository: false, cancellationToken);
 
 		var pullResult = await _gitService.RunAsync(repositoryPath, "pull --rebase --autostash", cancellationToken);
 		if (!pullResult.IsSuccess)
@@ -273,10 +305,11 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 				repositoryPath,
 				"pull --rebase --autostash",
 				BuildFailureReason(pullResult),
+				startedAt,
 				shouldPauseRepository: IsPullConflict(pullResult));
 		}
 
-		await EnsureCommandSuccessAsync(repositoryPath, "add -A", shouldPauseRepository: false, cancellationToken);
+		await EnsureCommandSuccessAsync(repositoryPath, "add -A", startedAt, shouldPauseRepository: false, cancellationToken);
 		var statusResult = await _gitService.RunAsync(repositoryPath, "status --porcelain", cancellationToken);
 		if (!statusResult.IsSuccess)
 		{
@@ -284,6 +317,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 				repositoryPath,
 				"status --porcelain",
 				BuildFailureReason(statusResult),
+				startedAt,
 				shouldPauseRepository: false);
 		}
 
@@ -300,17 +334,19 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 					repositoryPath,
 					"commit -m",
 					BuildFailureReason(commitResult),
+					startedAt,
 					shouldPauseRepository: false);
 			}
 		}
 
-		await EnsureCommandSuccessAsync(repositoryPath, "push", shouldPauseRepository: false, cancellationToken);
+		await EnsureCommandSuccessAsync(repositoryPath, "push", startedAt, shouldPauseRepository: false, cancellationToken);
 		_logger.LogInformation("Repository sync completed. repositoryId={RepositoryId}", repositoryId);
 	}
 
 	private async Task EnsureCommandSuccessAsync(
 		string repositoryPath,
 		string command,
+		DateTimeOffset startedAt,
 		bool shouldPauseRepository,
 		CancellationToken cancellationToken)
 	{
@@ -324,6 +360,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 			repositoryPath,
 			command,
 			BuildFailureReason(result),
+			startedAt,
 			shouldPauseRepository);
 	}
 
@@ -546,6 +583,35 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		return TimeSpan.FromSeconds(seconds);
 	}
 
+	private async Task AppendSyncHistorySafeAsync(
+		string repositoryId,
+		RepositorySyncHistoryStatus status,
+		DateTimeOffset startedAt,
+		DateTimeOffset finishedAt,
+		string? command,
+		string? reason)
+	{
+		try
+		{
+			var normalizedFinishedAt = finishedAt < startedAt ? startedAt : finishedAt;
+			var durationMs = Math.Max(0L, (long)(normalizedFinishedAt - startedAt).TotalMilliseconds);
+			await _repositorySyncHistoryStore.AppendAsync(
+				new RepositorySyncHistoryItem(
+					Id: 0,
+					RepositoryId: repositoryId,
+					Status: status,
+					StartedAt: startedAt,
+					FinishedAt: normalizedFinishedAt,
+					DurationMs: durationMs,
+					Command: command,
+					Reason: reason));
+		}
+		catch (Exception ex)
+		{
+			_logger.LogWarning(ex, "Failed to append sync history. repositoryId={RepositoryId}", repositoryId);
+		}
+	}
+
 	private void ThrowIfDisposed()
 	{
 		ObjectDisposedException.ThrowIf(_isDisposed, this);
@@ -579,11 +645,21 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 			string repositoryPath,
 			string command,
 			string reason,
+			DateTimeOffset startedAt,
 			bool shouldPauseRepository)
 			: base($"同期に失敗しました。repo={repositoryPath}, command=git {command}, reason={reason}")
 		{
+			Command = command;
+			Reason = reason;
+			StartedAt = startedAt;
 			ShouldPauseRepository = shouldPauseRepository;
 		}
+
+		public string Command { get; }
+
+		public string Reason { get; }
+
+		public DateTimeOffset StartedAt { get; }
 
 		public bool ShouldPauseRepository { get; }
 	}
