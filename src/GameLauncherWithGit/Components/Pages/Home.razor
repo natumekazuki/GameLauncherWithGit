@@ -183,12 +183,28 @@ else
                            @bind="_notificationSuppressSeconds"
                            disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
                 </label>
+                <label class="settings-toggle-row">
+                    <span>ログ保持日数</span>
+                    <input type="number"
+                           min="1"
+                           max="365"
+                           @bind="_logRetentionDays"
+                           disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                </label>
+                <label class="settings-toggle-row">
+                    <span>ログ最大サイズMB</span>
+                    <input type="number"
+                           min="1"
+                           max="1024"
+                           @bind="_logMaxFileSizeMb"
+                           disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                </label>
                 <div class="editor-actions">
                     <button type="button"
                             class="launch-button"
                             @onclick="SaveAppSettingsAsync"
                             disabled="@(_isSettingsLoading || _isAppSettingsSaving)">
-                        @(_isAppSettingsSaving ? "保存中..." : "同期設定を保存")
+                        @(_isAppSettingsSaving ? "保存中..." : "設定を保存")
                     </button>
                 </div>
             </div>
@@ -407,6 +423,8 @@ else
     private int _syncRetryInitialSeconds = AppSettings.Default.SyncRetryInitialSeconds;
     private int _syncRetryMaxSeconds = AppSettings.Default.SyncRetryMaxSeconds;
     private int _notificationSuppressSeconds = AppSettings.Default.NotificationSuppressSeconds;
+    private int _logRetentionDays = AppSettings.Default.LogRetentionDays;
+    private int _logMaxFileSizeMb = AppSettings.Default.LogMaxFileSizeMb;
     private int _logViewerLimit = 100;
     private string _logViewerSeverityFilter = "all";
     private string _logViewerKeyword = string.Empty;
@@ -537,12 +555,14 @@ else
                 SyncDebounceSeconds: _syncDebounceSeconds,
                 SyncRetryInitialSeconds: _syncRetryInitialSeconds,
                 SyncRetryMaxSeconds: _syncRetryMaxSeconds,
-                NotificationSuppressSeconds: _notificationSuppressSeconds);
+                NotificationSuppressSeconds: _notificationSuppressSeconds,
+                LogRetentionDays: _logRetentionDays,
+                LogMaxFileSizeMb: _logMaxFileSizeMb);
             var normalized = requested.Normalize();
 
             await AppSettingsService.SaveAsync(normalized);
             ApplyAppSettings(normalized);
-            SetNotification("同期・通知設定を保存しました。", true);
+            SetNotification("設定を保存しました。", true);
         }
         catch (Exception ex)
         {
@@ -561,6 +581,8 @@ else
         _syncRetryInitialSeconds = normalized.SyncRetryInitialSeconds;
         _syncRetryMaxSeconds = normalized.SyncRetryMaxSeconds;
         _notificationSuppressSeconds = normalized.NotificationSuppressSeconds;
+        _logRetentionDays = normalized.LogRetentionDays;
+        _logMaxFileSizeMb = normalized.LogMaxFileSizeMb;
     }
 
     private async Task OpenLatestErrorLogAsync()

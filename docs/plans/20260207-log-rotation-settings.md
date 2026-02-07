@@ -10,8 +10,8 @@
   - `LogAccessService` の責務に起動時メンテナンス（削除/ローテーション）を追記
 
 # タスクリスト
-- [ ] `AppSettings` に `LogRetentionDays` / `LogMaxFileSizeMb` を追加し正規化範囲を定義
-- [ ] `Home.razor` の同期・通知設定にログ運用設定入力を追加して保存導線を統合
+- [x] `AppSettings` に `LogRetentionDays` / `LogMaxFileSizeMb` を追加し正規化範囲を定義
+- [x] `Home.razor` の同期・通知設定にログ運用設定入力を追加して保存導線を統合
 - [ ] `ILogAccessService` にログメンテナンスAPIを追加
 - [ ] `LogAccessService` に起動時メンテナンス（保持日数削除・サイズ上限ローテーション）を実装
 - [ ] `Home.razor` 起動初期化でログメンテナンスを実行し失敗時通知を追加
