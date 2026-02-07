@@ -10,8 +10,8 @@
   - Home のカード操作に削除導線を追記
 
 # タスクリスト
-- [ ] `IGameLibraryStore` / `SqliteGameLibraryStore` に削除APIを追加
-- [ ] `IGameLibraryService` / `GameLibraryService` にゲーム削除処理を追加（サムネイル削除含む）
+- [x] `IGameLibraryStore` / `SqliteGameLibraryStore` に削除APIを追加
+- [x] `IGameLibraryService` / `GameLibraryService` にゲーム削除処理を追加（サムネイル削除含む）
 - [ ] `Home.razor` に削除ボタンと確認モーダルを追加
 - [ ] 削除後の一覧再読込・監視再構成・通知表示を実装
 - [ ] `docs/design/maui-blazor-architecture.md` を実装内容へ同期

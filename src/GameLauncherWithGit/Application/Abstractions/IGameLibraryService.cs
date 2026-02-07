@@ -12,6 +12,8 @@ public interface IGameLibraryService
 
 	Task<GameCardItem?> UpdateAsync(string gameId, GameEditInput input, CancellationToken cancellationToken = default);
 
+	Task<bool> DeleteAsync(string gameId, CancellationToken cancellationToken = default);
+
 	Task MarkLaunchedAsync(string gameId, CancellationToken cancellationToken = default);
 
 	Task SetStatusAsync(string gameId, GameCardStatus status, CancellationToken cancellationToken = default);

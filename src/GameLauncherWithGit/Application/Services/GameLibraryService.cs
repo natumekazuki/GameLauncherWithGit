@@ -12,6 +12,7 @@ public sealed class GameLibraryService : IGameLibraryService
 	private readonly IGitService _gitService;
 	private readonly IThumbnailService _thumbnailService;
 	private readonly ILogger<GameLibraryService> _logger;
+	private readonly string _managedThumbnailDirectoryPath;
 
 	public GameLibraryService(
 		IGameLibraryStore store,
@@ -23,6 +24,8 @@ public sealed class GameLibraryService : IGameLibraryService
 		_gitService = gitService;
 		_thumbnailService = thumbnailService;
 		_logger = logger;
+		_managedThumbnailDirectoryPath = Path.GetFullPath(
+			Path.Combine(FileSystem.AppDataDirectory, "thumbnails"));
 	}
 
 	public async Task<GameCardItem> CreateAsync(GameEditInput input, CancellationToken cancellationToken = default)
@@ -83,6 +86,24 @@ public sealed class GameLibraryService : IGameLibraryService
 		}
 
 		await _store.UpsertAsync(game with { Status = status }, cancellationToken);
+	}
+
+	public async Task<bool> DeleteAsync(string gameId, CancellationToken cancellationToken = default)
+	{
+		if (string.IsNullOrWhiteSpace(gameId))
+		{
+			return false;
+		}
+
+		var game = await _store.FindByIdAsync(gameId, cancellationToken);
+		if (game is null)
+		{
+			return false;
+		}
+
+		await _store.DeleteAsync(gameId, cancellationToken);
+		TryDeleteManagedThumbnail(game.ThumbnailPath);
+		return true;
 	}
 
 	public async Task<GameCardItem?> UpdateAsync(string gameId, GameEditInput input, CancellationToken cancellationToken = default)
@@ -250,5 +271,44 @@ public sealed class GameLibraryService : IGameLibraryService
 		}
 
 		return slug;
+	}
+
+	private void TryDeleteManagedThumbnail(string? thumbnailPath)
+	{
+		if (string.IsNullOrWhiteSpace(thumbnailPath))
+		{
+			return;
+		}
+
+		string normalizedPath;
+		try
+		{
+			normalizedPath = Path.GetFullPath(thumbnailPath.Trim());
+		}
+		catch (Exception ex)
+		{
+			_logger.LogWarning(ex, "Thumbnail path normalization failed. path={ThumbnailPath}", thumbnailPath);
+			return;
+		}
+
+		var managedDirectoryPrefix = _managedThumbnailDirectoryPath.EndsWith(Path.DirectorySeparatorChar)
+			? _managedThumbnailDirectoryPath
+			: _managedThumbnailDirectoryPath + Path.DirectorySeparatorChar;
+		if (!normalizedPath.StartsWith(managedDirectoryPrefix, StringComparison.OrdinalIgnoreCase))
+		{
+			return;
+		}
+
+		try
+		{
+			if (File.Exists(normalizedPath))
+			{
+				File.Delete(normalizedPath);
+			}
+		}
+		catch (Exception ex)
+		{
+			_logger.LogWarning(ex, "Failed to delete thumbnail file. path={ThumbnailPath}", normalizedPath);
+		}
 	}
 }

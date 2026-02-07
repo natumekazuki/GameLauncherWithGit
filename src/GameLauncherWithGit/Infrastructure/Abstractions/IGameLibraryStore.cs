@@ -9,4 +9,6 @@ public interface IGameLibraryStore
 	Task<GameCardItem?> FindByIdAsync(string gameId, CancellationToken cancellationToken = default);
 
 	Task UpsertAsync(GameCardItem game, CancellationToken cancellationToken = default);
+
+	Task DeleteAsync(string gameId, CancellationToken cancellationToken = default);
 }

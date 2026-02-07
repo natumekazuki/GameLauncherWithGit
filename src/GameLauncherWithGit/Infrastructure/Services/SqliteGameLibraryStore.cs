@@ -110,6 +110,25 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore
 		await command.ExecuteNonQueryAsync(cancellationToken);
 	}
 
+	public async Task DeleteAsync(string gameId, CancellationToken cancellationToken = default)
+	{
+		if (string.IsNullOrWhiteSpace(gameId))
+		{
+			return;
+		}
+
+		await EnsureInitializedAsync(cancellationToken);
+
+		await using var connection = await OpenConnectionAsync(cancellationToken);
+		await using var command = connection.CreateCommand();
+		command.CommandText = """
+			DELETE FROM Games
+			WHERE Id = $id;
+			""";
+		command.Parameters.AddWithValue("$id", gameId.Trim());
+		await command.ExecuteNonQueryAsync(cancellationToken);
+	}
+
 	private async Task EnsureInitializedAsync(CancellationToken cancellationToken)
 	{
 		if (_isInitialized)
