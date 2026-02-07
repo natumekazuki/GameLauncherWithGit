@@ -29,6 +29,10 @@ public sealed class TrayService : ITrayService, IDisposable
 	private bool _allowWindowClose;
 	private IntPtr _windowHandle;
 	private IntPtr _originalWndProc;
+	private IntPtr _idleIconHandle;
+	private IntPtr _syncingIconHandle;
+	private IntPtr _errorIconHandle;
+	private bool _customIconLoadAttempted;
 #endif
 
 	public TrayService(
@@ -88,6 +92,7 @@ public sealed class TrayService : ITrayService, IDisposable
 
 				TryDeleteIcon();
 				UnhookWindowProcedure();
+				ReleaseCustomIcons();
 				_isDisposed = true;
 			}
 		});
@@ -452,7 +457,7 @@ public sealed class TrayService : ITrayService, IDisposable
 		_isIconAdded = false;
 	}
 
-	private static NotifyIconData CreateNotifyIconData(IntPtr hwnd, RepositorySyncState state)
+	private NotifyIconData CreateNotifyIconData(IntPtr hwnd, RepositorySyncState state)
 	{
 		return new NotifyIconData
 		{
@@ -480,14 +485,83 @@ public sealed class TrayService : ITrayService, IDisposable
 		return $"GameLauncherWithGit - {suffix}";
 	}
 
-	private static IntPtr SelectIconHandle(RepositorySyncState state)
+	private IntPtr SelectIconHandle(RepositorySyncState state)
 	{
+		EnsureCustomIconsLoaded();
+		var iconHandle = state switch
+		{
+			RepositorySyncState.Syncing or RepositorySyncState.Debouncing => _syncingIconHandle,
+			RepositorySyncState.ErrorPaused => _errorIconHandle,
+			_ => _idleIconHandle
+		};
+		if (iconHandle != IntPtr.Zero)
+		{
+			return iconHandle;
+		}
+
 		return state switch
 		{
 			RepositorySyncState.Syncing or RepositorySyncState.Debouncing => LoadIcon(IntPtr.Zero, IDI_INFORMATION),
 			RepositorySyncState.ErrorPaused => LoadIcon(IntPtr.Zero, IDI_ERROR),
 			_ => LoadIcon(IntPtr.Zero, IDI_APPLICATION)
 		};
+	}
+
+	private void EnsureCustomIconsLoaded()
+	{
+		if (_customIconLoadAttempted)
+		{
+			return;
+		}
+
+		_customIconLoadAttempted = true;
+		_idleIconHandle = LoadCustomIconHandle("tray-idle.ico");
+		_syncingIconHandle = LoadCustomIconHandle("tray-syncing.ico");
+		_errorIconHandle = LoadCustomIconHandle("tray-error.ico");
+	}
+
+	private IntPtr LoadCustomIconHandle(string fileName)
+	{
+		try
+		{
+			var path = Path.Combine(AppContext.BaseDirectory, "TrayIcon", fileName);
+			if (!File.Exists(path))
+			{
+				_logger.LogWarning("Tray icon file was not found. path={Path}", path);
+				return IntPtr.Zero;
+			}
+
+			return LoadImage(
+				IntPtr.Zero,
+				path,
+				IMAGE_ICON,
+				0,
+				0,
+				LR_LOADFROMFILE | LR_DEFAULTSIZE);
+		}
+		catch (Exception ex)
+		{
+			_logger.LogWarning(ex, "Failed to load tray icon file. fileName={FileName}", fileName);
+			return IntPtr.Zero;
+		}
+	}
+
+	private void ReleaseCustomIcons()
+	{
+		TryDestroyIcon(ref _idleIconHandle);
+		TryDestroyIcon(ref _syncingIconHandle);
+		TryDestroyIcon(ref _errorIconHandle);
+	}
+
+	private static void TryDestroyIcon(ref IntPtr iconHandle)
+	{
+		if (iconHandle == IntPtr.Zero)
+		{
+			return;
+		}
+
+		_ = DestroyIcon(iconHandle);
+		iconHandle = IntPtr.Zero;
 	}
 
 	private static IntPtr GetWindowHandle()
@@ -557,6 +631,9 @@ public sealed class TrayService : ITrayService, IDisposable
 	private const int IDI_ERROR = 32513;
 	private const int IDI_INFORMATION = 32516;
 	private const int GWLP_WNDPROC = -4;
+	private const uint IMAGE_ICON = 1;
+	private const uint LR_LOADFROMFILE = 0x00000010;
+	private const uint LR_DEFAULTSIZE = 0x00000040;
 
 	[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
 	private struct NotifyIconData
@@ -594,6 +671,19 @@ public sealed class TrayService : ITrayService, IDisposable
 
 	[DllImport("user32.dll", CharSet = CharSet.Unicode)]
 	private static extern IntPtr LoadIcon(IntPtr hInstance, int lpIconName);
+
+	[DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+	private static extern IntPtr LoadImage(
+		IntPtr hInst,
+		string lpszName,
+		uint uType,
+		int cxDesired,
+		int cyDesired,
+		uint fuLoad);
+
+	[DllImport("user32.dll", SetLastError = true)]
+	[return: MarshalAs(UnmanagedType.Bool)]
+	private static extern bool DestroyIcon(IntPtr hIcon);
 
 	[DllImport("user32.dll")]
 	private static extern IntPtr GetForegroundWindow();

@@ -16,13 +16,13 @@
   - エラー停止: 赤系アクセント
 
 ## Task List
-- [ ] `Resources/AppIcon` の `appicon.svg` / `appiconfg.svg` を独自デザインへ更新する。
-- [ ] Windowsトレイ用の `.ico` を作成する（待機/同期中/エラー停止の3種）。
-- [ ] トレイアイコン資産をプロジェクトへ組み込み、出力ディレクトリへ配置されるよう `csproj` を更新する。
-- [ ] `TrayService` でシステム既定アイコン (`LoadIcon`) をやめ、作成した `.ico` を状態別に読み込む実装へ変更する。
+- [x] `Resources/AppIcon` の `appicon.svg` / `appiconfg.svg` を独自デザインへ更新する。
+- [x] Windowsトレイ用の `.ico` を作成する（待機/同期中/エラー停止の3種）。
+- [x] トレイアイコン資産をプロジェクトへ組み込み、出力ディレクトリへ配置されるよう `csproj` を更新する。
+- [x] `TrayService` でシステム既定アイコン (`LoadIcon`) をやめ、作成した `.ico` を状態別に読み込む実装へ変更する。
 - [ ] 既存のトレイ挙動（メニュー、状態遷移、終了動作）に回帰がないことを確認する。
-- [ ] `docs/design/maui-blazor-architecture.md` にアイコン資産方針とトレイ状態別アイコン仕様を追記する。
-- [ ] ビルドしてアイコン資産の解決エラーがないことを確認する。
+- [x] `docs/design/maui-blazor-architecture.md` にアイコン資産方針とトレイ状態別アイコン仕様を追記する。
+- [x] ビルドしてアイコン資産の解決エラーがないことを確認する。
 
 ## Affected Files
 - `src/GameLauncherWithGit/Resources/AppIcon/appicon.svg`
@@ -40,3 +40,5 @@
 
 ## Notes / Logs
 - 2026-02-07: 現状は `MauiIcon` がテンプレート設定、`TrayService` は `LoadIcon(IDI_*)` に依存している。
+- 2026-02-07: `Resources/TrayIcon/tray-idle.ico` / `tray-syncing.ico` / `tray-error.ico` を新規作成。`GameLauncherWithGit.csproj` の `None + CopyToOutputDirectory` で `TrayIcon/` へ配置。
+- 2026-02-07: `TrayService` は `LoadImage(..., LR_LOADFROMFILE)` で状態別アイコンを読み込み、未取得時は既存 `LoadIcon` へフォールバックする実装へ変更。
