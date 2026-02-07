@@ -15,8 +15,8 @@
 - [x] `ILogAccessService` にログメンテナンスAPIを追加
 - [x] `LogAccessService` に起動時メンテナンス（保持日数削除・サイズ上限ローテーション）を実装
 - [x] `Home.razor` 起動初期化でログメンテナンスを実行し失敗時通知を追加
-- [ ] `docs/design/maui-blazor-architecture.md` を実装内容へ同期
-- [ ] Windowsターゲットでビルド検証
+- [x] `docs/design/maui-blazor-architecture.md` を実装内容へ同期
+- [x] Windowsターゲットでビルド検証
 
 # 変更対象ファイル
 - `src/GameLauncherWithGit/Application/Models/AppSettings.cs`
@@ -30,3 +30,7 @@
 - しきい値設定が小さすぎると必要な調査ログが失われる可能性
 - ローテーション中の同時書き込みで例外が出る可能性
 - 起動時メンテナンス失敗時に通知ループが発生する可能性
+
+# Notes / Logs
+- 既存 `settings.json` 互換のため、新規項目未設定時は `AppSettings.Default` の値で補完する。
+- Windowsビルド検証は `dotnet build src/GameLauncherWithGit/GameLauncherWithGit.csproj -f net9.0-windows10.0.19041.0 --no-dependencies -p:CopyBuildOutputToOutputDirectory=false` を使用。

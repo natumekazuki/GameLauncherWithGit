@@ -60,8 +60,9 @@ flowchart LR
   - `MonochromeMemory.Log` を使って `FileSystem.AppDataDirectory/logs/app-events.jsonl` へ構造化エラーログを記録
   - 最新エラーログ/ログフォルダをOSシェルで開く
   - `app-events.jsonl` の直近ログを読み込み、レベル/キーワードで絞り込んでUIへ返す
+  - 起動時にログメンテナンス（保持日数超過の削除、サイズ超過時ローテーション）を実行
 - `AppSettingsService`
-  - `FileSystem.AppDataDirectory/settings.json` を読込/保存し、同期/通知の運用設定を管理
+  - `FileSystem.AppDataDirectory/settings.json` を読込/保存し、同期/通知/ログ運用設定を管理
 - `SettingsPanelService`
   - トレイメニューなどUI外部から設定モーダルを開くためのイベントブリッジ
 - `GameLibraryStore (SQLite)`
@@ -153,8 +154,9 @@ sequenceDiagram
 - 保存先: `FileSystem.AppDataDirectory`
 - 保存対象
   - `game-library.db`: ゲーム設定（タイトル、実行ファイル、関連リポジトリ、サムネイルパス、状態、最終プレイ日時）
-  - `settings.json`: 同期/通知設定（デバウンス秒、再試行初期秒、再試行最大秒、通知抑制秒）
+  - `settings.json`: 同期/通知/ログ設定（デバウンス秒、再試行初期秒、再試行最大秒、通知抑制秒、ログ保持日数、ログ最大サイズMB）
   - `logs/app-events.jsonl`: 構造化エラーログ（MonochromeMemory.Log）
+  - `logs/app-events-*.jsonl`: ローテーション済みログ
   - `thumbnails/*.png`: 変換済みサムネイル
 
 ## 10. エラーハンドリング方針
@@ -173,6 +175,7 @@ sequenceDiagram
 - Windows連携: トレイ状態遷移、Toast 発火、自動起動設定
 - サムネイル: 512px変換、PNG化、失敗時フォールバック
 - ログビューア: JSONL破損行スキップ、フィルタ結果表示、クリップボードコピー
+- ログ運用: 保持日数削除、サイズ超過ローテーション
 
 ## 12. 実装ステータス（2026-02-06）
 - 実装済み
@@ -188,6 +191,7 @@ sequenceDiagram
   - 通知/エラー表示を右下固定の通知ドックへ集約
   - ホーム画面に「環境設定」導線を追加（自動起動トグル、最新エラーログ/ログフォルダを開く）
   - 環境設定モーダルにログビューア追加（件数/レベル/キーワード、更新、コピー）
+  - 環境設定にログ運用設定を追加（保持日数、最大サイズMB）
   - `settings.json` 永続化（同期デバウンス秒、再試行初期/最大秒、通知抑制秒）
   - ゲーム登録/編集モーダル（タイトル/実行ファイル/関連リポジトリ）
   - ゲーム登録/編集モーダルのサムネイル画像選択（参照/解除）
@@ -214,7 +218,7 @@ sequenceDiagram
   - `SettingsPanelService` によるトレイ→設定モーダル導線
   - Windows 実行/配布スクリプト（`scripts/run-local-unpackaged.ps1` / `scripts/publish-windows-msix.ps1`）
 - 未実装
-  - ログ画面/運用導線
+  - なし（MVP定義範囲）
 
 ## 13. Windows 配布モデル（Unpackaged / MSIX）
 - 開発時（ローカル実行）は Unpackaged を採用する。
