@@ -9,8 +9,8 @@ public sealed record AppSettings(
 	int LogMaxFileSizeMb,
 	int GameCardSizePercent = 100)
 {
-	public const int GameCardSizePercentMin = 70;
-	public const int GameCardSizePercentMax = 150;
+	public const int GameCardSizePercentMin = 10;
+	public const int GameCardSizePercentMax = 500;
 
 	public static AppSettings Default { get; } = new(
 		SyncDebounceSeconds: 10,
