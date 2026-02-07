@@ -10,19 +10,16 @@
 - Git未導入時の起動ブロック表示
 - 右下通知ドック、ダークUI、サイドバー廃止
 - 設定導線（自動起動トグル、最新エラーログ/ログフォルダを開く）
+- `settings.json` 永続化（デバウンス秒、再試行初期/上限秒、通知抑制秒）
 - Windows連携の実装開始
   - トレイ状態表示（待機/同期中/エラー停止）
   - Windows通知（重複抑制 + フォールバック）
 
 ## 3. 残タスク（優先順）
 ### P0: 運用上の必須
-- 同期失敗時の指数バックオフ再試行（要件 11.2）
-- 連続失敗通知の抑制ルールを同期エラー系に統一適用（要件 11.2）
-- ウィンドウを閉じても常駐継続、明示終了のみ停止（要件 8.6）
-- トレイメニューの実装（今すぐ同期 / 設定 / ログ / 終了）
+- （完了）バックオフ再試行、通知抑制、閉じる時の常駐継続、トレイメニューは実装済み
 
 ### P1: 使い勝手向上
-- `settings.json` に設定永続化（デバウンス秒数など）
 - ログの構造化（repo / command / stdout / stderr / exit code を追いやすく）
 - ログ閲覧UI（最低限のフィルタとコピー導線）
 
@@ -32,10 +29,9 @@
 - 競合時のガイド強化（再開手順をUI化）
 
 ## 4. すぐ再開するための実施順（推奨）
-1. `P0` の「バックオフ再試行」を先に実装
-2. トレイメニュー + 閉じる動作（常駐継続）を実装
-3. 通知抑制ポリシーを統一（重複/連続失敗）
-4. `settings.json` 永続化へ拡張
+1. `P1` の「ログ閲覧UI」を先に実装
+2. ログ構造化の不足フィールド（repo / command / stdout / stderr / exit code）を補強
+3. `P2` の同期履歴タイムラインへ拡張
 
 ## 5. 再開時の確認コマンド
 ```powershell
@@ -51,6 +47,6 @@ pwsh -File scripts/run-local-unpackaged.ps1
 - 自動起動トグルがWindows再ログイン後も反映される
 
 ## 7. 次の計画ファイル候補（着手時に作成）
-- `docs/plans/YYYYMMDD-sync-backoff-retry.md`
-- `docs/plans/YYYYMMDD-tray-menu-and-close-behavior.md`
-- `docs/plans/YYYYMMDD-settings-persistence.md`
+- `docs/plans/YYYYMMDD-log-viewer-ui.md`
+- `docs/plans/YYYYMMDD-log-structure-enhancement.md`
+- `docs/plans/YYYYMMDD-sync-history-timeline.md`

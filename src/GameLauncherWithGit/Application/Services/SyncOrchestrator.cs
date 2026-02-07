@@ -12,20 +12,19 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 	private readonly IRepositoryStateStore _repositoryStateStore;
 	private readonly IRepositoryWatcherService _repositoryWatcherService;
 	private readonly IGitService _gitService;
+	private readonly IAppSettingsService _appSettingsService;
 	private readonly INotificationService _notificationService;
 	private readonly ITrayService _trayService;
 	private readonly ILogAccessService _logAccessService;
 	private readonly ILogger<SyncOrchestrator> _logger;
 	private readonly ConcurrentDictionary<string, RepositorySyncQueue> _queues = new(StringComparer.OrdinalIgnoreCase);
-	private readonly TimeSpan _debounceDuration = TimeSpan.FromSeconds(10);
-	private readonly TimeSpan _initialRetryDelay = TimeSpan.FromSeconds(5);
-	private readonly TimeSpan _maxRetryDelay = TimeSpan.FromMinutes(5);
 	private bool _isDisposed;
 
 	public SyncOrchestrator(
 		IRepositoryStateStore repositoryStateStore,
 		IRepositoryWatcherService repositoryWatcherService,
 		IGitService gitService,
+		IAppSettingsService appSettingsService,
 		INotificationService notificationService,
 		ITrayService trayService,
 		ILogAccessService logAccessService,
@@ -34,6 +33,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		_repositoryStateStore = repositoryStateStore;
 		_repositoryWatcherService = repositoryWatcherService;
 		_gitService = gitService;
+		_appSettingsService = appSettingsService;
 		_notificationService = notificationService;
 		_trayService = trayService;
 		_logAccessService = logAccessService;
@@ -72,6 +72,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 
 		var normalizedId = repositoryId.Trim();
 		var queue = _queues.GetOrAdd(normalizedId, static _ => new RepositorySyncQueue());
+		var debounceDuration = GetDebounceDuration();
 		CancellationTokenSource debounceCts;
 
 		lock (queue.Gate)
@@ -101,7 +102,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		SetRepositoryState(
 			normalizedId,
 			runImmediately ? RepositorySyncState.Syncing : RepositorySyncState.Debouncing);
-		_ = DebounceAndRunAsync(normalizedId, queue, debounceCts, runImmediately);
+		_ = DebounceAndRunAsync(normalizedId, queue, debounceCts, runImmediately, debounceDuration);
 		return Task.CompletedTask;
 	}
 
@@ -139,13 +140,14 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		string repositoryId,
 		RepositorySyncQueue queue,
 		CancellationTokenSource debounceCts,
-		bool runImmediately)
+		bool runImmediately,
+		TimeSpan debounceDuration)
 	{
 		if (!runImmediately)
 		{
 			try
 			{
-				await Task.Delay(_debounceDuration, debounceCts.Token);
+				await Task.Delay(debounceDuration, debounceCts.Token);
 			}
 			catch (OperationCanceledException)
 			{
@@ -528,10 +530,20 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 
 	private TimeSpan CalculateRetryDelay(int failureCount)
 	{
+		var settings = _appSettingsService.Get();
+		var initialRetrySeconds = Math.Max(1, settings.SyncRetryInitialSeconds);
+		var maxRetrySeconds = Math.Max(initialRetrySeconds, settings.SyncRetryMaxSeconds);
 		var exponent = Math.Max(0, failureCount - 1);
 		var multiplier = Math.Pow(2, exponent);
-		var seconds = Math.Min(_maxRetryDelay.TotalSeconds, _initialRetryDelay.TotalSeconds * multiplier);
+		var seconds = Math.Min(maxRetrySeconds, initialRetrySeconds * multiplier);
 		return TimeSpan.FromSeconds(Math.Max(1, seconds));
+	}
+
+	private TimeSpan GetDebounceDuration()
+	{
+		var settings = _appSettingsService.Get();
+		var seconds = Math.Max(1, settings.SyncDebounceSeconds);
+		return TimeSpan.FromSeconds(seconds);
 	}
 
 	private void ThrowIfDisposed()

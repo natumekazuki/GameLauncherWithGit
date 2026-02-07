@@ -1,3 +1,4 @@
+using GameLauncherWithGit.Application.Abstractions;
 using GameLauncherWithGit.Infrastructure.Abstractions;
 using Microsoft.Extensions.Logging;
 #if WINDOWS
@@ -10,15 +11,18 @@ namespace GameLauncherWithGit.Infrastructure.Services;
 
 public sealed class NotificationService : INotificationService
 {
+	private readonly IAppSettingsService _appSettingsService;
 	private readonly ILogger<NotificationService> _logger;
 #if WINDOWS
 	private readonly ConcurrentDictionary<string, DateTimeOffset> _recentNotifications = new(StringComparer.Ordinal);
-	private readonly TimeSpan _suppressWindow = TimeSpan.FromSeconds(20);
 	private bool _isRegistered;
 #endif
 
-	public NotificationService(ILogger<NotificationService> logger)
+	public NotificationService(
+		IAppSettingsService appSettingsService,
+		ILogger<NotificationService> logger)
 	{
+		_appSettingsService = appSettingsService;
 		_logger = logger;
 
 #if WINDOWS
@@ -102,8 +106,15 @@ public sealed class NotificationService : INotificationService
 		}
 
 		var key = $"{title}\n{message}";
+		var suppressSeconds = Math.Max(0, _appSettingsService.Get().NotificationSuppressSeconds);
+		if (suppressSeconds == 0)
+		{
+			return false;
+		}
+
+		var suppressWindow = TimeSpan.FromSeconds(suppressSeconds);
 		var now = DateTimeOffset.Now;
-		if (_recentNotifications.TryGetValue(key, out var previous) && now - previous < _suppressWindow)
+		if (_recentNotifications.TryGetValue(key, out var previous) && now - previous < suppressWindow)
 		{
 			return true;
 		}

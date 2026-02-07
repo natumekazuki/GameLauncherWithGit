@@ -5,6 +5,7 @@
 @inject IPathPickerService PathPickerService
 @inject IGitService GitService
 @inject IAutoStartService AutoStartService
+@inject IAppSettingsService AppSettingsService
 @inject ILogAccessService LogAccessService
 @inject IRepositoryWatcherService RepositoryWatcherService
 @inject ISyncOrchestrator SyncOrchestrator
@@ -148,6 +149,50 @@ else
                 }
             </div>
 
+            <div class="settings-section">
+                <h3>同期・通知設定</h3>
+                <label class="settings-toggle-row">
+                    <span>変更検知デバウンス秒</span>
+                    <input type="number"
+                           min="1"
+                           max="300"
+                           @bind="_syncDebounceSeconds"
+                           disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                </label>
+                <label class="settings-toggle-row">
+                    <span>再試行 初期待機秒</span>
+                    <input type="number"
+                           min="1"
+                           max="600"
+                           @bind="_syncRetryInitialSeconds"
+                           disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                </label>
+                <label class="settings-toggle-row">
+                    <span>再試行 最大待機秒</span>
+                    <input type="number"
+                           min="1"
+                           max="3600"
+                           @bind="_syncRetryMaxSeconds"
+                           disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                </label>
+                <label class="settings-toggle-row">
+                    <span>通知抑制秒（0で無効）</span>
+                    <input type="number"
+                           min="0"
+                           max="600"
+                           @bind="_notificationSuppressSeconds"
+                           disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                </label>
+                <div class="editor-actions">
+                    <button type="button"
+                            class="launch-button"
+                            @onclick="SaveAppSettingsAsync"
+                            disabled="@(_isSettingsLoading || _isAppSettingsSaving)">
+                        @(_isAppSettingsSaving ? "保存中..." : "同期設定を保存")
+                    </button>
+                </div>
+            </div>
+
             <div class="settings-section settings-actions-row">
                 <button type="button"
                         class="secondary-button"
@@ -167,7 +212,7 @@ else
                 <button type="button"
                         class="secondary-button"
                         @onclick="() => CloseSettings()"
-                        disabled="@(_isSettingsLoading || _isAutoStartSaving)">
+                        disabled="@(_isSettingsLoading || _isAutoStartSaving || _isAppSettingsSaving)">
                     閉じる
                 </button>
             </div>
@@ -267,7 +312,12 @@ else
     private bool _isSettingsOpen;
     private bool _isSettingsLoading;
     private bool _isAutoStartSaving;
+    private bool _isAppSettingsSaving;
     private bool _autoStartEnabled;
+    private int _syncDebounceSeconds = AppSettings.Default.SyncDebounceSeconds;
+    private int _syncRetryInitialSeconds = AppSettings.Default.SyncRetryInitialSeconds;
+    private int _syncRetryMaxSeconds = AppSettings.Default.SyncRetryMaxSeconds;
+    private int _notificationSuppressSeconds = AppSettings.Default.NotificationSuppressSeconds;
     private bool _isStartupChecking = true;
     private bool _isGitReady = true;
     private string? _startupError;
@@ -327,7 +377,7 @@ else
 
     private void CloseSettings(bool force = false)
     {
-        if ((_isSettingsLoading || _isAutoStartSaving) && !force)
+        if ((_isSettingsLoading || _isAutoStartSaving || _isAppSettingsSaving) && !force)
         {
             return;
         }
@@ -341,6 +391,7 @@ else
         try
         {
             _autoStartEnabled = await AutoStartService.IsEnabledAsync();
+            ApplyAppSettings(AppSettingsService.Get());
         }
         catch (Exception ex)
         {
@@ -379,6 +430,41 @@ else
         {
             _isAutoStartSaving = false;
         }
+    }
+
+    private async Task SaveAppSettingsAsync()
+    {
+        _isAppSettingsSaving = true;
+        try
+        {
+            var requested = new AppSettings(
+                SyncDebounceSeconds: _syncDebounceSeconds,
+                SyncRetryInitialSeconds: _syncRetryInitialSeconds,
+                SyncRetryMaxSeconds: _syncRetryMaxSeconds,
+                NotificationSuppressSeconds: _notificationSuppressSeconds);
+            var normalized = requested.Normalize();
+
+            await AppSettingsService.SaveAsync(normalized);
+            ApplyAppSettings(normalized);
+            SetNotification("同期・通知設定を保存しました。", true);
+        }
+        catch (Exception ex)
+        {
+            SetNotification($"同期・通知設定の保存に失敗しました: {ex.Message}", false);
+        }
+        finally
+        {
+            _isAppSettingsSaving = false;
+        }
+    }
+
+    private void ApplyAppSettings(AppSettings settings)
+    {
+        var normalized = (settings ?? AppSettings.Default).Normalize();
+        _syncDebounceSeconds = normalized.SyncDebounceSeconds;
+        _syncRetryInitialSeconds = normalized.SyncRetryInitialSeconds;
+        _syncRetryMaxSeconds = normalized.SyncRetryMaxSeconds;
+        _notificationSuppressSeconds = normalized.NotificationSuppressSeconds;
     }
 
     private async Task OpenLatestErrorLogAsync()
