@@ -4,3 +4,7 @@
 /artifacts
 /tests/**/bin
 /tests/**/obj
+/.vs
+*.cer
+*.pfx
+/src/GameLauncherWithGit/artifacts/msix

@@ -1,0 +1,18 @@
+{
+    "issuerParameters": { "name": "Self" },
+    "x509CertificateProperties": {
+      "subject": "CN=MonochromeMemory",
+      "validityInMonths": 1200,
+      "ekus": [ "1.3.6.1.5.5.7.3.3" ],
+      "keyUsage": [ "digitalSignature" ]
+    },
+    "keyProperties": {
+      "exportable": true,
+      "keyType": "RSA",
+      "keySize": 2048,
+      "reuseKey": false
+    },
+    "secretProperties": {
+      "contentType": "application/x-pkcs12"
+    }
+  }
