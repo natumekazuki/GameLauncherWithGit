@@ -13,7 +13,7 @@ public static class MauiProgram
 	public static MauiApp CreateMauiApp()
 	{
 		var builder = MauiApp.CreateBuilder();
-		var logsDirectoryPath = Path.Combine(AppDataPaths.BaseDirectory, "logs");
+		var logsDirectoryPath = Path.Combine(FileSystem.AppDataDirectory, "logs");
 		var structuredLogPath = Path.Combine(logsDirectoryPath, "app-events.jsonl");
 
 		builder
