@@ -48,6 +48,8 @@ flowchart LR
 - `TrayService`
   - Win32トレイアイコン（`Shell_NotifyIcon`）で同期状態を表示（待機/同期中/エラー停止）
   - エラー停止時はトレイバルーンで注意喚起
+  - 右クリックメニュー（今すぐ同期 / 設定 / ログを開く / 終了）を提供
+  - `WM_CLOSE` 捕捉により「閉じる=非表示、終了=明示操作のみ」を実現
 - `ThumbnailService`
   - 画像を長辺 512px の PNG に変換して `%AppData%/thumbnails` に保存
 - `PathPickerService`
@@ -56,6 +58,8 @@ flowchart LR
 - `LogAccessService`
   - `MonochromeMemory.Log` を使って `%AppData%/logs/app-events.jsonl` へ構造化エラーログを記録
   - 最新エラーログ/ログフォルダをOSシェルで開く
+- `SettingsPanelService`
+  - トレイメニューなどUI外部から設定モーダルを開くためのイベントブリッジ
 - `GameLibraryStore (SQLite)`
   - ゲーム設定（タイトル/実行ファイル/関連リポジトリ/サムネイルパス/状態）をSQLiteへ保存・読込
 
@@ -133,6 +137,7 @@ sequenceDiagram
 | RepositoryStateStore | Singleton | リポジトリ状態共有のため |
 | NotificationService | Singleton | 通知抑制状態を共有するため |
 | TrayService | Singleton | アプリ全体でトレイを単一管理するため |
+| SettingsPanelService | Singleton | トレイなど外部導線から設定モーダル表示要求を共有するため |
 | AutoStartService | Singleton | Windows Runキーの自動起動設定を集約するため |
 | LogAccessService | Singleton | ログ記録とログ表示導線を共有するため |
 | GitService | Transient | コマンド実行を独立単位で扱うため |
@@ -194,8 +199,11 @@ sequenceDiagram
   - Home で `ErrorPaused` を検知したゲームカードに「再開」ボタンを表示し、手動で即時同期再開可能
   - NotificationService のWindows通知実装（重複抑制・失敗時フォールバック）
   - TrayService のトレイ状態表示実装（Win32 `Shell_NotifyIcon`）
+  - TrayService のトレイメニュー実装（今すぐ同期 / 設定 / ログを開く / 終了）
+  - TrayService の `WM_CLOSE` 捕捉による常駐継続（閉じる時は非表示、終了は明示操作のみ）
   - SyncOrchestrator から通知/トレイ更新を連携（失敗通知と状態反映）
   - LogAccessService の `MonochromeMemory.Log` 連携（`app-events.jsonl` 出力）
+  - `SettingsPanelService` によるトレイ→設定モーダル導線
   - Windows 実行/配布スクリプト（`scripts/run-local-unpackaged.ps1` / `scripts/publish-windows-msix.ps1`）
 - 未実装
   - 設定永続化（`settings.json`）とログ画面/運用導線

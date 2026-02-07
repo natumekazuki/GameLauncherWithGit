@@ -43,6 +43,7 @@ public static class MauiProgram
 
 		builder.Services.AddSingleton<IRepositoryStateStore, RepositoryStateStore>();
 		builder.Services.AddSingleton<IGameLibraryStore, SqliteGameLibraryStore>();
+		builder.Services.AddSingleton<ISettingsPanelService, SettingsPanelService>();
 		builder.Services.AddSingleton<ISyncOrchestrator, SyncOrchestrator>();
 		builder.Services.AddSingleton<IRepositoryWatcherService, RepositoryWatcherService>();
 		builder.Services.AddSingleton<INotificationService, NotificationService>();

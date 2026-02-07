@@ -9,6 +9,7 @@
 @inject IRepositoryWatcherService RepositoryWatcherService
 @inject ISyncOrchestrator SyncOrchestrator
 @inject IRepositoryStateStore RepositoryStateStore
+@inject ISettingsPanelService SettingsPanelService
 
 <PageTitle>GameLauncherWithGit</PageTitle>
 
@@ -274,6 +275,11 @@ else
     private readonly Dictionary<string, string> _thumbnailDataUriCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenSource _stateRefreshCts = new();
     private Task? _stateRefreshTask;
+
+    protected override void OnInitialized()
+    {
+        SettingsPanelService.OpenRequested += OnSettingsOpenRequested;
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -672,6 +678,7 @@ else
 
     public void Dispose()
     {
+        SettingsPanelService.OpenRequested -= OnSettingsOpenRequested;
         _stateRefreshCts.Cancel();
         _stateRefreshCts.Dispose();
         UnregisterAllWatchers();
@@ -937,5 +944,25 @@ else
         return value
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .FirstOrDefault(static line => !string.IsNullOrWhiteSpace(line));
+    }
+
+    private void OnSettingsOpenRequested(object? sender, EventArgs e)
+    {
+        _ = InvokeAsync(async () =>
+        {
+            if (_isStartupChecking || !_isGitReady)
+            {
+                return;
+            }
+
+            if (_isSettingsOpen)
+            {
+                StateHasChanged();
+                return;
+            }
+
+            await OpenSettingsAsync();
+            StateHasChanged();
+        });
     }
 }
