@@ -335,23 +335,6 @@ h1:focus {
     background: #38301a;
 }
 
-.add-card {
-    border-style: dashed;
-    color: #2f3f59;
-    align-items: center;
-    text-align: center;
-    gap: 0.2rem;
-}
-
-.add-icon {
-    font-size: 2rem;
-    line-height: 1;
-}
-
-.add-label {
-    font-weight: 700;
-}
-
 .loading-card {
     align-items: center;
     justify-content: center;
@@ -600,12 +583,6 @@ a,
     border-color: #2f3c56;
     background: #121b2b;
     color: #7e8da8;
-}
-
-.add-card {
-    border-color: #3d5174;
-    color: #dbe7ff;
-    background: linear-gradient(165deg, rgba(30, 43, 66, 0.9), rgba(17, 26, 40, 0.95));
 }
 
 .loading-card {

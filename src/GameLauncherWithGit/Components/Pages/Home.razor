@@ -44,6 +44,12 @@
         </div>
         <button type="button"
                 class="secondary-button utility-button"
+                @onclick="OpenCreateEditor"
+                disabled="@(!_isGitReady)">
+            + 新規追加
+        </button>
+        <button type="button"
+                class="secondary-button utility-button"
                 @onclick="OpenSettingsAsync">
             環境設定
         </button>
@@ -71,11 +77,6 @@ else
 {
     <section class="library-page">
         <div class="game-grid" style="@GetGameGridStyle()">
-            <button type="button" class="game-card add-card" @onclick="OpenCreateEditor">
-                <span class="add-icon">+</span>
-                <span class="add-label">新規追加</span>
-            </button>
-
             @if (_games is null)
             {
                 <div class="game-card loading-card">読み込み中...</div>
