@@ -135,8 +135,20 @@ else
                             }
 
                             <div class="game-card-actions">
-                                <button type="button" class="launch-button" @onclick="() => LaunchAsync(game.Id)">▶ 起動</button>
-                                <button type="button" class="secondary-button" @onclick="() => OpenEditEditor(game)">設定</button>
+                                <button type="button"
+                                        class="launch-button action-icon-button"
+                                        @onclick="() => LaunchAsync(game.Id)"
+                                        title="起動"
+                                        aria-label="起動">
+                                    <span class="launch-icon" aria-hidden="true"></span>
+                                </button>
+                                <button type="button"
+                                        class="secondary-button action-icon-button"
+                                        @onclick="() => OpenEditEditor(game)"
+                                        title="設定"
+                                        aria-label="設定">
+                                    <span class="settings-icon" aria-hidden="true"></span>
+                                </button>
                                 <button type="button"
                                         class="secondary-button pin-toggle-button @(game.IsPinned ? "pin-toggle-active" : string.Empty)"
                                         @onclick="() => TogglePinnedAsync(game)"

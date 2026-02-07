@@ -286,6 +286,28 @@ h1:focus {
     justify-content: center;
 }
 
+.action-icon-button {
+    min-width: 2.3rem;
+    width: 2.3rem;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.launch-icon::before {
+    content: "\25B6";
+    font-size: 0.92rem;
+    line-height: 1;
+    margin-left: 0.08rem;
+}
+
+.settings-icon::before {
+    content: "\2699";
+    font-size: 1rem;
+    line-height: 1;
+}
+
 .pin-toggle-icon::before {
     content: "\1F4CC";
     font-size: 1rem;
