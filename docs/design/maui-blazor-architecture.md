@@ -21,7 +21,7 @@ flowchart LR
     APP --> CORE["Domain/Core\n(Entities / Policies / State)"]
     APP --> INFRA["Infrastructure\n(Git / Watcher / Storage / Thumbnail)"]
     APP --> WIN["Windows Bridge\n(Tray / Toast / AutoStart)"]
-    INFRA --> FS["FileSystem\n(%AppData% / Repo Paths)"]
+    INFRA --> FS["FileSystem\n(%LocalAppData%/GameLauncherWithGit / Repo Paths)"]
     INFRA --> GIT["git.exe"]
     WIN --> OS["Windows 11 APIs"]
 ```
@@ -51,15 +51,15 @@ flowchart LR
   - 右クリックメニュー（今すぐ同期 / 設定 / ログを開く / 終了）を提供
   - `WM_CLOSE` 捕捉により「閉じる=非表示、終了=明示操作のみ」を実現
 - `ThumbnailService`
-  - 画像を長辺 512px の PNG に変換して `%AppData%/thumbnails` に保存
+  - 画像を長辺 512px の PNG に変換して `%LocalAppData%/GameLauncherWithGit/thumbnails` に保存
 - `PathPickerService`
   - 実行ファイル、サムネイル画像、関連リポジトリフォルダの選択をOSピッカー経由で提供
   - UI層から Windows API へ直接依存しないための抽象境界を維持
 - `LogAccessService`
-  - `MonochromeMemory.Log` を使って `%AppData%/logs/app-events.jsonl` へ構造化エラーログを記録
+  - `MonochromeMemory.Log` を使って `%LocalAppData%/GameLauncherWithGit/logs/app-events.jsonl` へ構造化エラーログを記録
   - 最新エラーログ/ログフォルダをOSシェルで開く
 - `AppSettingsService`
-  - `%AppData%/settings.json` を読込/保存し、同期/通知の運用設定を管理
+  - `%LocalAppData%/GameLauncherWithGit/settings.json` を読込/保存し、同期/通知の運用設定を管理
 - `SettingsPanelService`
   - トレイメニューなどUI外部から設定モーダルを開くためのイベントブリッジ
 - `GameLibraryStore (SQLite)`
@@ -148,7 +148,7 @@ sequenceDiagram
 | LauncherService | Scoped | 画面操作からの起動処理単位で扱うため |
 
 ## 9. 永続化
-- 保存先: `%AppData%/GameLauncherWithGit/`
+- 保存先: `%LocalAppData%/GameLauncherWithGit/`
 - 保存対象
   - `game-library.db`: ゲーム設定（タイトル、実行ファイル、関連リポジトリ、サムネイルパス、状態、最終プレイ日時）
   - `settings.json`: 同期/通知設定（デバウンス秒、再試行初期秒、再試行最大秒、通知抑制秒）
@@ -187,7 +187,7 @@ sequenceDiagram
   - `settings.json` 永続化（同期デバウンス秒、再試行初期/最大秒、通知抑制秒）
   - ゲーム登録/編集モーダル（タイトル/実行ファイル/関連リポジトリ）
   - ゲーム登録/編集モーダルのサムネイル画像選択（参照/解除）
-  - `ThumbnailService` の実装（長辺512px・PNG変換、`%AppData%/thumbnails` 保存）
+  - `ThumbnailService` の実装（長辺512px・PNG変換、`%LocalAppData%/GameLauncherWithGit/thumbnails` 保存）
   - サムネイル登録済みカードの表示モード切替（文字情報非表示、画像+操作ボタンのみ表示）
   - パス選択UI（実行ファイル参照、関連リポジトリフォルダ追加）
   - 単一リポジトリ選択UI（フォルダ選択/解除、手入力なし）

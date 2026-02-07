@@ -25,7 +25,7 @@
         <ApplicationTitle>GameLauncherWithGit</ApplicationTitle>
 
         <!-- App Identifier -->
-        <ApplicationId>com.companyname.gamelauncherwithgit</ApplicationId>
+        <ApplicationId>com.monochromememory.gamelauncherwithgit</ApplicationId>
 
         <!-- Versions -->
         <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>

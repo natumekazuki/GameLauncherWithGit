@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using GameLauncherWithGit;
 using GameLauncherWithGit.Infrastructure.Abstractions;
 using Microsoft.Extensions.Logging;
 using MonochromeMemory.Log.Core;
@@ -24,7 +25,7 @@ public sealed class LogAccessService : ILogAccessService
 	{
 		_logDispatcher = logDispatcher;
 		_logger = logger;
-		_logsDirectoryPath = Path.Combine(FileSystem.AppDataDirectory, LogsDirectoryName);
+		_logsDirectoryPath = Path.Combine(AppDataPaths.BaseDirectory, LogsDirectoryName);
 		_structuredLogPath = Path.Combine(_logsDirectoryPath, StructuredLogFileName);
 		_resource = BuildResource();
 	}

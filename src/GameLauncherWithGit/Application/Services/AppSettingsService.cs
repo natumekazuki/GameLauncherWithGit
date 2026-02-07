@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using GameLauncherWithGit;
 using GameLauncherWithGit.Application.Abstractions;
 using GameLauncherWithGit.Application.Models;
 using Microsoft.Extensions.Logging;
@@ -24,7 +25,7 @@ public sealed class AppSettingsService : IAppSettingsService
 	public AppSettingsService(ILogger<AppSettingsService> logger)
 	{
 		_logger = logger;
-		_settingsFilePath = Path.Combine(FileSystem.AppDataDirectory, SettingsFileName);
+		_settingsFilePath = Path.Combine(AppDataPaths.BaseDirectory, SettingsFileName);
 	}
 
 	public AppSettings Get()

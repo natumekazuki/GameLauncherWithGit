@@ -1,3 +1,4 @@
+using GameLauncherWithGit;
 using GameLauncherWithGit.Infrastructure.Abstractions;
 using Microsoft.Extensions.Logging;
 using SkiaSharp;
@@ -13,7 +14,7 @@ public sealed class ThumbnailService : IThumbnailService
 	public ThumbnailService(ILogger<ThumbnailService> logger)
 	{
 		_logger = logger;
-		_thumbnailDirectoryPath = Path.Combine(FileSystem.AppDataDirectory, "thumbnails");
+		_thumbnailDirectoryPath = Path.Combine(AppDataPaths.BaseDirectory, "thumbnails");
 	}
 
 	public Task<string?> CreateThumbnailAsync(

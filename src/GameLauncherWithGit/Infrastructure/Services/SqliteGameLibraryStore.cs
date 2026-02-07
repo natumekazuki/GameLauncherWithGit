@@ -1,3 +1,4 @@
+using GameLauncherWithGit;
 using GameLauncherWithGit.Application.Models;
 using GameLauncherWithGit.Infrastructure.Abstractions;
 using Microsoft.Data.Sqlite;
@@ -19,7 +20,7 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore
 	public SqliteGameLibraryStore(ILogger<SqliteGameLibraryStore> logger)
 	{
 		_logger = logger;
-		_databasePath = Path.Combine(FileSystem.AppDataDirectory, DatabaseFileName);
+		_databasePath = Path.Combine(AppDataPaths.BaseDirectory, DatabaseFileName);
 	}
 
 	public async Task<IReadOnlyList<GameCardItem>> GetAllAsync(CancellationToken cancellationToken = default)
