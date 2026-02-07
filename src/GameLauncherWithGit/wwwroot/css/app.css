@@ -929,13 +929,48 @@ a,
     color: #90a6c7;
     font-size: 0.76rem;
     word-break: break-all;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.55rem;
 }
 
-.settings-log-detail {
-    margin: 0.5rem 0 0;
+.settings-log-meta-item {
+    border: 1px solid #31455f;
+    border-radius: 999px;
+    background: rgba(17, 29, 47, 0.9);
+    padding: 0.1rem 0.45rem;
+}
+
+.settings-log-details {
+    margin-top: 0.45rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.settings-log-detail-block {
     border: 1px solid #2c405f;
     border-radius: 8px;
     background: #0a1220;
+    overflow: hidden;
+}
+
+.settings-log-detail-block > summary {
+    cursor: pointer;
+    color: #9eb4d8;
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 0.3rem 0.45rem;
+    border-bottom: 1px solid #22324a;
+    list-style: none;
+}
+
+.settings-log-detail-block[open] > summary {
+    background: rgba(27, 41, 63, 0.95);
+}
+
+.settings-log-detail {
+    margin: 0;
     color: #c8d7ee;
     padding: 0.45rem;
     font-size: 0.74rem;

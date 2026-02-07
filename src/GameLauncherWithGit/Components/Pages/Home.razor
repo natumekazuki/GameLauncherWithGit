@@ -308,7 +308,7 @@ else
                     <input type="text"
                            @bind="_logViewerKeyword"
                            @bind:event="oninput"
-                           placeholder="メッセージ / TraceId"
+                           placeholder="メッセージ / TraceId / repo / command"
                            disabled="@(_isSettingsLoading || _isLogLoading)" />
                 </label>
                 <div class="editor-actions">
@@ -351,15 +351,51 @@ else
                                 </div>
                                 <p class="settings-log-message">@entry.Message</p>
                                 <p class="settings-log-meta">
-                                    @entry.Name
+                                    <span class="settings-log-meta-item">name: @entry.Name</span>
                                     @if (!string.IsNullOrWhiteSpace(entry.TraceId))
                                     {
-                                        <span> / TraceId: @entry.TraceId</span>
+                                        <span class="settings-log-meta-item">traceId: @entry.TraceId</span>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(entry.RepositoryId))
+                                    {
+                                        <span class="settings-log-meta-item">repo: @entry.RepositoryId</span>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(entry.Command))
+                                    {
+                                        <span class="settings-log-meta-item">command: @entry.Command</span>
+                                    }
+                                    @if (entry.ExitCode.HasValue)
+                                    {
+                                        <span class="settings-log-meta-item">exitCode: @entry.ExitCode.Value</span>
                                     }
                                 </p>
-                                @if (!string.IsNullOrWhiteSpace(entry.Detail))
+                                @if (!string.IsNullOrWhiteSpace(entry.Detail)
+                                     || !string.IsNullOrWhiteSpace(entry.StandardOutput)
+                                     || !string.IsNullOrWhiteSpace(entry.StandardError))
                                 {
-                                    <pre class="settings-log-detail">@entry.Detail</pre>
+                                    <div class="settings-log-details">
+                                        @if (!string.IsNullOrWhiteSpace(entry.Detail))
+                                        {
+                                            <details class="settings-log-detail-block">
+                                                <summary>detail</summary>
+                                                <pre class="settings-log-detail">@entry.Detail</pre>
+                                            </details>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(entry.StandardOutput))
+                                        {
+                                            <details class="settings-log-detail-block">
+                                                <summary>stdout</summary>
+                                                <pre class="settings-log-detail">@entry.StandardOutput</pre>
+                                            </details>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(entry.StandardError))
+                                        {
+                                            <details class="settings-log-detail-block">
+                                                <summary>stderr</summary>
+                                                <pre class="settings-log-detail">@entry.StandardError</pre>
+                                            </details>
+                                        }
+                                    </div>
                                 }
                             </article>
                         }
@@ -822,10 +858,21 @@ else
         foreach (var entry in _logViewerEntries)
         {
             lines.Add($"{FormatLogTimestamp(entry.Timestamp)} [{entry.Severity}] {entry.Message}");
-            lines.Add($"name={entry.Name}, traceId={entry.TraceId ?? "n/a"}");
+            lines.Add(
+                $"name={entry.Name}, traceId={entry.TraceId ?? "n/a"}, repo={entry.RepositoryId ?? "n/a"}, command={entry.Command ?? "n/a"}, exitCode={(entry.ExitCode?.ToString() ?? "n/a")}");
             if (!string.IsNullOrWhiteSpace(entry.Detail))
             {
-                lines.Add(entry.Detail);
+                lines.Add($"detail: {entry.Detail}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(entry.StandardOutput))
+            {
+                lines.Add($"stdout: {entry.StandardOutput}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(entry.StandardError))
+            {
+                lines.Add($"stderr: {entry.StandardError}");
             }
 
             lines.Add(string.Empty);
