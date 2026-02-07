@@ -1,0 +1,1917 @@
+@page "/"
+@implements IDisposable
+@inject IGameLibraryService GameLibraryService
+@inject ILauncherService LauncherService
+@inject IPathPickerService PathPickerService
+@inject IGitService GitService
+@inject IAutoStartService AutoStartService
+@inject IAppSettingsService AppSettingsService
+@inject ILogAccessService LogAccessService
+@inject IRepositoryWatcherService RepositoryWatcherService
+@inject ISyncOrchestrator SyncOrchestrator
+@inject IRepositoryStateStore RepositoryStateStore
+@inject ISettingsPanelService SettingsPanelService
+@inject IRepositorySyncHistoryStore RepositorySyncHistoryStore
+
+<PageTitle>GameLauncherWithGit</PageTitle>
+
+@if (!_isStartupChecking)
+{
+    <section class="utility-bar">
+        <div class="search-control">
+            <input type="search"
+                   class="search-input"
+                   @bind="_gameSearchText"
+                   @bind:event="oninput"
+                   placeholder="ゲームを検索"
+                   aria-label="ゲーム検索" />
+        </div>
+        <div class="card-size-control">
+            <button type="button"
+                    class="secondary-button utility-icon-button"
+                    title="カードサイズを小さくする"
+                    @onclick="DecreaseGameCardSizeAsync"
+                    disabled="@(!_isGitReady || _isCardSizeSaving || _gameCardSizePercent <= AppSettings.GameCardSizePercentMin)">
+                -
+            </button>
+            <span class="card-size-label">@_gameCardSizePercent%</span>
+            <button type="button"
+                    class="secondary-button utility-icon-button"
+                    title="カードサイズを大きくする"
+                    @onclick="IncreaseGameCardSizeAsync"
+                    disabled="@(!_isGitReady || _isCardSizeSaving || _gameCardSizePercent >= AppSettings.GameCardSizePercentMax)">
+                +
+            </button>
+        </div>
+        <button type="button"
+                class="secondary-button utility-button"
+                @onclick="OpenCreateEditor"
+                disabled="@(!_isGitReady)">
+            + 新規追加
+        </button>
+        <button type="button"
+                class="secondary-button utility-button"
+                @onclick="OpenSettingsAsync">
+            環境設定
+        </button>
+    </section>
+}
+
+@if (_isStartupChecking)
+{
+    <section class="library-page startup-check-panel">
+        <p>起動要件を確認しています...</p>
+    </section>
+}
+else if (!_isGitReady)
+{
+    <section class="startup-error-panel">
+        <h1>Git が利用できません</h1>
+        <p>Git のインストールまたは PATH 設定を確認してから、アプリを再起動してください。</p>
+        @if (!string.IsNullOrWhiteSpace(_startupError))
+        {
+            <p class="startup-error-detail">@_startupError</p>
+        }
+    </section>
+}
+else
+{
+    <section class="library-page">
+        <div class="game-grid" style="@GetGameGridStyle()">
+            @if (_games is null)
+            {
+                <div class="game-card loading-card">読み込み中...</div>
+            }
+            else
+            {
+                var filteredGames = GetFilteredGames();
+                if (filteredGames.Count == 0)
+                {
+                    <div class="game-card loading-card">検索条件に一致するゲームがありません。</div>
+                }
+                else
+                {
+                    @foreach (var game in filteredGames)
+                    {
+                        var effectiveStatus = GetEffectiveStatus(game);
+                        var syncHistory = GetSyncHistoryTimeline(game);
+                        var hasThumbnail = HasThumbnail(game);
+                        var thumbnailDataUri = hasThumbnail ? GetThumbnailDataUri(game) : null;
+                        <article class="game-card @(hasThumbnail ? "thumbnail-mode-card" : string.Empty)">
+                            @if (hasThumbnail)
+                            {
+                                <div class="game-thumbnail-panel">
+                                    @if (string.IsNullOrWhiteSpace(thumbnailDataUri))
+                                    {
+                                        <div class="game-thumbnail-missing" title="@game.Title"></div>
+                                    }
+                                    else
+                                    {
+                                        <img class="game-thumbnail-image"
+                                             src="@thumbnailDataUri"
+                                             alt="@($"{game.Title} サムネイル")" />
+                                    }
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="game-card-header">
+                                    <h2>@game.Title</h2>
+                                    <span class="status-badge @GetStatusClass(effectiveStatus)">@GetStatusLabel(effectiveStatus)</span>
+                                </div>
+
+                                <div class="game-card-body">
+                                    <p class="meta-label">実行ファイル</p>
+                                    <p class="meta-value">@game.ExecutablePath</p>
+                                    <p class="meta-label">関連リポジトリ</p>
+                                    @if (string.IsNullOrWhiteSpace(game.RelatedRepositoryPath))
+                                    {
+                                        <p class="meta-value">未設定</p>
+                                    }
+                                    else
+                                    {
+                                        <p class="meta-value">@game.RelatedRepositoryPath</p>
+                                    }
+                                    <p class="meta-label">最終プレイ</p>
+                                    <p class="meta-value">@FormatLastPlayed(game.LastPlayedAt)</p>
+
+                                    <p class="meta-label">同期履歴</p>
+                                    @if (syncHistory.Count == 0)
+                                    {
+                                        <p class="meta-value">履歴なし</p>
+                                    }
+                                    else
+                                    {
+                                        <ul class="sync-timeline-list">
+                                            @foreach (var history in syncHistory)
+                                            {
+                                                <li class="sync-timeline-item @GetSyncHistoryStatusClass(history.Status)">
+                                                    <div class="sync-timeline-head">
+                                                        <span>@GetSyncHistoryStatusLabel(history.Status)</span>
+                                                        <span>@FormatSyncHistoryTimestamp(history.FinishedAt)</span>
+                                                    </div>
+                                                    <p class="sync-timeline-meta">所要時間: @FormatSyncHistoryDuration(history.DurationMs)</p>
+                                                    @if (!string.IsNullOrWhiteSpace(history.Command))
+                                                    {
+                                                        <p class="sync-timeline-meta">command: @history.Command</p>
+                                                    }
+                                                    @if (!string.IsNullOrWhiteSpace(history.Reason))
+                                                    {
+                                                        <p class="sync-timeline-reason">@history.Reason</p>
+                                                    }
+                                                </li>
+                                            }
+                                        </ul>
+                                    }
+                                </div>
+                            }
+
+                            <div class="game-card-actions">
+                                <button type="button"
+                                        class="launch-button action-icon-button"
+                                        @onclick="() => LaunchAsync(game.Id)"
+                                        title="起動"
+                                        aria-label="起動">
+                                    <span class="launch-icon" aria-hidden="true"></span>
+                                </button>
+                                <button type="button"
+                                        class="secondary-button action-icon-button"
+                                        @onclick="() => OpenEditEditor(game)"
+                                        title="設定"
+                                        aria-label="設定">
+                                    <span class="settings-icon" aria-hidden="true"></span>
+                                </button>
+                                <button type="button"
+                                        class="secondary-button pin-toggle-button @(game.IsPinned ? "pin-toggle-active" : string.Empty)"
+                                        @onclick="() => TogglePinnedAsync(game)"
+                                        title="@(game.IsPinned ? "ピン留めを解除" : "ピン留め")"
+                                        aria-label="@(game.IsPinned ? "ピン留めを解除" : "ピン留め")"
+                                        disabled="@IsPinToggleBusy(game)">
+                                    <span class="pin-toggle-icon" aria-hidden="true"></span>
+                                </button>
+                                @if (CanResumeRepositorySync(game))
+                                {
+                                    <button type="button"
+                                            class="secondary-button"
+                                            @onclick="() => ResumeRepositorySyncAsync(game)"
+                                            disabled="@IsRepositoryBusy(game)">
+                                        再開
+                                    </button>
+                                }
+                            </div>
+                        </article>
+                    }
+                }
+            }
+        </div>
+    </section>
+}
+
+<div class="notification-dock" aria-live="polite" aria-atomic="true">
+    @if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <p class="notification-message @GetMessageClass()">@_message</p>
+    }
+</div>
+
+@if (_isSettingsOpen)
+{
+    <div class="editor-overlay" @onclick="() => CloseSettings()">
+        <section class="settings-modal" @onclick:stopPropagation="true">
+            <h2>環境設定</h2>
+
+            <div class="settings-section">
+                <label class="settings-toggle-row">
+                    <span>Windows起動時に自動起動</span>
+                    <input type="checkbox"
+                           checked="@_autoStartEnabled"
+                           @onchange="OnAutoStartChangedAsync"
+                           disabled="@(_isSettingsLoading || _isAutoStartSaving)" />
+                </label>
+                @if (_isSettingsLoading)
+                {
+                    <p class="settings-note">設定を読み込み中...</p>
+                }
+            </div>
+
+            <div class="settings-section">
+                <h3>同期・通知設定</h3>
+                <label class="settings-toggle-row">
+                    <span>変更検知デバウンス秒</span>
+                    <input type="number"
+                           min="1"
+                           max="300"
+                           @bind="_syncDebounceSeconds"
+                           disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                </label>
+                <label class="settings-toggle-row">
+                    <span>再試行 初期待機秒</span>
+                    <input type="number"
+                           min="1"
+                           max="600"
+                           @bind="_syncRetryInitialSeconds"
+                           disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                </label>
+                <label class="settings-toggle-row">
+                    <span>再試行 最大待機秒</span>
+                    <input type="number"
+                           min="1"
+                           max="3600"
+                           @bind="_syncRetryMaxSeconds"
+                           disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                </label>
+                <label class="settings-toggle-row">
+                    <span>通知抑制秒（0で無効）</span>
+                    <input type="number"
+                           min="0"
+                           max="600"
+                           @bind="_notificationSuppressSeconds"
+                           disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                </label>
+                <label class="settings-toggle-row">
+                    <span>ログ保持日数</span>
+                    <input type="number"
+                           min="1"
+                           max="365"
+                           @bind="_logRetentionDays"
+                           disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                </label>
+                <label class="settings-toggle-row">
+                    <span>ログ最大サイズMB</span>
+                    <input type="number"
+                           min="1"
+                           max="1024"
+                           @bind="_logMaxFileSizeMb"
+                           disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                </label>
+                <div class="editor-actions">
+                    <button type="button"
+                            class="launch-button"
+                            @onclick="SaveAppSettingsAsync"
+                            disabled="@(_isSettingsLoading || _isAppSettingsSaving)">
+                        @(_isAppSettingsSaving ? "保存中..." : "設定を保存")
+                    </button>
+                </div>
+            </div>
+
+            <div class="settings-section settings-actions-row">
+                <button type="button"
+                        class="secondary-button"
+                        @onclick="OpenLatestErrorLogAsync"
+                        disabled="@_isSettingsLoading">
+                    最新エラーログを開く
+                </button>
+                <button type="button"
+                        class="secondary-button"
+                        @onclick="OpenLogDirectoryAsync"
+                        disabled="@_isSettingsLoading">
+                    ログフォルダを開く
+                </button>
+            </div>
+
+            <div class="settings-section">
+                <h3>通知センター</h3>
+                <div class="editor-actions">
+                    <button type="button"
+                            class="launch-button"
+                            @onclick="CopyNotificationHistoryAsync"
+                            disabled="@(_isSettingsLoading || _notificationHistoryEntries.Count == 0)">
+                        全件コピー
+                    </button>
+                    <button type="button"
+                            class="secondary-button"
+                            @onclick="ClearNotificationHistory"
+                            disabled="@(_isSettingsLoading || _notificationHistoryEntries.Count == 0)">
+                        履歴クリア
+                    </button>
+                </div>
+                <div class="notification-center-filters">
+                    <label>
+                        <input type="checkbox"
+                               @bind="_showSuccessNotifications"
+                               disabled="@_isSettingsLoading" />
+                        成功を表示
+                    </label>
+                    <label>
+                        <input type="checkbox"
+                               @bind="_showFailedNotifications"
+                               disabled="@_isSettingsLoading" />
+                        失敗を表示
+                    </label>
+                </div>
+                <div class="notification-center-list" role="log">
+                    @{
+                        var filteredNotificationEntries = GetFilteredNotificationHistoryEntries();
+                    }
+                    @if (_notificationHistoryEntries.Count == 0)
+                    {
+                        <p class="notification-center-empty">通知履歴はありません。</p>
+                    }
+                    else if (filteredNotificationEntries.Count == 0)
+                    {
+                        <p class="notification-center-empty">フィルタ条件に一致する通知はありません。</p>
+                    }
+                    else
+                    {
+                        @foreach (var entry in filteredNotificationEntries)
+                        {
+                            <article class="notification-center-item">
+                                <div class="notification-center-item-header">
+                                    <span class="notification-center-time">@FormatNotificationHistoryTimestamp(entry.Timestamp)</span>
+                                    <span class="notification-center-type @GetNotificationHistoryTypeClass(entry.IsSuccess)">
+                                        @GetNotificationHistoryTypeLabel(entry.IsSuccess)
+                                    </span>
+                                </div>
+                                <p class="notification-center-message">@entry.Message</p>
+                            </article>
+                        }
+                    }
+                </div>
+            </div>
+
+            <div class="settings-section">
+                <h3>ログビューア</h3>
+                <div class="settings-log-controls">
+                    <label class="settings-log-control">
+                        <span>表示件数</span>
+                        <input type="number"
+                               min="10"
+                               max="500"
+                               @bind="_logViewerLimit"
+                               disabled="@(_isSettingsLoading || _isLogLoading)" />
+                    </label>
+                    <label class="settings-log-control">
+                        <span>レベル</span>
+                        <select @bind="_logViewerSeverityFilter"
+                                disabled="@(_isSettingsLoading || _isLogLoading)">
+                            <option value="all">すべて</option>
+                            <option value="Critical">Critical</option>
+                            <option value="Error">Error</option>
+                            <option value="Warning">Warning</option>
+                            <option value="Information">Information</option>
+                            <option value="Debug">Debug</option>
+                            <option value="Trace">Trace</option>
+                        </select>
+                    </label>
+                </div>
+                <label class="settings-log-keyword">
+                    <span>キーワード</span>
+                    <input type="text"
+                           @bind="_logViewerKeyword"
+                           @bind:event="oninput"
+                           placeholder="メッセージ / TraceId / repo / command"
+                           disabled="@(_isSettingsLoading || _isLogLoading)" />
+                </label>
+                <div class="editor-actions">
+                    <button type="button"
+                            class="launch-button"
+                            @onclick="LoadLogEntriesAsync"
+                            disabled="@(_isSettingsLoading || _isLogLoading)">
+                        @(_isLogLoading ? "読み込み中..." : "更新")
+                    </button>
+                    <button type="button"
+                            class="secondary-button"
+                            @onclick="CopyLogEntriesAsync"
+                            disabled="@(_isSettingsLoading || _isLogLoading || _logViewerEntries.Count == 0)">
+                        コピー
+                    </button>
+                </div>
+                @if (!string.IsNullOrWhiteSpace(_logViewerError))
+                {
+                    <p class="settings-log-error">@_logViewerError</p>
+                }
+                <div class="settings-log-list" role="log">
+                    @if (_isLogLoading && _logViewerEntries.Count == 0)
+                    {
+                        <p class="settings-log-empty">ログを読み込み中です...</p>
+                    }
+                    else if (_logViewerEntries.Count == 0)
+                    {
+                        <p class="settings-log-empty">表示できるログがありません。</p>
+                    }
+                    else
+                    {
+                        @foreach (var entry in _logViewerEntries)
+                        {
+                            <article class="settings-log-item">
+                                <div class="settings-log-item-header">
+                                    <span class="settings-log-time">@FormatLogTimestamp(entry.Timestamp)</span>
+                                    <span class="settings-log-level @GetLogLevelClass(entry.Severity)">
+                                        @entry.Severity
+                                    </span>
+                                </div>
+                                <p class="settings-log-message">@entry.Message</p>
+                                <p class="settings-log-meta">
+                                    <span class="settings-log-meta-item">name: @entry.Name</span>
+                                    @if (!string.IsNullOrWhiteSpace(entry.TraceId))
+                                    {
+                                        <span class="settings-log-meta-item">traceId: @entry.TraceId</span>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(entry.RepositoryId))
+                                    {
+                                        <span class="settings-log-meta-item">repo: @entry.RepositoryId</span>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(entry.Command))
+                                    {
+                                        <span class="settings-log-meta-item">command: @entry.Command</span>
+                                    }
+                                    @if (entry.ExitCode.HasValue)
+                                    {
+                                        <span class="settings-log-meta-item">exitCode: @entry.ExitCode.Value</span>
+                                    }
+                                </p>
+                                @if (!string.IsNullOrWhiteSpace(entry.Detail)
+                                     || !string.IsNullOrWhiteSpace(entry.StandardOutput)
+                                     || !string.IsNullOrWhiteSpace(entry.StandardError))
+                                {
+                                    <div class="settings-log-details">
+                                        @if (!string.IsNullOrWhiteSpace(entry.Detail))
+                                        {
+                                            <details class="settings-log-detail-block">
+                                                <summary>detail</summary>
+                                                <pre class="settings-log-detail">@entry.Detail</pre>
+                                            </details>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(entry.StandardOutput))
+                                        {
+                                            <details class="settings-log-detail-block">
+                                                <summary>stdout</summary>
+                                                <pre class="settings-log-detail">@entry.StandardOutput</pre>
+                                            </details>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(entry.StandardError))
+                                        {
+                                            <details class="settings-log-detail-block">
+                                                <summary>stderr</summary>
+                                                <pre class="settings-log-detail">@entry.StandardError</pre>
+                                            </details>
+                                        }
+                                    </div>
+                                }
+                            </article>
+                        }
+                    }
+                </div>
+            </div>
+
+            <div class="editor-actions">
+                <button type="button"
+                        class="secondary-button"
+                        @onclick="() => CloseSettings()"
+                        disabled="@(_isSettingsLoading || _isAutoStartSaving || _isAppSettingsSaving || _isCardSizeSaving)">
+                    閉じる
+                </button>
+            </div>
+        </section>
+    </div>
+}
+
+@if (_isDeleteConfirmOpen)
+{
+    <div class="editor-overlay delete-confirm-overlay" @onclick="() => CloseDeleteConfirm()">
+        <section class="delete-confirm-modal" @onclick:stopPropagation="true">
+            <h2>ゲームを削除しますか？</h2>
+            <p class="delete-confirm-title">@_deleteTargetGameTitle</p>
+            <p class="delete-confirm-note">この操作は取り消せません。ゲーム設定と関連サムネイルを削除します。</p>
+            <div class="editor-actions">
+                <button type="button"
+                        class="danger-button"
+                        @onclick="DeleteGameAsync"
+                        disabled="@_isDeleting">
+                    @(_isDeleting ? "削除中..." : "削除する")
+                </button>
+                <button type="button"
+                        class="secondary-button"
+                        @onclick="() => CloseDeleteConfirm()"
+                        disabled="@_isDeleting">
+                    キャンセル
+                </button>
+            </div>
+        </section>
+    </div>
+}
+
+@if (_isGitReady && _isEditorOpen)
+{
+    <div class="editor-overlay" @onclick="() => CloseEditor()">
+        <section class="editor-modal" @onclick:stopPropagation="true">
+            <h2>@(_isEditMode ? "ゲーム編集" : "ゲーム追加")</h2>
+
+            <div class="editor-field">
+                <label for="editor-title">タイトル</label>
+                <input id="editor-title" @bind="_editorTitle" @bind:event="oninput" />
+            </div>
+
+            <div class="editor-field">
+                <label for="editor-executable-path">実行ファイルパス</label>
+                <div class="editor-inline-input">
+                    <input id="editor-executable-path" @bind="_editorExecutablePath" @bind:event="oninput" />
+                    <button type="button" class="secondary-button picker-button" @onclick="PickExecutablePathAsync" disabled="@_isSaving">
+                        参照
+                    </button>
+                </div>
+            </div>
+
+            <div class="editor-field">
+                <label>サムネイル画像</label>
+                <div class="single-repo-picker">
+                    <p class="single-repo-value">@GetThumbnailEditorLabel()</p>
+                    <div class="single-repo-actions">
+                        <button type="button"
+                                class="secondary-button picker-button"
+                                @onclick="PickThumbnailPathAsync"
+                                disabled="@_isSaving">
+                            参照
+                        </button>
+                        <button type="button"
+                                class="secondary-button picker-button"
+                                @onclick="ClearThumbnailSelection"
+                                disabled="@(!CanClearThumbnailSelection() || _isSaving)">
+                            解除
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="editor-field">
+                <label>関連リポジトリ（1件のみ）</label>
+                <div class="single-repo-picker">
+                    <p class="single-repo-value">
+                        @(string.IsNullOrWhiteSpace(_editorRepositoryPath) ? "未設定" : _editorRepositoryPath)
+                    </p>
+                    <div class="single-repo-actions">
+                        <button type="button"
+                                class="secondary-button picker-button"
+                                @onclick="PickRepositoryDirectoryPathAsync"
+                                disabled="@_isSaving">
+                            フォルダ選択
+                        </button>
+                        <button type="button"
+                                class="secondary-button picker-button"
+                                @onclick="ClearRepositoryPath"
+                                disabled="@(_isSaving || string.IsNullOrWhiteSpace(_editorRepositoryPath))">
+                            解除
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="editor-actions">
+                <button type="button" class="launch-button" @onclick="SaveEditorAsync" disabled="@_isSaving">
+                    @(_isSaving ? "保存中..." : "保存")
+                </button>
+                <button type="button" class="secondary-button" @onclick="() => CloseEditor()" disabled="@_isSaving">キャンセル</button>
+                @if (_isEditMode && !string.IsNullOrWhiteSpace(_editingGameId))
+                {
+                    <button type="button"
+                            class="danger-button"
+                            @onclick="OpenDeleteConfirmForEditingGame"
+                            disabled="@(_isSaving || _isDeleting)">
+                        このゲームを削除
+                    </button>
+                }
+            </div>
+        </section>
+    </div>
+}
+
+@code {
+    private const int SyncHistoryTimelineLimit = 3;
+    private const int SyncHistoryRefreshIntervalSeconds = 5;
+    private const int NotificationHistoryMaxEntries = 200;
+
+    private IReadOnlyList<GameCardItem>? _games;
+    private string? _message;
+    private bool? _isLastActionSuccess;
+    private bool _isEditorOpen;
+    private bool _isEditMode;
+    private bool _isSaving;
+    private bool _isDeleteConfirmOpen;
+    private bool _isDeleting;
+    private string? _editingGameId;
+    private string? _deleteTargetGameId;
+    private string _deleteTargetGameTitle = string.Empty;
+    private string _editorTitle = string.Empty;
+    private string _editorExecutablePath = string.Empty;
+    private string? _editorRepositoryPath;
+    private string? _editorThumbnailSourcePath;
+    private bool _editorHasThumbnail;
+    private bool _editorClearThumbnail;
+    private bool _isSettingsOpen;
+    private bool _isSettingsLoading;
+    private bool _isAutoStartSaving;
+    private bool _isAppSettingsSaving;
+    private bool _isCardSizeSaving;
+    private bool _autoStartEnabled;
+    private int _syncDebounceSeconds = AppSettings.Default.SyncDebounceSeconds;
+    private int _syncRetryInitialSeconds = AppSettings.Default.SyncRetryInitialSeconds;
+    private int _syncRetryMaxSeconds = AppSettings.Default.SyncRetryMaxSeconds;
+    private int _notificationSuppressSeconds = AppSettings.Default.NotificationSuppressSeconds;
+    private int _logRetentionDays = AppSettings.Default.LogRetentionDays;
+    private int _logMaxFileSizeMb = AppSettings.Default.LogMaxFileSizeMb;
+    private int _gameCardSizePercent = AppSettings.Default.GameCardSizePercent;
+    private int _logViewerLimit = 100;
+    private string _logViewerSeverityFilter = "all";
+    private string _logViewerKeyword = string.Empty;
+    private string _gameSearchText = string.Empty;
+    private bool _isLogLoading;
+    private string? _logViewerError;
+    private IReadOnlyList<LogViewerEntry> _logViewerEntries = Array.Empty<LogViewerEntry>();
+    private bool _isStartupChecking = true;
+    private bool _isGitReady = true;
+    private string? _startupError;
+    private readonly HashSet<string> _registeredWatcherRepositoryIds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _pinningGameIds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _thumbnailDataUriCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, IReadOnlyList<RepositorySyncHistoryItem>> _syncHistoryByRepository = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<NotificationHistoryEntry> _notificationHistoryEntries = [];
+    private bool _showSuccessNotifications = true;
+    private bool _showFailedNotifications = true;
+    private readonly CancellationTokenSource _stateRefreshCts = new();
+    private Task? _stateRefreshTask;
+
+    protected override void OnInitialized()
+    {
+        SettingsPanelService.OpenRequested += OnSettingsOpenRequested;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _isStartupChecking = true;
+        _isGitReady = true;
+        _startupError = null;
+
+        try
+        {
+            var gitCheckResult = await GitService.RunAsync(AppContext.BaseDirectory, "--version");
+            if (!gitCheckResult.IsSuccess)
+            {
+                _isGitReady = false;
+                _startupError = BuildGitStartupError(gitCheckResult);
+                UnregisterAllWatchers();
+                return;
+            }
+
+            ApplyAppSettings(AppSettingsService.Get());
+            await RunStartupLogMaintenanceAsync();
+            _ = SyncOrchestrator;
+            await ReloadGamesAsync();
+            await RefreshRepositoryWatchersAsync();
+            StartStateRefreshLoop();
+        }
+        finally
+        {
+            _isStartupChecking = false;
+        }
+    }
+
+    private async Task LaunchAsync(string gameId)
+    {
+        SetNotification("起動前同期を実行中です...", null);
+        StateHasChanged();
+
+        var result = await LauncherService.LaunchAsync(gameId);
+        await ReloadGamesAsync();
+        SetNotification(result.Message, result.IsSuccess);
+    }
+
+    private async Task OpenSettingsAsync()
+    {
+        _isSettingsOpen = true;
+        await LoadSettingsAsync();
+    }
+
+    private void CloseSettings(bool force = false)
+    {
+        if ((_isSettingsLoading || _isAutoStartSaving || _isAppSettingsSaving || _isCardSizeSaving) && !force)
+        {
+            return;
+        }
+
+        _isSettingsOpen = false;
+    }
+
+    private async Task LoadSettingsAsync()
+    {
+        _isSettingsLoading = true;
+        try
+        {
+            _autoStartEnabled = await AutoStartService.IsEnabledAsync();
+            ApplyAppSettings(AppSettingsService.Get());
+            await LoadLogEntriesAsync();
+        }
+        catch (Exception ex)
+        {
+            SetNotification($"設定の読み込みに失敗しました: {ex.Message}", false);
+        }
+        finally
+        {
+            _isSettingsLoading = false;
+        }
+    }
+
+    private async Task OnAutoStartChangedAsync(ChangeEventArgs args)
+    {
+        var enabled = ParseCheckboxValue(args);
+        _isAutoStartSaving = true;
+
+        try
+        {
+            await AutoStartService.SetEnabledAsync(enabled);
+            _autoStartEnabled = enabled;
+            SetNotification(enabled ? "自動起動を有効化しました。" : "自動起動を無効化しました。", true);
+        }
+        catch (Exception ex)
+        {
+            SetNotification($"自動起動設定の更新に失敗しました: {ex.Message}", false);
+            try
+            {
+                _autoStartEnabled = await AutoStartService.IsEnabledAsync();
+            }
+            catch
+            {
+                _autoStartEnabled = false;
+            }
+        }
+        finally
+        {
+            _isAutoStartSaving = false;
+        }
+    }
+
+    private async Task SaveAppSettingsAsync()
+    {
+        _isAppSettingsSaving = true;
+        try
+        {
+            await SaveCurrentAppSettingsAsync();
+            SetNotification("設定を保存しました。", true);
+        }
+        catch (Exception ex)
+        {
+            SetNotification($"同期・通知設定の保存に失敗しました: {ex.Message}", false);
+        }
+        finally
+        {
+            _isAppSettingsSaving = false;
+        }
+    }
+
+    private void ApplyAppSettings(AppSettings settings)
+    {
+        var normalized = (settings ?? AppSettings.Default).Normalize();
+        _syncDebounceSeconds = normalized.SyncDebounceSeconds;
+        _syncRetryInitialSeconds = normalized.SyncRetryInitialSeconds;
+        _syncRetryMaxSeconds = normalized.SyncRetryMaxSeconds;
+        _notificationSuppressSeconds = normalized.NotificationSuppressSeconds;
+        _logRetentionDays = normalized.LogRetentionDays;
+        _logMaxFileSizeMb = normalized.LogMaxFileSizeMb;
+        _gameCardSizePercent = normalized.GameCardSizePercent;
+    }
+
+    private async Task SaveCurrentAppSettingsAsync()
+    {
+        var requested = new AppSettings(
+            SyncDebounceSeconds: _syncDebounceSeconds,
+            SyncRetryInitialSeconds: _syncRetryInitialSeconds,
+            SyncRetryMaxSeconds: _syncRetryMaxSeconds,
+            NotificationSuppressSeconds: _notificationSuppressSeconds,
+            LogRetentionDays: _logRetentionDays,
+            LogMaxFileSizeMb: _logMaxFileSizeMb,
+            GameCardSizePercent: _gameCardSizePercent);
+        var normalized = requested.Normalize();
+
+        await AppSettingsService.SaveAsync(normalized);
+        ApplyAppSettings(normalized);
+    }
+
+    private Task DecreaseGameCardSizeAsync()
+    {
+        return AdjustGameCardSizeAsync(-10);
+    }
+
+    private Task IncreaseGameCardSizeAsync()
+    {
+        return AdjustGameCardSizeAsync(10);
+    }
+
+    private async Task AdjustGameCardSizeAsync(int delta)
+    {
+        if (_isCardSizeSaving)
+        {
+            return;
+        }
+
+        var next = Math.Clamp(
+            _gameCardSizePercent + delta,
+            AppSettings.GameCardSizePercentMin,
+            AppSettings.GameCardSizePercentMax);
+        if (next == _gameCardSizePercent)
+        {
+            return;
+        }
+
+        var previous = _gameCardSizePercent;
+        _gameCardSizePercent = next;
+        _isCardSizeSaving = true;
+
+        try
+        {
+            await SaveCurrentAppSettingsAsync();
+        }
+        catch (Exception ex)
+        {
+            _gameCardSizePercent = previous;
+            SetNotification($"カードサイズ設定の保存に失敗しました: {ex.Message}", false);
+        }
+        finally
+        {
+            _isCardSizeSaving = false;
+        }
+    }
+
+    private string GetGameGridStyle()
+    {
+        var scale = _gameCardSizePercent / 100d;
+        var scaleText = scale.ToString("0.00", global::System.Globalization.CultureInfo.InvariantCulture);
+        return $"--game-card-scale:{scaleText};";
+    }
+
+    private async Task OpenLatestErrorLogAsync()
+    {
+        try
+        {
+            await LogAccessService.OpenLatestErrorLogAsync();
+            SetNotification("最新エラーログを開きました。", true);
+        }
+        catch (Exception ex)
+        {
+            SetNotification(ex.Message, false);
+        }
+    }
+
+    private async Task OpenLogDirectoryAsync()
+    {
+        try
+        {
+            await LogAccessService.OpenLogDirectoryAsync();
+            SetNotification("ログフォルダを開きました。", true);
+        }
+        catch (Exception ex)
+        {
+            SetNotification(ex.Message, false);
+        }
+    }
+
+    private async Task RunStartupLogMaintenanceAsync()
+    {
+        try
+        {
+            await LogAccessService.MaintainLogFilesAsync();
+        }
+        catch (Exception ex)
+        {
+            SetNotification($"ログメンテナンスに失敗しました: {ex.Message}", false);
+        }
+    }
+
+    private async Task LoadLogEntriesAsync()
+    {
+        if (_isLogLoading)
+        {
+            return;
+        }
+
+        _isLogLoading = true;
+        _logViewerError = null;
+
+        try
+        {
+            var severity = ParseLogSeverityFilter(_logViewerSeverityFilter);
+            _logViewerEntries = await LogAccessService.GetLatestEntriesAsync(
+                _logViewerLimit,
+                severity,
+                _logViewerKeyword);
+        }
+        catch (Exception ex)
+        {
+            _logViewerEntries = Array.Empty<LogViewerEntry>();
+            _logViewerError = $"ログ読み込みに失敗しました。詳細: {ex.Message}";
+            SetNotification(_logViewerError, false);
+        }
+        finally
+        {
+            _isLogLoading = false;
+        }
+    }
+
+    private async Task CopyLogEntriesAsync()
+    {
+        if (_logViewerEntries.Count == 0)
+        {
+            SetNotification("コピー対象のログがありません。", false);
+            return;
+        }
+
+        var lines = new List<string>(_logViewerEntries.Count * 3);
+        foreach (var entry in _logViewerEntries)
+        {
+            lines.Add($"{FormatLogTimestamp(entry.Timestamp)} [{entry.Severity}] {entry.Message}");
+            lines.Add(
+                $"name={entry.Name}, traceId={entry.TraceId ?? "n/a"}, repo={entry.RepositoryId ?? "n/a"}, command={entry.Command ?? "n/a"}, exitCode={(entry.ExitCode?.ToString() ?? "n/a")}");
+            if (!string.IsNullOrWhiteSpace(entry.Detail))
+            {
+                lines.Add($"detail: {entry.Detail}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(entry.StandardOutput))
+            {
+                lines.Add($"stdout: {entry.StandardOutput}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(entry.StandardError))
+            {
+                lines.Add($"stderr: {entry.StandardError}");
+            }
+
+            lines.Add(string.Empty);
+        }
+
+        try
+        {
+            await Clipboard.Default.SetTextAsync(string.Join(Environment.NewLine, lines));
+            SetNotification("ログをクリップボードにコピーしました。", true);
+        }
+        catch (Exception ex)
+        {
+            SetNotification($"ログコピーに失敗しました: {ex.Message}", false);
+        }
+    }
+
+    private static Microsoft.Extensions.Logging.LogLevel? ParseLogSeverityFilter(string? filter)
+    {
+        if (string.IsNullOrWhiteSpace(filter)
+            || string.Equals(filter, "all", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return Enum.TryParse<Microsoft.Extensions.Logging.LogLevel>(filter, ignoreCase: true, out var severity)
+            ? severity
+            : null;
+    }
+
+    private static string FormatLogTimestamp(DateTimeOffset value)
+    {
+        return value.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss");
+    }
+
+    private static string GetLogLevelClass(Microsoft.Extensions.Logging.LogLevel level)
+    {
+        return level switch
+        {
+            Microsoft.Extensions.Logging.LogLevel.Critical => "settings-log-level-critical",
+            Microsoft.Extensions.Logging.LogLevel.Error => "settings-log-level-error",
+            Microsoft.Extensions.Logging.LogLevel.Warning => "settings-log-level-warning",
+            Microsoft.Extensions.Logging.LogLevel.Information => "settings-log-level-information",
+            Microsoft.Extensions.Logging.LogLevel.Debug => "settings-log-level-debug",
+            Microsoft.Extensions.Logging.LogLevel.Trace => "settings-log-level-trace",
+            _ => "settings-log-level-none"
+        };
+    }
+
+    private void OpenCreateEditor()
+    {
+        _isEditMode = false;
+        _editingGameId = null;
+        _editorTitle = string.Empty;
+        _editorExecutablePath = string.Empty;
+        _editorRepositoryPath = null;
+        _editorThumbnailSourcePath = null;
+        _editorHasThumbnail = false;
+        _editorClearThumbnail = false;
+        _isEditorOpen = true;
+    }
+
+    private void OpenDeleteConfirm(string gameId, string gameTitle)
+    {
+        _deleteTargetGameId = gameId;
+        _deleteTargetGameTitle = gameTitle;
+        _isDeleteConfirmOpen = true;
+    }
+
+    private void OpenDeleteConfirmForEditingGame()
+    {
+        if (!_isEditMode || string.IsNullOrWhiteSpace(_editingGameId))
+        {
+            SetNotification("削除対象が不正です。", false);
+            return;
+        }
+
+        OpenDeleteConfirm(_editingGameId, _editorTitle);
+    }
+
+    private void CloseDeleteConfirm(bool force = false)
+    {
+        if (_isDeleting && !force)
+        {
+            return;
+        }
+
+        _isDeleteConfirmOpen = false;
+        _deleteTargetGameId = null;
+        _deleteTargetGameTitle = string.Empty;
+    }
+
+    private void OpenEditEditor(GameCardItem game)
+    {
+        _isEditMode = true;
+        _editingGameId = game.Id;
+        _editorTitle = game.Title;
+        _editorExecutablePath = game.ExecutablePath;
+        _editorRepositoryPath = game.RelatedRepositoryPath;
+        _editorThumbnailSourcePath = null;
+        _editorHasThumbnail = HasThumbnail(game);
+        _editorClearThumbnail = false;
+        _isEditorOpen = true;
+    }
+
+    private async Task DeleteGameAsync()
+    {
+        if (_isDeleting)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_deleteTargetGameId))
+        {
+            SetNotification("削除対象が不正です。", false);
+            return;
+        }
+
+        _isDeleting = true;
+        var targetGameId = _deleteTargetGameId;
+        var targetTitle = _deleteTargetGameTitle;
+        try
+        {
+            var deleted = await GameLibraryService.DeleteAsync(targetGameId);
+            if (!deleted)
+            {
+                SetNotification("削除対象のゲームが見つかりません。", false);
+                return;
+            }
+
+            if (_isEditorOpen
+                && !string.IsNullOrWhiteSpace(_editingGameId)
+                && string.Equals(_editingGameId, targetGameId, StringComparison.OrdinalIgnoreCase))
+            {
+                CloseEditor(force: true);
+            }
+
+            await ReloadGamesAsync();
+            await RefreshRepositoryWatchersAsync();
+            SetNotification($"ゲームを削除しました: {targetTitle}", true);
+            CloseDeleteConfirm(force: true);
+        }
+        catch (Exception ex)
+        {
+            SetNotification($"ゲーム削除に失敗しました: {ex.Message}", false);
+        }
+        finally
+        {
+            _isDeleting = false;
+        }
+    }
+
+    private void CloseEditor(bool force = false)
+    {
+        if (_isSaving && !force)
+        {
+            return;
+        }
+
+        _isEditorOpen = false;
+    }
+
+    private async Task SaveEditorAsync()
+    {
+        var shouldCloseEditor = false;
+
+        if (string.IsNullOrWhiteSpace(_editorTitle))
+        {
+            SetNotification("タイトルは必須です。", false);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_editorExecutablePath))
+        {
+            SetNotification("実行ファイルパスは必須です。", false);
+            return;
+        }
+
+        var input = new GameEditInput(
+            Title: _editorTitle,
+            ExecutablePath: _editorExecutablePath,
+            RelatedRepositoryPath: _editorRepositoryPath,
+            ThumbnailSourcePath: _editorThumbnailSourcePath,
+            ClearThumbnail: _editorClearThumbnail);
+
+        _isSaving = true;
+        try
+        {
+            if (_isEditMode)
+            {
+                if (string.IsNullOrWhiteSpace(_editingGameId))
+                {
+                    SetNotification("編集対象が不正です。", false);
+                    return;
+                }
+
+                var updated = await GameLibraryService.UpdateAsync(_editingGameId, input);
+                if (updated is null)
+                {
+                    SetNotification("編集対象のゲームが見つかりません。", false);
+                    return;
+                }
+
+                SetNotification($"ゲーム設定を更新しました: {updated.Title}", true);
+            }
+            else
+            {
+                var created = await GameLibraryService.CreateAsync(input);
+                SetNotification($"ゲームを登録しました: {created.Title}", true);
+            }
+
+            await ReloadGamesAsync();
+            await RefreshRepositoryWatchersAsync();
+            shouldCloseEditor = true;
+        }
+        catch (Exception ex)
+        {
+            SetNotification($"保存に失敗しました: {ex.Message}", false);
+        }
+        finally
+        {
+            _isSaving = false;
+            if (shouldCloseEditor)
+            {
+                CloseEditor(force: true);
+            }
+        }
+    }
+
+    private async Task PickExecutablePathAsync()
+    {
+        try
+        {
+            var selectedPath = await PathPickerService.PickExecutablePathAsync();
+            if (!string.IsNullOrWhiteSpace(selectedPath))
+            {
+                _editorExecutablePath = selectedPath;
+                return;
+            }
+
+            SetNotification("実行ファイルが選択されませんでした。", false);
+        }
+        catch (Exception ex)
+        {
+            SetNotification(ex.Message, false);
+        }
+    }
+
+    private async Task PickThumbnailPathAsync()
+    {
+        try
+        {
+            var selectedPath = await PathPickerService.PickThumbnailPathAsync();
+            if (!string.IsNullOrWhiteSpace(selectedPath))
+            {
+                _editorThumbnailSourcePath = selectedPath;
+                _editorClearThumbnail = false;
+                return;
+            }
+
+            SetNotification("サムネイル画像が選択されませんでした。", false);
+        }
+        catch (Exception ex)
+        {
+            SetNotification(ex.Message, false);
+        }
+    }
+
+    private void ClearThumbnailSelection()
+    {
+        _editorThumbnailSourcePath = null;
+        _editorHasThumbnail = false;
+        _editorClearThumbnail = true;
+    }
+
+    private bool CanClearThumbnailSelection()
+    {
+        return _editorHasThumbnail || !string.IsNullOrWhiteSpace(_editorThumbnailSourcePath);
+    }
+
+    private string GetThumbnailEditorLabel()
+    {
+        if (!string.IsNullOrWhiteSpace(_editorThumbnailSourcePath))
+        {
+            return _editorThumbnailSourcePath;
+        }
+
+        if (_editorHasThumbnail && !_editorClearThumbnail)
+        {
+            return "登録済み（変更なし）";
+        }
+
+        return "未設定";
+    }
+
+    private async Task PickRepositoryDirectoryPathAsync()
+    {
+        try
+        {
+            var selectedPath = await PathPickerService.PickRepositoryDirectoryPathAsync();
+            if (!string.IsNullOrWhiteSpace(selectedPath))
+            {
+                _editorRepositoryPath = selectedPath;
+                return;
+            }
+
+            SetNotification("リポジトリフォルダが選択されませんでした。", false);
+        }
+        catch (Exception ex)
+        {
+            SetNotification(ex.Message, false);
+        }
+    }
+
+    private void ClearRepositoryPath()
+    {
+        _editorRepositoryPath = null;
+    }
+
+    private async Task ReloadGamesAsync()
+    {
+        _games = await GameLibraryService.GetGamesAsync();
+        SyncThumbnailCache();
+        await RefreshRepositorySyncHistoriesAsync();
+    }
+
+    private IReadOnlyList<GameCardItem> GetFilteredGames()
+    {
+        if (_games is null || _games.Count == 0)
+        {
+            return Array.Empty<GameCardItem>();
+        }
+
+        if (string.IsNullOrWhiteSpace(_gameSearchText))
+        {
+            return _games;
+        }
+
+        var keyword = _gameSearchText.Trim();
+        return _games
+            .Where(game => game.Title.Contains(keyword, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+    }
+
+    private Task RefreshRepositoryWatchersAsync()
+    {
+        if (_games is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        var activeRepositoryIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var game in _games)
+        {
+            if (string.IsNullOrWhiteSpace(game.RelatedRepositoryPath))
+            {
+                continue;
+            }
+
+            var repositoryKey = NormalizeRepositoryKey(game.RelatedRepositoryPath);
+            if (repositoryKey is null)
+            {
+                continue;
+            }
+
+            RepositoryWatcherService.Register(repositoryKey, repositoryKey);
+            activeRepositoryIds.Add(repositoryKey);
+        }
+
+        var staleRepositoryIds = _registeredWatcherRepositoryIds
+            .Where(id => !activeRepositoryIds.Contains(id))
+            .ToArray();
+        foreach (var repositoryId in staleRepositoryIds)
+        {
+            RepositoryWatcherService.Unregister(repositoryId);
+        }
+
+        _registeredWatcherRepositoryIds.Clear();
+        foreach (var repositoryId in activeRepositoryIds)
+        {
+            _registeredWatcherRepositoryIds.Add(repositoryId);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private void UnregisterAllWatchers()
+    {
+        foreach (var repositoryId in _registeredWatcherRepositoryIds.ToArray())
+        {
+            RepositoryWatcherService.Unregister(repositoryId);
+        }
+
+        _registeredWatcherRepositoryIds.Clear();
+    }
+
+    private bool IsPinToggleBusy(GameCardItem game)
+    {
+        return _pinningGameIds.Contains(game.Id);
+    }
+
+    private async Task TogglePinnedAsync(GameCardItem game)
+    {
+        if (string.IsNullOrWhiteSpace(game.Id) || !_pinningGameIds.Add(game.Id))
+        {
+            return;
+        }
+
+        var nextPinned = !game.IsPinned;
+        try
+        {
+            await GameLibraryService.SetPinnedAsync(game.Id, nextPinned);
+            await ReloadGamesAsync();
+            SetNotification(
+                nextPinned
+                    ? $"ピン留めしました: {game.Title}"
+                    : $"ピン留めを解除しました: {game.Title}",
+                true);
+        }
+        catch (Exception ex)
+        {
+            SetNotification($"ピン留め更新に失敗しました: {ex.Message}", false);
+        }
+        finally
+        {
+            _pinningGameIds.Remove(game.Id);
+        }
+    }
+
+    private static string? NormalizeRepositoryKey(string? repositoryPath)
+    {
+        if (string.IsNullOrWhiteSpace(repositoryPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            var normalized = Path.GetFullPath(repositoryPath.Trim());
+            return Directory.Exists(normalized) ? normalized : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public void Dispose()
+    {
+        SettingsPanelService.OpenRequested -= OnSettingsOpenRequested;
+        _stateRefreshCts.Cancel();
+        _stateRefreshCts.Dispose();
+        UnregisterAllWatchers();
+        _pinningGameIds.Clear();
+        _thumbnailDataUriCache.Clear();
+        _syncHistoryByRepository.Clear();
+    }
+
+    private void StartStateRefreshLoop()
+    {
+        if (_stateRefreshTask is not null)
+        {
+            return;
+        }
+
+        _stateRefreshTask = Task.Run(async () =>
+        {
+            var elapsedSeconds = 0;
+            while (!_stateRefreshCts.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(1), _stateRefreshCts.Token);
+                    elapsedSeconds++;
+                    if (elapsedSeconds >= SyncHistoryRefreshIntervalSeconds)
+                    {
+                        elapsedSeconds = 0;
+                        await InvokeAsync(async () => await RefreshRepositorySyncHistoriesAsync(_stateRefreshCts.Token));
+                    }
+
+                    await InvokeAsync(StateHasChanged);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (ObjectDisposedException)
+                {
+                    break;
+                }
+            }
+        });
+    }
+
+    private async Task RefreshRepositorySyncHistoriesAsync(CancellationToken cancellationToken = default)
+    {
+        _syncHistoryByRepository.Clear();
+
+        if (_games is null || _games.Count == 0)
+        {
+            return;
+        }
+
+        var repositoryIds = _games
+            .Select(game => NormalizeRepositoryKey(game.RelatedRepositoryPath))
+            .Where(static repositoryId => !string.IsNullOrWhiteSpace(repositoryId))
+            .Select(static repositoryId => repositoryId!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (repositoryIds.Length == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            var histories = await RepositorySyncHistoryStore.GetLatestByRepositoryIdsAsync(
+                repositoryIds,
+                SyncHistoryTimelineLimit,
+                cancellationToken);
+            foreach (var pair in histories)
+            {
+                _syncHistoryByRepository[pair.Key] = pair.Value;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            // 履歴取得失敗時はカード描画を継続する。
+        }
+    }
+
+    private RepositorySyncState GetRepositorySyncState(GameCardItem game)
+    {
+        var repositoryKey = NormalizeRepositoryKey(game.RelatedRepositoryPath);
+        if (repositoryKey is null)
+        {
+            return RepositorySyncState.Idle;
+        }
+
+        return RepositoryStateStore.GetStateOrDefault(repositoryKey);
+    }
+
+    private GameCardStatus GetEffectiveStatus(GameCardItem game)
+    {
+        return GetRepositorySyncState(game) switch
+        {
+            RepositorySyncState.Syncing => GameCardStatus.Syncing,
+            RepositorySyncState.Debouncing => GameCardStatus.Syncing,
+            RepositorySyncState.ErrorPaused => GameCardStatus.Error,
+            _ => game.Status
+        };
+    }
+
+    private bool CanResumeRepositorySync(GameCardItem game)
+    {
+        return !string.IsNullOrWhiteSpace(game.RelatedRepositoryPath)
+            && GetRepositorySyncState(game) == RepositorySyncState.ErrorPaused;
+    }
+
+    private bool IsRepositoryBusy(GameCardItem game)
+    {
+        var state = GetRepositorySyncState(game);
+        return state is RepositorySyncState.Debouncing or RepositorySyncState.Syncing;
+    }
+
+    private IReadOnlyList<RepositorySyncHistoryItem> GetSyncHistoryTimeline(GameCardItem game)
+    {
+        var repositoryKey = NormalizeRepositoryKey(game.RelatedRepositoryPath);
+        if (repositoryKey is null)
+        {
+            return Array.Empty<RepositorySyncHistoryItem>();
+        }
+
+        return _syncHistoryByRepository.TryGetValue(repositoryKey, out var entries)
+            ? entries
+            : Array.Empty<RepositorySyncHistoryItem>();
+    }
+
+    private static bool HasThumbnail(GameCardItem game)
+    {
+        return !string.IsNullOrWhiteSpace(game.ThumbnailPath);
+    }
+
+    private string? GetThumbnailDataUri(GameCardItem game)
+    {
+        var path = NormalizeThumbnailPath(game.ThumbnailPath);
+        if (path is null)
+        {
+            return null;
+        }
+
+        if (_thumbnailDataUriCache.TryGetValue(path, out var cached))
+        {
+            return cached;
+        }
+
+        try
+        {
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            var bytes = File.ReadAllBytes(path);
+            if (bytes.Length == 0)
+            {
+                return null;
+            }
+
+            var dataUri = $"data:image/png;base64,{Convert.ToBase64String(bytes)}";
+            _thumbnailDataUriCache[path] = dataUri;
+            return dataUri;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private void SyncThumbnailCache()
+    {
+        if (_games is null)
+        {
+            _thumbnailDataUriCache.Clear();
+            return;
+        }
+
+        var activePaths = _games
+            .Select(game => NormalizeThumbnailPath(game.ThumbnailPath))
+            .Where(static path => !string.IsNullOrWhiteSpace(path))
+            .Select(static path => path!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var stalePaths = _thumbnailDataUriCache.Keys
+            .Where(path => !activePaths.Contains(path))
+            .ToArray();
+
+        foreach (var stalePath in stalePaths)
+        {
+            _thumbnailDataUriCache.Remove(stalePath);
+        }
+    }
+
+    private static string? NormalizeThumbnailPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            return Path.GetFullPath(path.Trim());
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private async Task ResumeRepositorySyncAsync(GameCardItem game)
+    {
+        var repositoryKey = NormalizeRepositoryKey(game.RelatedRepositoryPath);
+        if (repositoryKey is null)
+        {
+            SetNotification("関連リポジトリのパスが無効です。", false);
+            return;
+        }
+
+        try
+        {
+            await SyncOrchestrator.ResumeRepositorySyncAsync(repositoryKey);
+            SetNotification($"同期を再開しました: {game.Title}", true);
+        }
+        catch (Exception ex)
+        {
+            SetNotification($"同期再開に失敗しました: {ex.Message}", false);
+        }
+    }
+
+    private static string FormatLastPlayed(DateTimeOffset? value)
+    {
+        return value?.LocalDateTime.ToString("yyyy-MM-dd HH:mm") ?? "未プレイ";
+    }
+
+    private static string FormatSyncHistoryTimestamp(DateTimeOffset value)
+    {
+        return value.LocalDateTime.ToString("MM-dd HH:mm:ss");
+    }
+
+    private static string FormatSyncHistoryDuration(long durationMs)
+    {
+        if (durationMs < 1_000)
+        {
+            return $"{durationMs}ms";
+        }
+
+        var seconds = durationMs / 1000d;
+        return $"{seconds:0.0}s";
+    }
+
+    private static string GetSyncHistoryStatusLabel(RepositorySyncHistoryStatus status)
+    {
+        return status switch
+        {
+            RepositorySyncHistoryStatus.Succeeded => "成功",
+            RepositorySyncHistoryStatus.Paused => "停止",
+            _ => "失敗"
+        };
+    }
+
+    private static string GetSyncHistoryStatusClass(RepositorySyncHistoryStatus status)
+    {
+        return status switch
+        {
+            RepositorySyncHistoryStatus.Succeeded => "sync-timeline-success",
+            RepositorySyncHistoryStatus.Paused => "sync-timeline-paused",
+            _ => "sync-timeline-failed"
+        };
+    }
+
+    private static string GetStatusLabel(GameCardStatus status)
+    {
+        return status switch
+        {
+            GameCardStatus.Syncing => "同期中",
+            GameCardStatus.Synced => "同期OK",
+            GameCardStatus.Error => "エラー",
+            _ => "未同期"
+        };
+    }
+
+    private static string GetStatusClass(GameCardStatus status)
+    {
+        return status switch
+        {
+            GameCardStatus.Syncing => "status-syncing",
+            GameCardStatus.Synced => "status-synced",
+            GameCardStatus.Error => "status-error",
+            _ => "status-unknown"
+        };
+    }
+
+    private string GetMessageClass()
+    {
+        return _isLastActionSuccess switch
+        {
+            true => "notification-success",
+            false => "notification-error",
+            _ => "notification-info"
+        };
+    }
+
+    private async Task CopyNotificationHistoryAsync()
+    {
+        if (_notificationHistoryEntries.Count == 0)
+        {
+            SetNotification("コピー対象の通知履歴がありません。", false, addToHistory: false);
+            return;
+        }
+
+        var lines = _notificationHistoryEntries
+            .Select(entry =>
+                $"{FormatNotificationHistoryTimestamp(entry.Timestamp)} [{GetNotificationHistoryTypeLabel(entry.IsSuccess)}] {entry.Message}")
+            .ToArray();
+
+        try
+        {
+            await Clipboard.Default.SetTextAsync(string.Join(Environment.NewLine, lines));
+            SetNotification("通知履歴をコピーしました。", true, addToHistory: false);
+        }
+        catch (Exception ex)
+        {
+            SetNotification($"通知履歴のコピーに失敗しました: {ex.Message}", false, addToHistory: false);
+        }
+    }
+
+    private void ClearNotificationHistory()
+    {
+        _notificationHistoryEntries.Clear();
+        SetNotification("通知履歴をクリアしました。", true, addToHistory: false);
+    }
+
+    private static string FormatNotificationHistoryTimestamp(DateTimeOffset value)
+    {
+        return value.LocalDateTime.ToString("MM-dd HH:mm:ss");
+    }
+
+    private static string GetNotificationHistoryTypeLabel(bool? isSuccess)
+    {
+        return isSuccess switch
+        {
+            true => "成功",
+            false => "失敗",
+            _ => "情報"
+        };
+    }
+
+    private static string GetNotificationHistoryTypeClass(bool? isSuccess)
+    {
+        return isSuccess switch
+        {
+            true => "notification-center-type-success",
+            false => "notification-center-type-error",
+            _ => "notification-center-type-info"
+        };
+    }
+
+    private IReadOnlyList<NotificationHistoryEntry> GetFilteredNotificationHistoryEntries()
+    {
+        if (_showSuccessNotifications && _showFailedNotifications)
+        {
+            return _notificationHistoryEntries;
+        }
+
+        if (_showSuccessNotifications)
+        {
+            return _notificationHistoryEntries
+                .Where(static entry => entry.IsSuccess == true)
+                .ToArray();
+        }
+
+        if (_showFailedNotifications)
+        {
+            return _notificationHistoryEntries
+                .Where(static entry => entry.IsSuccess == false)
+                .ToArray();
+        }
+
+        return _notificationHistoryEntries;
+    }
+
+    private void SetNotification(string message, bool? isSuccess, bool addToHistory = true)
+    {
+        _message = message;
+        _isLastActionSuccess = isSuccess;
+
+        if (addToHistory)
+        {
+            AddNotificationHistory(message, isSuccess);
+        }
+
+        if (isSuccess == false)
+        {
+            _ = WriteErrorLogSafeAsync(message);
+        }
+    }
+
+    private void AddNotificationHistory(string message, bool? isSuccess)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return;
+        }
+
+        _notificationHistoryEntries.Insert(0, new NotificationHistoryEntry(DateTimeOffset.Now, isSuccess, message.Trim()));
+        if (_notificationHistoryEntries.Count <= NotificationHistoryMaxEntries)
+        {
+            return;
+        }
+
+        _notificationHistoryEntries.RemoveRange(
+            NotificationHistoryMaxEntries,
+            _notificationHistoryEntries.Count - NotificationHistoryMaxEntries);
+    }
+
+    private async Task WriteErrorLogSafeAsync(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return;
+        }
+
+        try
+        {
+            await LogAccessService.AppendErrorAsync(message);
+        }
+        catch
+        {
+            // エラーログ書き込み失敗は通知ループを防ぐため握りつぶす。
+        }
+    }
+
+    private static bool ParseCheckboxValue(ChangeEventArgs args)
+    {
+        if (args.Value is bool boolValue)
+        {
+            return boolValue;
+        }
+
+        var value = args.Value?.ToString();
+        return string.Equals(value, "true", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "on", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string BuildGitStartupError(GitCommandResult result)
+    {
+        var reason = FirstNonEmptyLine(result.StandardError)
+            ?? FirstNonEmptyLine(result.StandardOutput)
+            ?? $"exit code: {result.ExitCode}";
+        return $"Git の起動確認に失敗しました。reason={reason}";
+    }
+
+    private static string? FirstNonEmptyLine(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        return value
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault(static line => !string.IsNullOrWhiteSpace(line));
+    }
+
+    private sealed record NotificationHistoryEntry(
+        DateTimeOffset Timestamp,
+        bool? IsSuccess,
+        string Message);
+
+    private void OnSettingsOpenRequested(object? sender, EventArgs e)
+    {
+        _ = InvokeAsync(async () =>
+        {
+            if (_isStartupChecking || !_isGitReady)
+            {
+                return;
+            }
+
+            if (_isSettingsOpen)
+            {
+                StateHasChanged();
+                return;
+            }
+
+            await OpenSettingsAsync();
+            StateHasChanged();
+        });
+    }
+}

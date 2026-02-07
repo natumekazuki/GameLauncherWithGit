@@ -1,0 +1,11 @@
+namespace GameLauncherWithGit.Application.Models;
+
+public sealed record GameCardItem(
+	string Id,
+	string Title,
+	string ExecutablePath,
+	string? RelatedRepositoryPath,
+	string? ThumbnailPath,
+	DateTimeOffset? LastPlayedAt,
+	GameCardStatus Status,
+	bool IsPinned = false);

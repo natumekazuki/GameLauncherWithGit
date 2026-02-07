@@ -1,0 +1,15 @@
+.page {
+    min-height: 100vh;
+    background: #090f18;
+    color: #e6edf8;
+}
+
+main {
+    min-height: 100vh;
+}
+
+.shell-content {
+    margin: 0 auto;
+    width: min(1360px, 100%);
+    padding: 0.75rem 1rem 5.5rem;
+}
