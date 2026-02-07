@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using GameLauncherWithGit.Application.Abstractions;
@@ -275,17 +276,29 @@ public sealed class LogAccessService : ILogAccessService
 
 	private static LogViewerEntry ConvertRecord(LogRecord record)
 	{
-		var (message, detail) = ExtractMessageAndDetail(record);
+		var (message, detail, repositoryId, command, exitCode, standardOutput, standardError) = ExtractEntryData(record);
 		return new LogViewerEntry(
 			Timestamp: record.Timestamp,
 			Severity: record.Severity,
 			Name: record.Name,
 			Message: message,
 			Detail: detail,
-			TraceId: record.Trace.TraceId);
+			TraceId: record.Trace.TraceId,
+			RepositoryId: repositoryId,
+			Command: command,
+			ExitCode: exitCode,
+			StandardOutput: standardOutput,
+			StandardError: standardError);
 	}
 
-	private static (string Message, string? Detail) ExtractMessageAndDetail(LogRecord record)
+	private static (
+		string Message,
+		string? Detail,
+		string? RepositoryId,
+		string? Command,
+		int? ExitCode,
+		string? StandardOutput,
+		string? StandardError) ExtractEntryData(LogRecord record)
 	{
 		if (record.Data is JsonElement dataElement)
 		{
@@ -293,6 +306,11 @@ public sealed class LogAccessService : ILogAccessService
 			var type = TryGetString(dataElement, "type");
 			var stackTrace = TryGetString(dataElement, "stackTrace");
 			var rawData = dataElement.GetRawText();
+			var repositoryId = TryGetStringFromData(dataElement, "repositoryId", "RepositoryId", "repo", "Repo", "repositoryPath", "RepositoryPath");
+			var command = TryGetStringFromData(dataElement, "command", "Command", "args", "Args", "arguments", "Arguments");
+			var exitCode = TryGetIntFromData(dataElement, "exitCode", "ExitCode");
+			var standardOutput = TryGetStringFromData(dataElement, "stdout", "StdOut", "Stdout", "standardOutput", "StandardOutput");
+			var standardError = TryGetStringFromData(dataElement, "stderr", "StdErr", "Stderr", "standardError", "StandardError");
 
 			var normalizedMessage = string.IsNullOrWhiteSpace(message)
 				? record.Name
@@ -300,18 +318,32 @@ public sealed class LogAccessService : ILogAccessService
 			var detail = !string.IsNullOrWhiteSpace(stackTrace)
 				? stackTrace
 				: IsTrivialJson(rawData) ? null : rawData;
-			return (normalizedMessage, detail);
+
+			repositoryId ??= ExtractTokenValue(normalizedMessage, "repo=", ",", " /");
+			repositoryId ??= ExtractTokenValue(detail, "repo=", ",", " /");
+			command ??= ExtractTokenValue(normalizedMessage, "command=", ", reason=", ",", " /");
+			command ??= ExtractTokenValue(detail, "command=", ", reason=", ",", " /");
+			exitCode ??= ExtractTokenInt(normalizedMessage, "exitCode=", ",", " /");
+			exitCode ??= ExtractTokenInt(detail, "exitCode=", ",", " /");
+
+			return (normalizedMessage, detail, repositoryId, command, exitCode, standardOutput, standardError);
 		}
 
 		if (record.Data is null)
 		{
-			return (record.Name, null);
+			return (record.Name, null, null, null, null, null, null);
 		}
 
 		var dataText = record.Data.ToString();
-		return string.IsNullOrWhiteSpace(dataText)
-			? (record.Name, null)
-			: (record.Name, dataText);
+		if (string.IsNullOrWhiteSpace(dataText))
+		{
+			return (record.Name, null, null, null, null, null, null);
+		}
+
+		var repositoryIdFromText = ExtractTokenValue(dataText, "repo=", ",", " /");
+		var commandFromText = ExtractTokenValue(dataText, "command=", ", reason=", ",", " /");
+		var exitCodeFromText = ExtractTokenInt(dataText, "exitCode=", ",", " /");
+		return (record.Name, dataText, repositoryIdFromText, commandFromText, exitCodeFromText, null, null);
 	}
 
 	private static string? TryGetString(JsonElement element, string propertyName)
@@ -352,7 +384,154 @@ public sealed class LogAccessService : ILogAccessService
 			|| Contains(entry.Detail, keyword)
 			|| Contains(entry.Name, keyword)
 			|| Contains(entry.TraceId, keyword)
+			|| Contains(entry.RepositoryId, keyword)
+			|| Contains(entry.Command, keyword)
+			|| Contains(entry.ExitCode?.ToString(CultureInfo.InvariantCulture), keyword)
+			|| Contains(entry.StandardOutput, keyword)
+			|| Contains(entry.StandardError, keyword)
 			|| Contains(entry.Severity.ToString(), keyword);
+	}
+
+	private static string? TryGetStringFromData(JsonElement element, params string[] propertyNames)
+	{
+		var directValue = TryGetStringFromElement(element, propertyNames);
+		if (!string.IsNullOrWhiteSpace(directValue))
+		{
+			return directValue;
+		}
+
+		var keyValuesElement = TryGetObjectProperty(element, "keyValues")
+			?? TryGetObjectProperty(element, "KeyValues");
+		if (keyValuesElement is null)
+		{
+			return null;
+		}
+
+		return TryGetStringFromElement(keyValuesElement.Value, propertyNames);
+	}
+
+	private static int? TryGetIntFromData(JsonElement element, params string[] propertyNames)
+	{
+		var directValue = TryGetIntFromElement(element, propertyNames);
+		if (directValue.HasValue)
+		{
+			return directValue.Value;
+		}
+
+		var keyValuesElement = TryGetObjectProperty(element, "keyValues")
+			?? TryGetObjectProperty(element, "KeyValues");
+		if (keyValuesElement is null)
+		{
+			return null;
+		}
+
+		return TryGetIntFromElement(keyValuesElement.Value, propertyNames);
+	}
+
+	private static string? TryGetStringFromElement(JsonElement element, params string[] propertyNames)
+	{
+		foreach (var propertyName in propertyNames)
+		{
+			var value = TryGetString(element, propertyName);
+			if (!string.IsNullOrWhiteSpace(value))
+			{
+				return value;
+			}
+		}
+
+		return null;
+	}
+
+	private static int? TryGetIntFromElement(JsonElement element, params string[] propertyNames)
+	{
+		foreach (var propertyName in propertyNames)
+		{
+			if (!element.TryGetProperty(propertyName, out var property))
+			{
+				continue;
+			}
+
+			switch (property.ValueKind)
+			{
+				case JsonValueKind.Number when property.TryGetInt32(out var value):
+					return value;
+				case JsonValueKind.Number when property.TryGetInt64(out var value64)
+					&& value64 <= int.MaxValue
+					&& value64 >= int.MinValue:
+					return (int)value64;
+				case JsonValueKind.String when int.TryParse(
+					property.GetString(),
+					NumberStyles.Integer,
+					CultureInfo.InvariantCulture,
+					out var parsed):
+					return parsed;
+			}
+		}
+
+		return null;
+	}
+
+	private static JsonElement? TryGetObjectProperty(JsonElement element, string propertyName)
+	{
+		if (!element.TryGetProperty(propertyName, out var property))
+		{
+			return null;
+		}
+
+		return property.ValueKind == JsonValueKind.Object ? property : null;
+	}
+
+	private static string? ExtractTokenValue(string? source, string token, params string[] terminators)
+	{
+		if (string.IsNullOrWhiteSpace(source))
+		{
+			return null;
+		}
+
+		var sourceText = source!;
+		var index = sourceText.IndexOf(token, StringComparison.OrdinalIgnoreCase);
+		if (index < 0)
+		{
+			return null;
+		}
+
+		var valueStart = index + token.Length;
+		if (valueStart >= sourceText.Length)
+		{
+			return null;
+		}
+
+		var remaining = sourceText[valueStart..];
+		var valueEnd = remaining.Length;
+		foreach (var terminator in terminators)
+		{
+			if (string.IsNullOrWhiteSpace(terminator))
+			{
+				continue;
+			}
+
+			var terminatorIndex = remaining.IndexOf(terminator, StringComparison.OrdinalIgnoreCase);
+			if (terminatorIndex >= 0 && terminatorIndex < valueEnd)
+			{
+				valueEnd = terminatorIndex;
+			}
+		}
+
+		var value = remaining[..valueEnd].Trim().Trim('\"');
+		return string.IsNullOrWhiteSpace(value) ? null : value;
+	}
+
+	private static int? ExtractTokenInt(string? source, string token, params string[] terminators)
+	{
+		var tokenValue = ExtractTokenValue(source, token, terminators);
+		if (string.IsNullOrWhiteSpace(tokenValue))
+		{
+			return null;
+		}
+
+		return int.TryParse(tokenValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value)
+			? value
+			: null;
 	}
 
 	private static bool Contains(string? value, string keyword)

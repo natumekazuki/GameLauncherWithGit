@@ -8,4 +8,9 @@ public sealed record LogViewerEntry(
 	string Name,
 	string Message,
 	string? Detail,
-	string? TraceId);
+	string? TraceId,
+	string? RepositoryId,
+	string? Command,
+	int? ExitCode,
+	string? StandardOutput,
+	string? StandardError);

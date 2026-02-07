@@ -7,10 +7,10 @@
 - 本対応はログ表示仕様と検索仕様の変更を含むため、`docs/design/maui-blazor-architecture.md` のログビューア節を更新する（必須）。
 
 ## Task List
-- [ ] 現行の構造化ログ（`app-events.jsonl`）に含まれるキーを確認し、UIに出す対象キーを確定する。
-- [ ] `LogViewerEntry` を拡張し、追加メタデータ（`RepositoryId` / `Command` / `ExitCode` / `Stdout` / `Stderr` など）を保持できるようにする。
-- [ ] `LogAccessService` のレコード変換処理を更新し、上記メタデータを `JsonElement` から抽出する。
-- [ ] キーワード検索対象を追加メタデータにも拡張する。
+- [x] 現行の構造化ログ（`app-events.jsonl`）に含まれるキーを確認し、UIに出す対象キーを確定する。
+- [x] `LogViewerEntry` を拡張し、追加メタデータ（`RepositoryId` / `Command` / `ExitCode` / `Stdout` / `Stderr` など）を保持できるようにする。
+- [x] `LogAccessService` のレコード変換処理を更新し、上記メタデータを `JsonElement` から抽出する。
+- [x] キーワード検索対象を追加メタデータにも拡張する。
 - [ ] `Home.razor` のログビューア表示を更新し、重要メタ情報を行内表示、長文（stdout/stderr）は折りたたみ可能な詳細表示にする。
 - [ ] 「コピー」機能の出力フォーマットを更新し、表示中ログの追加メタデータも含める。
 - [ ] `docs/design/maui-blazor-architecture.md` を更新し、ログビューアの表示項目・検索仕様・コピー仕様を同期する。
@@ -31,3 +31,5 @@
 
 ## Notes / Logs
 - 2026-02-07: 既存ログビューアは実装済み（表示件数・レベル・キーワード・コピー）。本計画は「構造化情報の拡張表示」にフォーカスする。
+- 2026-02-07: `GitService` / `SyncOrchestrator` のログテンプレートと `ExceptionLogData.keyValues` を基準に抽出キーを確定（`repositoryId/repo`、`command/args/arguments`、`exitCode`、`stdout/stderr`）。
+- 2026-02-07: `LogAccessService` にメタデータ抽出のフォールバックを追加（`keyValues` 優先、未設定時はメッセージ中の `repo=` / `command=` / `exitCode=` を解析）。
