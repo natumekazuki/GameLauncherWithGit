@@ -1,0 +1,3 @@
+[submodule "library/MonochromeMemory.Log"]
+	path = library/MonochromeMemory.Log
+	url = https://github.com/natumekazuki/MonochromeMemory.Log.git
