@@ -325,14 +325,35 @@ else
                         履歴クリア
                     </button>
                 </div>
+                <div class="notification-center-filters">
+                    <label>
+                        <input type="checkbox"
+                               @bind="_showSuccessNotifications"
+                               disabled="@_isSettingsLoading" />
+                        成功を表示
+                    </label>
+                    <label>
+                        <input type="checkbox"
+                               @bind="_showFailedNotifications"
+                               disabled="@_isSettingsLoading" />
+                        失敗を表示
+                    </label>
+                </div>
                 <div class="notification-center-list" role="log">
+                    @{
+                        var filteredNotificationEntries = GetFilteredNotificationHistoryEntries();
+                    }
                     @if (_notificationHistoryEntries.Count == 0)
                     {
                         <p class="notification-center-empty">通知履歴はありません。</p>
                     }
+                    else if (filteredNotificationEntries.Count == 0)
+                    {
+                        <p class="notification-center-empty">フィルタ条件に一致する通知はありません。</p>
+                    }
                     else
                     {
-                        @foreach (var entry in _notificationHistoryEntries)
+                        @foreach (var entry in filteredNotificationEntries)
                         {
                             <article class="notification-center-item">
                                 <div class="notification-center-item-header">
@@ -644,6 +665,8 @@ else
     private readonly Dictionary<string, string> _thumbnailDataUriCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, IReadOnlyList<RepositorySyncHistoryItem>> _syncHistoryByRepository = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<NotificationHistoryEntry> _notificationHistoryEntries = [];
+    private bool _showSuccessNotifications = true;
+    private bool _showFailedNotifications = true;
     private readonly CancellationTokenSource _stateRefreshCts = new();
     private Task? _stateRefreshTask;
 
@@ -1758,6 +1781,30 @@ else
             false => "notification-center-type-error",
             _ => "notification-center-type-info"
         };
+    }
+
+    private IReadOnlyList<NotificationHistoryEntry> GetFilteredNotificationHistoryEntries()
+    {
+        if (_showSuccessNotifications && _showFailedNotifications)
+        {
+            return _notificationHistoryEntries;
+        }
+
+        if (_showSuccessNotifications)
+        {
+            return _notificationHistoryEntries
+                .Where(static entry => entry.IsSuccess == true)
+                .ToArray();
+        }
+
+        if (_showFailedNotifications)
+        {
+            return _notificationHistoryEntries
+                .Where(static entry => entry.IsSuccess == false)
+                .ToArray();
+        }
+
+        return _notificationHistoryEntries;
     }
 
     private void SetNotification(string message, bool? isSuccess, bool addToHistory = true)

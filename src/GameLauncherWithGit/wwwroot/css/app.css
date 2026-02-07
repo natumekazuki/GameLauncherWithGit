@@ -856,6 +856,26 @@ a,
     padding: 0.55rem;
 }
 
+.notification-center-filters {
+    margin-top: 0.55rem;
+    display: flex;
+    gap: 0.9rem;
+    flex-wrap: wrap;
+}
+
+.notification-center-filters label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    color: #dce8fc;
+    font-size: 0.8rem;
+}
+
+.notification-center-filters input[type="checkbox"] {
+    width: 1rem;
+    height: 1rem;
+}
+
 .notification-center-empty {
     margin: 0;
     color: #9bb0cf;
