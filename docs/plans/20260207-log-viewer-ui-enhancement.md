@@ -13,7 +13,7 @@
 - [x] キーワード検索対象を追加メタデータにも拡張する。
 - [x] `Home.razor` のログビューア表示を更新し、重要メタ情報を行内表示、長文（stdout/stderr）は折りたたみ可能な詳細表示にする。
 - [x] 「コピー」機能の出力フォーマットを更新し、表示中ログの追加メタデータも含める。
-- [ ] `docs/design/maui-blazor-architecture.md` を更新し、ログビューアの表示項目・検索仕様・コピー仕様を同期する。
+- [x] `docs/design/maui-blazor-architecture.md` を更新し、ログビューアの表示項目・検索仕様・コピー仕様を同期する。
 - [x] ビルドを実行して回帰を確認する（`dotnet build ...`。実行中ロック時は `dotnet msbuild /t:Compile` で代替）。
 
 ## Affected Files
@@ -34,3 +34,4 @@
 - 2026-02-07: `GitService` / `SyncOrchestrator` のログテンプレートと `ExceptionLogData.keyValues` を基準に抽出キーを確定（`repositoryId/repo`、`command/args/arguments`、`exitCode`、`stdout/stderr`）。
 - 2026-02-07: `LogAccessService` にメタデータ抽出のフォールバックを追加（`keyValues` 優先、未設定時はメッセージ中の `repo=` / `command=` / `exitCode=` を解析）。
 - 2026-02-07: ログビューアUIを更新し、`repo/command/exitCode` の即時表示と `detail/stdout/stderr` の折りたたみ表示、コピー形式の拡張を適用。
+- 2026-02-07: 設計ドキュメントを更新し、ログビューアの表示項目・検索対象・コピー仕様を実装へ同期。

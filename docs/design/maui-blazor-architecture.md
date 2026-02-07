@@ -36,6 +36,7 @@ flowchart LR
   - Home の `+` / `-` でゲームカード表示サイズを即時変更し、設定へ反映
   - カード上の削除操作で確認モーダルを表示し、削除完了後に一覧と監視状態を更新
   - 環境設定モーダルにログビューア（件数/レベル/キーワードフィルタ、更新、コピー）を提供
+  - ログビューアは `repo/command/exitCode` を行内表示し、`detail/stdout/stderr` を折りたたみ表示する
 - `SyncOrchestrator`
   - 監視イベント受信、デバウンス管理、同期ジョブ実行順序制御
   - 失敗分類とリトライポリシー適用（指数バックオフ再試行、通知抑制、復旧通知）
@@ -67,6 +68,7 @@ flowchart LR
   - `MonochromeMemory.Log` を使って `FileSystem.AppDataDirectory/logs/app-events.jsonl` へ構造化エラーログを記録
   - 最新エラーログ/ログフォルダをOSシェルで開く
   - `app-events.jsonl` の直近ログを読み込み、レベル/キーワードで絞り込んでUIへ返す
+  - `record.data` / `record.data.keyValues` から `repositoryId` / `command` / `exitCode` / `stdout` / `stderr` を抽出し、未設定時は `repo=` / `command=` / `exitCode=` のテキストをフォールバック解析する
   - 起動時にログメンテナンス（保持日数超過の削除、サイズ超過時ローテーション）を実行
 - `AppSettingsService`
   - `FileSystem.AppDataDirectory/settings.json` を読込/保存し、同期/通知/ログ運用/カード表示設定を管理
@@ -182,7 +184,7 @@ sequenceDiagram
 - ランチャー: 起動前 pull 成功時のみ起動、失敗時ブロック
 - Windows連携: トレイ状態遷移、Toast 発火、自動起動設定
 - サムネイル: 512px変換、PNG化、失敗時フォールバック
-- ログビューア: JSONL破損行スキップ、フィルタ結果表示、クリップボードコピー
+- ログビューア: JSONL破損行スキップ、フィルタ結果表示、`repo/command/exitCode` 表示、`detail/stdout/stderr` 折りたたみ、拡張メタデータ込みクリップボードコピー
 - ログ運用: 保持日数削除、サイズ超過ローテーション
 - 表示設定: カードサイズ変更の即時反映と再起動後復元
 - 削除操作: 確認モーダル、SQLite削除、サムネイル削除、監視再構成
@@ -206,6 +208,7 @@ sequenceDiagram
   - Home ユーティリティバーにカードサイズ変更導線を追加（`+` / `-`、即時保存）
   - カード操作にピン留め導線を追加（SQLite永続化、ピン優先並び）
   - 環境設定モーダルにログビューア追加（件数/レベル/キーワード、更新、コピー）
+  - ログビューアで `repo/command/exitCode` の表示、`detail/stdout/stderr` の折りたたみ表示、拡張メタデータ込みコピーを実装
   - 環境設定にログ運用設定を追加（保持日数、最大サイズMB）
   - `settings.json` 永続化（同期/通知/ログ運用/カード表示設定）
   - ゲーム登録/編集モーダル（タイトル/実行ファイル/関連リポジトリ）
