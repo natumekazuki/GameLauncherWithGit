@@ -15,8 +15,8 @@
 - [x] `IGameLibraryService` / `GameLibraryService` にピン留め更新APIを追加
 - [x] `Home.razor` にピン留めトグルボタンを追加し、更新後に再読込する
 - [x] `app.css` にピン留め状態の視覚スタイルを追加
-- [ ] `docs/design/maui-blazor-architecture.md` を実装内容へ同期
-- [ ] Windowsターゲットでビルド検証
+- [x] `docs/design/maui-blazor-architecture.md` を実装内容へ同期
+- [x] Windowsターゲットでビルド検証
 
 # 変更対象ファイル
 - `src/GameLauncherWithGit/Application/Models/GameCardItem.cs`
@@ -32,3 +32,7 @@
 - カード操作ボタン増加でUIが詰まる可能性
 - 既存DBに新カラム追加時の移行不整合リスク
 - ピン留めと検索の併用時に意図しない並び順に見える可能性
+
+# Notes / Logs
+- SQLite は `IsPinned` カラムを後方互換で追加するマイグレーションを実装済み。
+- ビルド検証は実行中ロック回避のため `dotnet build src/GameLauncherWithGit/GameLauncherWithGit.csproj -f net9.0-windows10.0.19041.0 --no-dependencies -p:UseAppHost=false` を使用。
