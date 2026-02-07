@@ -112,13 +112,37 @@ function Assert-SigningCertificate {
     }
 
     $codeSigningOid = "1.3.6.1.5.5.7.3.3"
-    $hasCodeSigningEku = $Certificate.EnhancedKeyUsageList `
-        | Where-Object { $_.Oid.Value -eq $codeSigningOid } `
+    $ekuEntries = $Certificate.EnhancedKeyUsageList | ForEach-Object {
+        $oidValue = $null
+        if ($_.PSObject.Properties.Name -contains "Value") {
+            $oidValue = $_.Value
+        }
+
+        if ([string]::IsNullOrWhiteSpace($oidValue) -and ($_.PSObject.Properties.Name -contains "ObjectId")) {
+            $oidValue = $_.ObjectId
+        }
+
+        if ([string]::IsNullOrWhiteSpace($oidValue) -and ($_.PSObject.Properties.Name -contains "Oid")) {
+            $oidValue = $_.Oid.Value
+        }
+
+        [pscustomobject]@{
+            FriendlyName = $_.FriendlyName
+            OidValue = $oidValue
+        }
+    }
+
+    $hasCodeSigningEku = $ekuEntries `
+        | Where-Object {
+            $_.OidValue -eq $codeSigningOid `
+                -or $_.FriendlyName -eq "Code Signing" `
+                -or $_.FriendlyName -eq "コード署名"
+        } `
         | Select-Object -First 1
 
     if ($null -eq $hasCodeSigningEku) {
-        $ekuList = $Certificate.EnhancedKeyUsageList `
-            | ForEach-Object { "$($_.FriendlyName) ($($_.Oid.Value))" }
+        $ekuList = $ekuEntries `
+            | ForEach-Object { "$($_.FriendlyName) ($($_.OidValue))" }
         $ekuText = if ($null -ne $ekuList -and $ekuList.Count -gt 0) { $ekuList -join ", " } else { "(なし)" }
         throw "証明書に Code Signing EKU (OID: $codeSigningOid) がありません。現在のEKU: $ekuText"
     }
