@@ -680,3 +680,154 @@ a,
     display: flex;
     gap: 0.55rem;
 }
+
+.settings-log-controls {
+    display: flex;
+    gap: 0.55rem;
+    margin-bottom: 0.55rem;
+}
+
+.settings-log-control {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    flex: 1;
+    color: #dce8fc;
+    font-size: 0.82rem;
+}
+
+.settings-log-control input,
+.settings-log-control select,
+.settings-log-keyword input {
+    border: 1px solid #385077;
+    border-radius: 8px;
+    background: #0d1524;
+    color: #e6eefb;
+    padding: 0.45rem 0.55rem;
+    font-size: 0.88rem;
+}
+
+.settings-log-keyword {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    margin-bottom: 0.55rem;
+    color: #dce8fc;
+    font-size: 0.82rem;
+}
+
+.settings-log-list {
+    margin-top: 0.65rem;
+    max-height: 18rem;
+    overflow-y: auto;
+    border: 1px solid #2b3d5b;
+    border-radius: 10px;
+    background: #0c1525;
+    padding: 0.55rem;
+}
+
+.settings-log-empty {
+    margin: 0;
+    color: #9bb0cf;
+    font-size: 0.84rem;
+}
+
+.settings-log-error {
+    margin: 0.6rem 0 0;
+    color: #ffc8d0;
+    font-size: 0.84rem;
+}
+
+.settings-log-item {
+    border: 1px solid #263a58;
+    border-radius: 8px;
+    background: #0f1b30;
+    padding: 0.55rem;
+}
+
+.settings-log-item + .settings-log-item {
+    margin-top: 0.5rem;
+}
+
+.settings-log-item-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.65rem;
+}
+
+.settings-log-time {
+    color: #a4badc;
+    font-size: 0.78rem;
+}
+
+.settings-log-level {
+    border-radius: 999px;
+    padding: 0.15rem 0.5rem;
+    font-size: 0.72rem;
+    font-weight: 700;
+}
+
+.settings-log-level-critical {
+    background: rgba(140, 32, 45, 0.55);
+    color: #ffd4db;
+}
+
+.settings-log-level-error {
+    background: rgba(122, 36, 48, 0.45);
+    color: #ffc7d0;
+}
+
+.settings-log-level-warning {
+    background: rgba(124, 92, 24, 0.5);
+    color: #ffe8af;
+}
+
+.settings-log-level-information {
+    background: rgba(33, 84, 130, 0.5);
+    color: #cfe7ff;
+}
+
+.settings-log-level-debug {
+    background: rgba(51, 89, 73, 0.5);
+    color: #c8f0df;
+}
+
+.settings-log-level-trace {
+    background: rgba(70, 77, 94, 0.5);
+    color: #d8dcec;
+}
+
+.settings-log-level-none {
+    background: rgba(70, 77, 94, 0.5);
+    color: #d8dcec;
+}
+
+.settings-log-message {
+    margin: 0.5rem 0 0.35rem;
+    color: #e5eefb;
+    font-size: 0.87rem;
+    line-height: 1.35;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.settings-log-meta {
+    margin: 0;
+    color: #90a6c7;
+    font-size: 0.76rem;
+    word-break: break-all;
+}
+
+.settings-log-detail {
+    margin: 0.5rem 0 0;
+    border: 1px solid #2c405f;
+    border-radius: 8px;
+    background: #0a1220;
+    color: #c8d7ee;
+    padding: 0.45rem;
+    font-size: 0.74rem;
+    line-height: 1.3;
+    white-space: pre-wrap;
+    word-break: break-word;
+}

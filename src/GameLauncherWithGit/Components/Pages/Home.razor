@@ -208,6 +208,95 @@ else
                 </button>
             </div>
 
+            <div class="settings-section">
+                <h3>ログビューア</h3>
+                <div class="settings-log-controls">
+                    <label class="settings-log-control">
+                        <span>表示件数</span>
+                        <input type="number"
+                               min="10"
+                               max="500"
+                               @bind="_logViewerLimit"
+                               disabled="@(_isSettingsLoading || _isLogLoading)" />
+                    </label>
+                    <label class="settings-log-control">
+                        <span>レベル</span>
+                        <select @bind="_logViewerSeverityFilter"
+                                disabled="@(_isSettingsLoading || _isLogLoading)">
+                            <option value="all">すべて</option>
+                            <option value="Critical">Critical</option>
+                            <option value="Error">Error</option>
+                            <option value="Warning">Warning</option>
+                            <option value="Information">Information</option>
+                            <option value="Debug">Debug</option>
+                            <option value="Trace">Trace</option>
+                        </select>
+                    </label>
+                </div>
+                <label class="settings-log-keyword">
+                    <span>キーワード</span>
+                    <input type="text"
+                           @bind="_logViewerKeyword"
+                           @bind:event="oninput"
+                           placeholder="メッセージ / TraceId"
+                           disabled="@(_isSettingsLoading || _isLogLoading)" />
+                </label>
+                <div class="editor-actions">
+                    <button type="button"
+                            class="launch-button"
+                            @onclick="LoadLogEntriesAsync"
+                            disabled="@(_isSettingsLoading || _isLogLoading)">
+                        @(_isLogLoading ? "読み込み中..." : "更新")
+                    </button>
+                    <button type="button"
+                            class="secondary-button"
+                            @onclick="CopyLogEntriesAsync"
+                            disabled="@(_isSettingsLoading || _isLogLoading || _logViewerEntries.Count == 0)">
+                        コピー
+                    </button>
+                </div>
+                @if (!string.IsNullOrWhiteSpace(_logViewerError))
+                {
+                    <p class="settings-log-error">@_logViewerError</p>
+                }
+                <div class="settings-log-list" role="log">
+                    @if (_isLogLoading && _logViewerEntries.Count == 0)
+                    {
+                        <p class="settings-log-empty">ログを読み込み中です...</p>
+                    }
+                    else if (_logViewerEntries.Count == 0)
+                    {
+                        <p class="settings-log-empty">表示できるログがありません。</p>
+                    }
+                    else
+                    {
+                        @foreach (var entry in _logViewerEntries)
+                        {
+                            <article class="settings-log-item">
+                                <div class="settings-log-item-header">
+                                    <span class="settings-log-time">@FormatLogTimestamp(entry.Timestamp)</span>
+                                    <span class="settings-log-level @GetLogLevelClass(entry.Severity)">
+                                        @entry.Severity
+                                    </span>
+                                </div>
+                                <p class="settings-log-message">@entry.Message</p>
+                                <p class="settings-log-meta">
+                                    @entry.Name
+                                    @if (!string.IsNullOrWhiteSpace(entry.TraceId))
+                                    {
+                                        <span> / TraceId: @entry.TraceId</span>
+                                    }
+                                </p>
+                                @if (!string.IsNullOrWhiteSpace(entry.Detail))
+                                {
+                                    <pre class="settings-log-detail">@entry.Detail</pre>
+                                }
+                            </article>
+                        }
+                    }
+                </div>
+            </div>
+
             <div class="editor-actions">
                 <button type="button"
                         class="secondary-button"
@@ -318,6 +407,12 @@ else
     private int _syncRetryInitialSeconds = AppSettings.Default.SyncRetryInitialSeconds;
     private int _syncRetryMaxSeconds = AppSettings.Default.SyncRetryMaxSeconds;
     private int _notificationSuppressSeconds = AppSettings.Default.NotificationSuppressSeconds;
+    private int _logViewerLimit = 100;
+    private string _logViewerSeverityFilter = "all";
+    private string _logViewerKeyword = string.Empty;
+    private bool _isLogLoading;
+    private string? _logViewerError;
+    private IReadOnlyList<LogViewerEntry> _logViewerEntries = Array.Empty<LogViewerEntry>();
     private bool _isStartupChecking = true;
     private bool _isGitReady = true;
     private string? _startupError;
@@ -392,6 +487,7 @@ else
         {
             _autoStartEnabled = await AutoStartService.IsEnabledAsync();
             ApplyAppSettings(AppSettingsService.Get());
+            await LoadLogEntriesAsync();
         }
         catch (Exception ex)
         {
@@ -491,6 +587,100 @@ else
         {
             SetNotification(ex.Message, false);
         }
+    }
+
+    private async Task LoadLogEntriesAsync()
+    {
+        if (_isLogLoading)
+        {
+            return;
+        }
+
+        _isLogLoading = true;
+        _logViewerError = null;
+
+        try
+        {
+            var severity = ParseLogSeverityFilter(_logViewerSeverityFilter);
+            _logViewerEntries = await LogAccessService.GetLatestEntriesAsync(
+                _logViewerLimit,
+                severity,
+                _logViewerKeyword);
+        }
+        catch (Exception ex)
+        {
+            _logViewerEntries = Array.Empty<LogViewerEntry>();
+            _logViewerError = $"ログ読み込みに失敗しました。詳細: {ex.Message}";
+            SetNotification(_logViewerError, false);
+        }
+        finally
+        {
+            _isLogLoading = false;
+        }
+    }
+
+    private async Task CopyLogEntriesAsync()
+    {
+        if (_logViewerEntries.Count == 0)
+        {
+            SetNotification("コピー対象のログがありません。", false);
+            return;
+        }
+
+        var lines = new List<string>(_logViewerEntries.Count * 3);
+        foreach (var entry in _logViewerEntries)
+        {
+            lines.Add($"{FormatLogTimestamp(entry.Timestamp)} [{entry.Severity}] {entry.Message}");
+            lines.Add($"name={entry.Name}, traceId={entry.TraceId ?? "n/a"}");
+            if (!string.IsNullOrWhiteSpace(entry.Detail))
+            {
+                lines.Add(entry.Detail);
+            }
+
+            lines.Add(string.Empty);
+        }
+
+        try
+        {
+            await Clipboard.Default.SetTextAsync(string.Join(Environment.NewLine, lines));
+            SetNotification("ログをクリップボードにコピーしました。", true);
+        }
+        catch (Exception ex)
+        {
+            SetNotification($"ログコピーに失敗しました: {ex.Message}", false);
+        }
+    }
+
+    private static Microsoft.Extensions.Logging.LogLevel? ParseLogSeverityFilter(string? filter)
+    {
+        if (string.IsNullOrWhiteSpace(filter)
+            || string.Equals(filter, "all", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return Enum.TryParse<Microsoft.Extensions.Logging.LogLevel>(filter, ignoreCase: true, out var severity)
+            ? severity
+            : null;
+    }
+
+    private static string FormatLogTimestamp(DateTimeOffset value)
+    {
+        return value.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss");
+    }
+
+    private static string GetLogLevelClass(Microsoft.Extensions.Logging.LogLevel level)
+    {
+        return level switch
+        {
+            Microsoft.Extensions.Logging.LogLevel.Critical => "settings-log-level-critical",
+            Microsoft.Extensions.Logging.LogLevel.Error => "settings-log-level-error",
+            Microsoft.Extensions.Logging.LogLevel.Warning => "settings-log-level-warning",
+            Microsoft.Extensions.Logging.LogLevel.Information => "settings-log-level-information",
+            Microsoft.Extensions.Logging.LogLevel.Debug => "settings-log-level-debug",
+            Microsoft.Extensions.Logging.LogLevel.Trace => "settings-log-level-trace",
+            _ => "settings-log-level-none"
+        };
     }
 
     private void OpenCreateEditor()
