@@ -45,7 +45,8 @@ public sealed class GameLibraryService : IGameLibraryService
 			RelatedRepositoryPath: normalizedInput.RelatedRepositoryPath,
 			ThumbnailPath: thumbnailPath,
 			LastPlayedAt: null,
-			Status: GameCardStatus.Unknown);
+			Status: GameCardStatus.Unknown,
+			IsPinned: false);
 
 		await _store.UpsertAsync(game, cancellationToken);
 		return game;
@@ -86,6 +87,17 @@ public sealed class GameLibraryService : IGameLibraryService
 		}
 
 		await _store.UpsertAsync(game with { Status = status }, cancellationToken);
+	}
+
+	public async Task SetPinnedAsync(string gameId, bool isPinned, CancellationToken cancellationToken = default)
+	{
+		var game = await _store.FindByIdAsync(gameId, cancellationToken);
+		if (game is null)
+		{
+			return;
+		}
+
+		await _store.UpsertAsync(game with { IsPinned = isPinned }, cancellationToken);
 	}
 
 	public async Task<bool> DeleteAsync(string gameId, CancellationToken cancellationToken = default)

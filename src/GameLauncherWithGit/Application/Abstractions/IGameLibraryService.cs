@@ -14,6 +14,8 @@ public interface IGameLibraryService
 
 	Task<bool> DeleteAsync(string gameId, CancellationToken cancellationToken = default);
 
+	Task SetPinnedAsync(string gameId, bool isPinned, CancellationToken cancellationToken = default);
+
 	Task MarkLaunchedAsync(string gameId, CancellationToken cancellationToken = default);
 
 	Task SetStatusAsync(string gameId, GameCardStatus status, CancellationToken cancellationToken = default);

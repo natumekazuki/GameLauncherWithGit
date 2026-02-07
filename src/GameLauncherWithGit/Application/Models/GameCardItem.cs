@@ -7,4 +7,5 @@ public sealed record GameCardItem(
 	string? RelatedRepositoryPath,
 	string? ThumbnailPath,
 	DateTimeOffset? LastPlayedAt,
-	GameCardStatus Status);
+	GameCardStatus Status,
+	bool IsPinned = false);

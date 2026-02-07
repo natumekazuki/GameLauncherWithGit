@@ -29,9 +29,10 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore
 		await using var connection = await OpenConnectionAsync(cancellationToken);
 		await using var command = connection.CreateCommand();
 		command.CommandText = """
-			SELECT Id, Title, ExecutablePath, RelatedRepositoryPath, RelatedRepositoryPathsJson, ThumbnailPath, LastPlayedAt, Status
+			SELECT Id, Title, ExecutablePath, RelatedRepositoryPath, RelatedRepositoryPathsJson, ThumbnailPath, LastPlayedAt, Status, IsPinned
 			FROM Games
 			ORDER BY
+			    IsPinned DESC,
 			    CASE WHEN LastPlayedAt IS NULL THEN 1 ELSE 0 END,
 			    LastPlayedAt DESC,
 			    Title COLLATE NOCASE;
@@ -54,7 +55,7 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore
 		await using var connection = await OpenConnectionAsync(cancellationToken);
 		await using var command = connection.CreateCommand();
 		command.CommandText = """
-			SELECT Id, Title, ExecutablePath, RelatedRepositoryPath, RelatedRepositoryPathsJson, ThumbnailPath, LastPlayedAt, Status
+			SELECT Id, Title, ExecutablePath, RelatedRepositoryPath, RelatedRepositoryPathsJson, ThumbnailPath, LastPlayedAt, Status, IsPinned
 			FROM Games
 			WHERE Id = $id
 			LIMIT 1;
@@ -79,10 +80,10 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore
 		await using var command = connection.CreateCommand();
 		command.CommandText = """
 			INSERT INTO Games (
-			    Id, Title, ExecutablePath, RelatedRepositoryPath, RelatedRepositoryPathsJson, ThumbnailPath, LastPlayedAt, Status, CreatedAt, UpdatedAt
+			    Id, Title, ExecutablePath, RelatedRepositoryPath, RelatedRepositoryPathsJson, ThumbnailPath, LastPlayedAt, Status, IsPinned, CreatedAt, UpdatedAt
 			)
 			VALUES (
-			    $id, $title, $executablePath, $relatedRepositoryPath, $relatedRepositoryPathsJson, $thumbnailPath, $lastPlayedAt, $status, $createdAt, $updatedAt
+			    $id, $title, $executablePath, $relatedRepositoryPath, $relatedRepositoryPathsJson, $thumbnailPath, $lastPlayedAt, $status, $isPinned, $createdAt, $updatedAt
 			)
 			ON CONFLICT(Id) DO UPDATE SET
 			    Title = excluded.Title,
@@ -92,6 +93,7 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore
 			    ThumbnailPath = excluded.ThumbnailPath,
 			    LastPlayedAt = excluded.LastPlayedAt,
 			    Status = excluded.Status,
+			    IsPinned = excluded.IsPinned,
 			    UpdatedAt = excluded.UpdatedAt;
 			""";
 
@@ -104,6 +106,7 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore
 		command.Parameters.AddWithValue("$thumbnailPath", NormalizeThumbnailPath(game.ThumbnailPath) ?? (object)DBNull.Value);
 		command.Parameters.AddWithValue("$lastPlayedAt", game.LastPlayedAt?.ToString("O") ?? (object)DBNull.Value);
 		command.Parameters.AddWithValue("$status", (int)game.Status);
+		command.Parameters.AddWithValue("$isPinned", game.IsPinned ? 1 : 0);
 		command.Parameters.AddWithValue("$createdAt", now);
 		command.Parameters.AddWithValue("$updatedAt", now);
 
@@ -176,6 +179,7 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore
 			    ThumbnailPath TEXT NULL,
 			    LastPlayedAt TEXT NULL,
 			    Status INTEGER NOT NULL,
+			    IsPinned INTEGER NOT NULL DEFAULT 0,
 			    CreatedAt TEXT NOT NULL,
 			    UpdatedAt TEXT NOT NULL
 			);
@@ -185,6 +189,7 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore
 		await EnsureColumnExistsAsync(connection, "RelatedRepositoryPath", "TEXT NULL", cancellationToken);
 		await EnsureColumnExistsAsync(connection, "RelatedRepositoryPathsJson", "TEXT NULL", cancellationToken);
 		await EnsureColumnExistsAsync(connection, "ThumbnailPath", "TEXT NULL", cancellationToken);
+		await EnsureColumnExistsAsync(connection, "IsPinned", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
 	}
 
 	private static async Task EnsureColumnExistsAsync(
@@ -278,6 +283,7 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore
 		var thumbnailPath = reader.IsDBNull(5) ? null : reader.GetString(5);
 		var lastPlayedAtValue = reader.IsDBNull(6) ? null : reader.GetString(6);
 		var statusValue = reader.GetInt32(7);
+		var isPinned = !reader.IsDBNull(8) && reader.GetInt32(8) != 0;
 
 		return new GameCardItem(
 			Id: gameId,
@@ -286,7 +292,8 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore
 			RelatedRepositoryPath: NormalizeSingleRepositoryPath(relatedRepositoryPath) ?? DeserializeRepositoryPathLegacy(relatedRepositoryPathsJson),
 			ThumbnailPath: NormalizeThumbnailPath(thumbnailPath),
 			LastPlayedAt: ParseDateTimeOffset(lastPlayedAtValue),
-			Status: ParseStatus(statusValue));
+			Status: ParseStatus(statusValue),
+			IsPinned: isPinned);
 	}
 
 	private static string? DeserializeRepositoryPathLegacy(string? json)
