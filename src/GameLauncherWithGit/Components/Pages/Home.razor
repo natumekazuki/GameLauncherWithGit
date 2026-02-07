@@ -557,6 +557,7 @@ else
                 return;
             }
 
+            ApplyAppSettings(AppSettingsService.Get());
             await RunStartupLogMaintenanceAsync();
             _ = SyncOrchestrator;
             await ReloadGamesAsync();
