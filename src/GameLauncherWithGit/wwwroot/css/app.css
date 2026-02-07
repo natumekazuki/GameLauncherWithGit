@@ -219,6 +219,12 @@ h1:focus {
     margin-top: 0.5rem;
     display: flex;
     gap: 0.5rem;
+    align-items: stretch;
+}
+
+.game-card-actions > button {
+    flex: 1 1 0;
+    min-width: 0;
 }
 
 .launch-button {
@@ -278,21 +284,19 @@ h1:focus {
 }
 
 .pin-toggle-button {
-    min-width: 2.3rem;
-    width: 2.3rem;
     padding: 0;
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    min-height: 2.3rem;
 }
 
 .action-icon-button {
-    min-width: 2.3rem;
-    width: 2.3rem;
     padding: 0;
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    min-height: 2.3rem;
 }
 
 .launch-icon::before {
