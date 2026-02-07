@@ -6,9 +6,10 @@ using System.Text.Json;
 
 namespace GameLauncherWithGit.Infrastructure.Services;
 
-public sealed class SqliteGameLibraryStore : IGameLibraryStore
+public sealed class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncHistoryStore
 {
 	private const string DatabaseFileName = "game-library.db";
+	private const int DefaultMaxHistoryPerRepository = 50;
 	private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
 	private readonly ILogger<SqliteGameLibraryStore> _logger;
@@ -132,6 +133,111 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore
 		await command.ExecuteNonQueryAsync(cancellationToken);
 	}
 
+	public async Task AppendAsync(RepositorySyncHistoryItem entry, CancellationToken cancellationToken = default)
+	{
+		await EnsureInitializedAsync(cancellationToken);
+
+		if (string.IsNullOrWhiteSpace(entry.RepositoryId))
+		{
+			return;
+		}
+
+		var normalizedRepositoryId = entry.RepositoryId.Trim();
+		var startedAt = entry.StartedAt.ToString("O");
+		var finishedAt = entry.FinishedAt.ToString("O");
+		var durationMs = Math.Max(0L, entry.DurationMs);
+		var createdAt = DateTimeOffset.UtcNow.ToString("O");
+
+		await using var connection = await OpenConnectionAsync(cancellationToken);
+		await using (var insertCommand = connection.CreateCommand())
+		{
+			insertCommand.CommandText = """
+				INSERT INTO RepositorySyncHistory (
+				    RepositoryId, Status, StartedAt, FinishedAt, DurationMs, Command, Reason, CreatedAt
+				)
+				VALUES (
+				    $repositoryId, $status, $startedAt, $finishedAt, $durationMs, $command, $reason, $createdAt
+				);
+				""";
+			insertCommand.Parameters.AddWithValue("$repositoryId", normalizedRepositoryId);
+			insertCommand.Parameters.AddWithValue("$status", (int)entry.Status);
+			insertCommand.Parameters.AddWithValue("$startedAt", startedAt);
+			insertCommand.Parameters.AddWithValue("$finishedAt", finishedAt);
+			insertCommand.Parameters.AddWithValue("$durationMs", durationMs);
+			insertCommand.Parameters.AddWithValue("$command", entry.Command?.Trim() ?? (object)DBNull.Value);
+			insertCommand.Parameters.AddWithValue("$reason", entry.Reason?.Trim() ?? (object)DBNull.Value);
+			insertCommand.Parameters.AddWithValue("$createdAt", createdAt);
+			await insertCommand.ExecuteNonQueryAsync(cancellationToken);
+		}
+
+		await using var pruneCommand = connection.CreateCommand();
+		pruneCommand.CommandText = """
+			DELETE FROM RepositorySyncHistory
+			WHERE RepositoryId = $repositoryId
+			  AND Id NOT IN (
+			      SELECT Id
+			      FROM RepositorySyncHistory
+			      WHERE RepositoryId = $repositoryId
+			      ORDER BY FinishedAt DESC, Id DESC
+			      LIMIT $maxEntries
+			  );
+			""";
+		pruneCommand.Parameters.AddWithValue("$repositoryId", normalizedRepositoryId);
+		pruneCommand.Parameters.AddWithValue("$maxEntries", DefaultMaxHistoryPerRepository);
+		await pruneCommand.ExecuteNonQueryAsync(cancellationToken);
+	}
+
+	public async Task<IReadOnlyDictionary<string, IReadOnlyList<RepositorySyncHistoryItem>>> GetLatestByRepositoryIdsAsync(
+		IReadOnlyCollection<string> repositoryIds,
+		int limitPerRepository,
+		CancellationToken cancellationToken = default)
+	{
+		await EnsureInitializedAsync(cancellationToken);
+
+		if (repositoryIds is null || repositoryIds.Count == 0)
+		{
+			return new Dictionary<string, IReadOnlyList<RepositorySyncHistoryItem>>(StringComparer.OrdinalIgnoreCase);
+		}
+
+		var normalizedLimit = Math.Clamp(limitPerRepository, 1, 20);
+		var normalizedRepositoryIds = repositoryIds
+			.Where(static id => !string.IsNullOrWhiteSpace(id))
+			.Select(static id => id.Trim())
+			.Distinct(StringComparer.OrdinalIgnoreCase)
+			.ToArray();
+		if (normalizedRepositoryIds.Length == 0)
+		{
+			return new Dictionary<string, IReadOnlyList<RepositorySyncHistoryItem>>(StringComparer.OrdinalIgnoreCase);
+		}
+
+		await using var connection = await OpenConnectionAsync(cancellationToken);
+		var result = new Dictionary<string, IReadOnlyList<RepositorySyncHistoryItem>>(StringComparer.OrdinalIgnoreCase);
+		foreach (var repositoryId in normalizedRepositoryIds)
+		{
+			await using var command = connection.CreateCommand();
+			command.CommandText = """
+				SELECT Id, RepositoryId, Status, StartedAt, FinishedAt, DurationMs, Command, Reason
+				FROM RepositorySyncHistory
+				WHERE RepositoryId = $repositoryId
+				ORDER BY FinishedAt DESC, Id DESC
+				LIMIT $limit;
+				""";
+			command.Parameters.AddWithValue("$repositoryId", repositoryId);
+			command.Parameters.AddWithValue("$limit", normalizedLimit);
+
+			var entries = new List<RepositorySyncHistoryItem>(normalizedLimit);
+			await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+			while (await reader.ReadAsync(cancellationToken))
+			{
+				entries.Add(MapRepositorySyncHistory(reader));
+			}
+
+			result[repositoryId] = entries;
+		}
+
+		return result;
+	}
+
 	private async Task EnsureInitializedAsync(CancellationToken cancellationToken)
 	{
 		if (_isInitialized)
@@ -190,6 +296,29 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore
 		await EnsureColumnExistsAsync(connection, "RelatedRepositoryPathsJson", "TEXT NULL", cancellationToken);
 		await EnsureColumnExistsAsync(connection, "ThumbnailPath", "TEXT NULL", cancellationToken);
 		await EnsureColumnExistsAsync(connection, "IsPinned", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
+
+		await using var createHistoryTableCommand = connection.CreateCommand();
+		createHistoryTableCommand.CommandText = """
+			CREATE TABLE IF NOT EXISTS RepositorySyncHistory (
+			    Id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+			    RepositoryId TEXT NOT NULL,
+			    Status INTEGER NOT NULL,
+			    StartedAt TEXT NOT NULL,
+			    FinishedAt TEXT NOT NULL,
+			    DurationMs INTEGER NOT NULL,
+			    Command TEXT NULL,
+			    Reason TEXT NULL,
+			    CreatedAt TEXT NOT NULL
+			);
+			""";
+		await createHistoryTableCommand.ExecuteNonQueryAsync(cancellationToken);
+
+		await using var createHistoryIndexCommand = connection.CreateCommand();
+		createHistoryIndexCommand.CommandText = """
+			CREATE INDEX IF NOT EXISTS IX_RepositorySyncHistory_RepositoryId_FinishedAt
+			ON RepositorySyncHistory (RepositoryId, FinishedAt DESC);
+			""";
+		await createHistoryIndexCommand.ExecuteNonQueryAsync(cancellationToken);
 	}
 
 	private static async Task EnsureColumnExistsAsync(
@@ -364,5 +493,30 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore
 		return Enum.IsDefined(typeof(GameCardStatus), value)
 			? (GameCardStatus)value
 			: GameCardStatus.Unknown;
+	}
+
+	private static RepositorySyncHistoryItem MapRepositorySyncHistory(SqliteDataReader reader)
+	{
+		var id = reader.GetInt64(0);
+		var repositoryId = reader.GetString(1);
+		var statusValue = reader.GetInt32(2);
+		var startedAt = ParseDateTimeOffset(reader.IsDBNull(3) ? null : reader.GetString(3)) ?? DateTimeOffset.MinValue;
+		var finishedAt = ParseDateTimeOffset(reader.IsDBNull(4) ? null : reader.GetString(4)) ?? startedAt;
+		var durationMs = !reader.IsDBNull(5) ? Math.Max(0L, reader.GetInt64(5)) : Math.Max(0L, (long)(finishedAt - startedAt).TotalMilliseconds);
+		var command = reader.IsDBNull(6) ? null : reader.GetString(6);
+		var reason = reader.IsDBNull(7) ? null : reader.GetString(7);
+
+		var status = Enum.IsDefined(typeof(RepositorySyncHistoryStatus), statusValue)
+			? (RepositorySyncHistoryStatus)statusValue
+			: RepositorySyncHistoryStatus.Failed;
+		return new RepositorySyncHistoryItem(
+			Id: id,
+			RepositoryId: repositoryId,
+			Status: status,
+			StartedAt: startedAt,
+			FinishedAt: finishedAt,
+			DurationMs: durationMs,
+			Command: command,
+			Reason: reason);
 	}
 }

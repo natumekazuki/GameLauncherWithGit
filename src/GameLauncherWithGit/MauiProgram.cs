@@ -42,7 +42,9 @@ public static class MauiProgram
 				configureFile: options => options.FilePath = structuredLogPath);
 
 		builder.Services.AddSingleton<IRepositoryStateStore, RepositoryStateStore>();
-		builder.Services.AddSingleton<IGameLibraryStore, SqliteGameLibraryStore>();
+		builder.Services.AddSingleton<SqliteGameLibraryStore>();
+		builder.Services.AddSingleton<IGameLibraryStore>(serviceProvider => serviceProvider.GetRequiredService<SqliteGameLibraryStore>());
+		builder.Services.AddSingleton<IRepositorySyncHistoryStore>(serviceProvider => serviceProvider.GetRequiredService<SqliteGameLibraryStore>());
 		builder.Services.AddSingleton<IAppSettingsService, AppSettingsService>();
 		builder.Services.AddSingleton<ISettingsPanelService, SettingsPanelService>();
 		builder.Services.AddSingleton<ISyncOrchestrator, SyncOrchestrator>();
