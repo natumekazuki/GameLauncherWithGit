@@ -3,6 +3,8 @@ using GameLauncherWithGit.Application.Services;
 using GameLauncherWithGit.Infrastructure.Abstractions;
 using GameLauncherWithGit.Infrastructure.Services;
 using Microsoft.Extensions.Logging;
+using MonochromeMemory.Log.Core;
+using MonochromeMemory.Log.Sinks.File.Extensions;
 
 namespace GameLauncherWithGit;
 
@@ -11,6 +13,9 @@ public static class MauiProgram
 	public static MauiApp CreateMauiApp()
 	{
 		var builder = MauiApp.CreateBuilder();
+		var logsDirectoryPath = Path.Combine(FileSystem.AppDataDirectory, "logs");
+		var structuredLogPath = Path.Combine(logsDirectoryPath, "app-events.jsonl");
+
 		builder
 			.UseMauiApp<App>()
 			.ConfigureFonts(fonts =>
@@ -19,6 +24,23 @@ public static class MauiProgram
 			});
 
 		builder.Services.AddMauiBlazorWebView();
+		builder.Services
+			.AddMonochromeMemoryLogCore()
+			.AddFileLogSink(
+				configure: options =>
+				{
+					options.MinimumSeverity = LogLevel.Information;
+					options.Buffering = new DispatchBufferOptions
+					{
+						Mode = BufferingMode.Bounded,
+						Capacity = 2048,
+						OverflowStrategy = BufferOverflowStrategy.DropOld,
+						MaxBatchSize = 64,
+						MaxFlushInterval = TimeSpan.FromMilliseconds(500)
+					};
+				},
+				configureFile: options => options.FilePath = structuredLogPath);
+
 		builder.Services.AddSingleton<IRepositoryStateStore, RepositoryStateStore>();
 		builder.Services.AddSingleton<IGameLibraryStore, SqliteGameLibraryStore>();
 		builder.Services.AddSingleton<ISyncOrchestrator, SyncOrchestrator>();

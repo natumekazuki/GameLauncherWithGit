@@ -1,6 +1,6 @@
 # MAUI Blazor アーキテクチャ設計（MVP）
 
-更新日: 2026-02-06
+更新日: 2026-02-07
 対象: Windows 11 / .NET 9 / .NET MAUI Blazor Hybrid
 関連: `docs/design/resume-roadmap.md`（中断後の再開用メモ）
 
@@ -33,7 +33,7 @@ flowchart LR
   - 画面右下固定の通知領域で、操作結果とエラーを表示
 - `SyncOrchestrator`
   - 監視イベント受信、デバウンス管理、同期ジョブ実行順序制御
-  - 失敗分類とリトライポリシー適用
+  - 失敗分類とリトライポリシー適用（指数バックオフ再試行、通知抑制、復旧通知）
 - `LauncherService`
   - ゲーム起動前に `fetch` を実行し、リモート先行でなければ `add -A -> commit(差分時のみ)` を実行
   - その後 `pull --rebase --autostash` を実行
@@ -54,7 +54,7 @@ flowchart LR
   - 実行ファイル、サムネイル画像、関連リポジトリフォルダの選択をOSピッカー経由で提供
   - UI層から Windows API へ直接依存しないための抽象境界を維持
 - `LogAccessService`
-  - `%AppData%/logs/app-errors.log` へエラーメッセージを記録
+  - `MonochromeMemory.Log` を使って `%AppData%/logs/app-events.jsonl` へ構造化エラーログを記録
   - 最新エラーログ/ログフォルダをOSシェルで開く
 - `GameLibraryStore (SQLite)`
   - ゲーム設定（タイトル/実行ファイル/関連リポジトリ/サムネイルパス/状態）をSQLiteへ保存・読込
@@ -73,13 +73,20 @@ sequenceDiagram
     G-->>O: result
     O->>G: git pull --rebase --autostash
     G-->>O: result
-    O->>G: git add -A
-    G-->>O: result
-    O->>G: git commit (差分時のみ)
-    G-->>O: result
-    O->>G: git push
-    G-->>O: result
-    O->>N: 成功通知/失敗通知
+    alt pull成功
+        O->>G: git add -A
+        G-->>O: result
+        O->>G: git commit (差分時のみ)
+        G-->>O: result
+        O->>G: git push
+        G-->>O: result
+    else 一時失敗（ネットワーク/リモート不達など）
+        O->>O: 指数バックオフで再試行予約
+        O->>N: 初回失敗のみ通知（連続失敗は抑制）
+    else 競合/致命的失敗
+        O->>N: エラー停止通知
+        O->>O: ErrorPausedへ遷移
+    end
 ```
 
 ## 6. 起動ランチャーフロー
@@ -137,7 +144,7 @@ sequenceDiagram
 - 保存対象
   - `game-library.db`: ゲーム設定（タイトル、実行ファイル、関連リポジトリ、サムネイルパス、状態、最終プレイ日時）
   - `settings.json`: リポジトリ設定、デバウンス秒数（予定）
-  - `logs/*.log`: Git 実行ログ、障害ログ
+  - `logs/app-events.jsonl`: 構造化エラーログ（MonochromeMemory.Log）
   - `thumbnails/*.png`: 変換済みサムネイル
 
 ## 10. エラーハンドリング方針
@@ -145,7 +152,7 @@ sequenceDiagram
   - 対象リポジトリを `ErrorPaused` に遷移し自動同期停止
   - Toast + トレイ + ログで通知
 - オフライン/リモート不達
-  - ローカル commit 継続、push は指数バックオフ再試行
+  - 同期ジョブを `Idle` に戻し、指数バックオフで自動再試行
   - 初回失敗と復旧時のみ通知（連続失敗は通知抑制）
 - 認証/権限エラー
   - ガイド付きメッセージ（再ログイン、権限確認）を表示
@@ -180,6 +187,7 @@ sequenceDiagram
   - RepositoryWatcherService の FileSystemWatcher 実装（登録/解除、変更イベント通知）
   - SyncOrchestrator の監視イベント購読、10秒デバウンス、リポジトリ単位の単一実行制御
   - SyncOrchestrator の同期本体（`fetch -> pull --rebase --autostash -> add -A -> status -> commit(差分時のみ) -> push`）
+  - SyncOrchestrator の同期失敗時指数バックオフ再試行（初回失敗通知、連続失敗通知抑制、復旧通知）
   - pull/rebase 競合時の `ErrorPaused` 遷移、それ以外の同期失敗時の `Idle` 復帰
   - 監視キーのリポジトリパス統一（同一リポジトリ重複監視の抑止）
   - Home 初期化時/保存後の監視対象再構成（関連リポジトリごとに監視登録）
@@ -187,9 +195,9 @@ sequenceDiagram
   - NotificationService のWindows通知実装（重複抑制・失敗時フォールバック）
   - TrayService のトレイ状態表示実装（Win32 `Shell_NotifyIcon`）
   - SyncOrchestrator から通知/トレイ更新を連携（失敗通知と状態反映）
+  - LogAccessService の `MonochromeMemory.Log` 連携（`app-events.jsonl` 出力）
   - Windows 実行/配布スクリプト（`scripts/run-local-unpackaged.ps1` / `scripts/publish-windows-msix.ps1`）
 - 未実装
-  - 同期失敗時の指数バックオフ再試行と通知抑制
   - 設定永続化（`settings.json`）とログ画面/運用導線
 
 ## 13. Windows 配布モデル（Unpackaged / MSIX）

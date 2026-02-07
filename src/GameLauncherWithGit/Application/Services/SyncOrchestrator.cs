@@ -18,6 +18,8 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 	private readonly ILogger<SyncOrchestrator> _logger;
 	private readonly ConcurrentDictionary<string, RepositorySyncQueue> _queues = new(StringComparer.OrdinalIgnoreCase);
 	private readonly TimeSpan _debounceDuration = TimeSpan.FromSeconds(10);
+	private readonly TimeSpan _initialRetryDelay = TimeSpan.FromSeconds(5);
+	private readonly TimeSpan _maxRetryDelay = TimeSpan.FromMinutes(5);
 	private bool _isDisposed;
 
 	public SyncOrchestrator(
@@ -74,6 +76,10 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 
 		lock (queue.Gate)
 		{
+			queue.RetryCts?.Cancel();
+			queue.RetryCts?.Dispose();
+			queue.RetryCts = null;
+
 			if (queue.IsSyncRunning)
 			{
 				queue.RerunRequested = true;
@@ -114,6 +120,9 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 				queue.DebounceCts?.Cancel();
 				queue.DebounceCts?.Dispose();
 				queue.DebounceCts = null;
+				queue.RetryCts?.Cancel();
+				queue.RetryCts?.Dispose();
+				queue.RetryCts = null;
 			}
 		}
 
@@ -159,7 +168,14 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		{
 			SetRepositoryState(repositoryId, RepositorySyncState.Syncing);
 			await ExecuteSyncCoreAsync(repositoryId, debounceCts.Token);
+			var hadTransientFailure = ClearTransientFailureState(queue);
 			SetRepositoryState(repositoryId, RepositorySyncState.Idle);
+			if (hadTransientFailure)
+			{
+				await _notificationService.NotifyAsync(
+					"同期が復旧しました",
+					$"一時的な同期エラーから復旧しました。repo={repositoryId}");
+			}
 		}
 		catch (OperationCanceledException)
 		{
@@ -169,18 +185,41 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		{
 			var targetState = ex.ShouldPauseRepository ? RepositorySyncState.ErrorPaused : RepositorySyncState.Idle;
 			SetRepositoryState(repositoryId, targetState);
-			_logger.LogError(ex, "Repository sync command failed. repositoryId={RepositoryId}", repositoryId);
+			if (ex.ShouldPauseRepository)
+			{
+				ResetTransientFailureState(queue);
+				_logger.LogError(ex, "Repository sync command failed. repositoryId={RepositoryId}", repositoryId);
+				await NotifyAndLogErrorAsync(
+					"自動同期を停止しました",
+					$"競合または致命的なエラーにより同期を停止しました。repo={repositoryId} / {ex.Message}");
+			}
+			else
+			{
+				var retryPlan = RegisterTransientFailure(queue);
+				_logger.LogWarning(
+					ex,
+					"Repository sync transient failure. repositoryId={RepositoryId}, failureCount={FailureCount}, retryDelaySeconds={RetryDelaySeconds}",
+					repositoryId,
+					retryPlan.FailureCount,
+					(int)retryPlan.Delay.TotalSeconds);
 
-			var title = ex.ShouldPauseRepository
-				? "自動同期を停止しました"
-				: "同期に失敗しました";
-			var message = ex.ShouldPauseRepository
-				? $"競合または致命的なエラーにより同期を停止しました。repo={repositoryId}"
-				: $"次回変更時に再試行します。repo={repositoryId}";
-			await NotifyAndLogErrorAsync(title, $"{message} / {ex.Message}");
+				var message =
+					$"同期に失敗しました。repo={repositoryId}, {retryPlan.FailureCount}回目, {Math.Ceiling(retryPlan.Delay.TotalSeconds)}秒後に自動再試行します。 / {ex.Message}";
+				if (retryPlan.ShouldNotify)
+				{
+					await NotifyAndLogErrorAsync("同期に失敗しました", message);
+				}
+				else
+				{
+					await AppendErrorAsync($"再試行継続中: {message}");
+				}
+
+				ScheduleRetry(repositoryId, queue, retryPlan);
+			}
 		}
 		catch (Exception ex)
 		{
+			ResetTransientFailureState(queue);
 			SetRepositoryState(repositoryId, RepositorySyncState.ErrorPaused);
 			_logger.LogError(ex, "Repository sync failed. repositoryId={RepositoryId}", repositoryId);
 			await NotifyAndLogErrorAsync(
@@ -369,12 +408,130 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 
 		try
 		{
-			await _logAccessService.AppendErrorAsync($"{title}: {message}");
+			await AppendErrorAsync($"{title}: {message}");
 		}
 		catch (Exception ex)
 		{
 			_logger.LogWarning(ex, "Failed to append sync error log.");
 		}
+	}
+
+	private Task AppendErrorAsync(string message)
+	{
+		return _logAccessService.AppendErrorAsync(message);
+	}
+
+	private RetryPlan RegisterTransientFailure(RepositorySyncQueue queue)
+	{
+		lock (queue.Gate)
+		{
+			queue.ConsecutiveTransientFailures++;
+			var failureCount = queue.ConsecutiveTransientFailures;
+			var delay = CalculateRetryDelay(failureCount);
+			return new RetryPlan(
+				failureCount,
+				delay,
+				ShouldNotify: failureCount == 1);
+		}
+	}
+
+	private bool ClearTransientFailureState(RepositorySyncQueue queue)
+	{
+		lock (queue.Gate)
+		{
+			var hadFailure = queue.ConsecutiveTransientFailures > 0;
+			queue.ConsecutiveTransientFailures = 0;
+			queue.RetryCts?.Cancel();
+			queue.RetryCts?.Dispose();
+			queue.RetryCts = null;
+			return hadFailure;
+		}
+	}
+
+	private void ResetTransientFailureState(RepositorySyncQueue queue)
+	{
+		lock (queue.Gate)
+		{
+			queue.ConsecutiveTransientFailures = 0;
+			queue.RetryCts?.Cancel();
+			queue.RetryCts?.Dispose();
+			queue.RetryCts = null;
+		}
+	}
+
+	private void ScheduleRetry(string repositoryId, RepositorySyncQueue queue, RetryPlan retryPlan)
+	{
+		if (_isDisposed)
+		{
+			return;
+		}
+
+		CancellationTokenSource retryCts;
+		lock (queue.Gate)
+		{
+			queue.RetryCts?.Cancel();
+			queue.RetryCts?.Dispose();
+			retryCts = new CancellationTokenSource();
+			queue.RetryCts = retryCts;
+		}
+
+		_ = RetryAfterDelayAsync(repositoryId, queue, retryCts, retryPlan);
+	}
+
+	private async Task RetryAfterDelayAsync(
+		string repositoryId,
+		RepositorySyncQueue queue,
+		CancellationTokenSource retryCts,
+		RetryPlan retryPlan)
+	{
+		try
+		{
+			try
+			{
+				await Task.Delay(retryPlan.Delay, retryCts.Token);
+			}
+			catch (OperationCanceledException)
+			{
+				return;
+			}
+			finally
+			{
+				lock (queue.Gate)
+				{
+					if (ReferenceEquals(queue.RetryCts, retryCts))
+					{
+						queue.RetryCts = null;
+					}
+				}
+			}
+
+			if (_isDisposed)
+			{
+				return;
+			}
+
+			_logger.LogInformation(
+				"Retrying repository sync. repositoryId={RepositoryId}, failureCount={FailureCount}",
+				repositoryId,
+				retryPlan.FailureCount);
+			await QueueRepositorySyncCoreAsync(repositoryId, runImmediately: true, CancellationToken.None);
+		}
+		catch (ObjectDisposedException)
+		{
+			// Disposeと競合した場合は無視する。
+		}
+		finally
+		{
+			retryCts.Dispose();
+		}
+	}
+
+	private TimeSpan CalculateRetryDelay(int failureCount)
+	{
+		var exponent = Math.Max(0, failureCount - 1);
+		var multiplier = Math.Pow(2, exponent);
+		var seconds = Math.Min(_maxRetryDelay.TotalSeconds, _initialRetryDelay.TotalSeconds * multiplier);
+		return TimeSpan.FromSeconds(Math.Max(1, seconds));
 	}
 
 	private void ThrowIfDisposed()
@@ -388,12 +545,21 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 
 		public CancellationTokenSource? DebounceCts { get; set; }
 
+		public CancellationTokenSource? RetryCts { get; set; }
+
 		public bool IsSyncRunning { get; set; }
 
 		public bool RerunRequested { get; set; }
 
 		public bool RerunImmediately { get; set; }
+
+		public int ConsecutiveTransientFailures { get; set; }
 	}
+
+	private sealed record RetryPlan(
+		int FailureCount,
+		TimeSpan Delay,
+		bool ShouldNotify);
 
 	private sealed class SyncCommandException : Exception
 	{

@@ -2,23 +2,31 @@ using System.Diagnostics;
 using System.Text;
 using GameLauncherWithGit.Infrastructure.Abstractions;
 using Microsoft.Extensions.Logging;
+using MonochromeMemory.Log.Core;
 
 namespace GameLauncherWithGit.Infrastructure.Services;
 
 public sealed class LogAccessService : ILogAccessService
 {
 	private const string LogsDirectoryName = "logs";
-	private const string ErrorLogFileName = "app-errors.log";
+	private const string StructuredLogFileName = "app-events.jsonl";
+	private const string ServiceName = "GameLauncherWithGit";
 
+	private readonly ILogDispatcher _logDispatcher;
 	private readonly ILogger<LogAccessService> _logger;
 	private readonly string _logsDirectoryPath;
-	private readonly string _errorLogPath;
+	private readonly string _structuredLogPath;
+	private readonly IReadOnlyDictionary<string, object?> _resource;
 
-	public LogAccessService(ILogger<LogAccessService> logger)
+	public LogAccessService(
+		ILogDispatcher logDispatcher,
+		ILogger<LogAccessService> logger)
 	{
+		_logDispatcher = logDispatcher;
 		_logger = logger;
 		_logsDirectoryPath = Path.Combine(FileSystem.AppDataDirectory, LogsDirectoryName);
-		_errorLogPath = Path.Combine(_logsDirectoryPath, ErrorLogFileName);
+		_structuredLogPath = Path.Combine(_logsDirectoryPath, StructuredLogFileName);
+		_resource = BuildResource();
 	}
 
 	public async Task AppendErrorAsync(string message, CancellationToken cancellationToken = default)
@@ -29,9 +37,26 @@ public sealed class LogAccessService : ILogAccessService
 		}
 
 		EnsureLogsDirectory();
-		var timestamp = DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz");
-		var line = $"{timestamp} {message}{Environment.NewLine}";
-		await File.AppendAllTextAsync(_errorLogPath, line, Encoding.UTF8, cancellationToken);
+		var normalizedMessage = message.Trim();
+		var timestamp = DateTimeOffset.UtcNow;
+		var traceContext = CreateTraceContext();
+		var payload = new ExceptionLogData(
+			Type: "ApplicationError",
+			Message: normalizedMessage,
+			StackTrace: string.Empty,
+			Inner: null,
+			HResult: null,
+			KeyValues: new Dictionary<string, object?>
+			{
+				["localTimestamp"] = DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz"),
+				["source"] = nameof(LogAccessService)
+			});
+		var logEvent = new ExceptionLogEvent(
+			Trace: traceContext,
+			Timestamp: timestamp,
+			Resource: _resource,
+			Data: payload);
+		await _logDispatcher.SendAsync(logEvent, cancellationToken);
 	}
 
 	public Task OpenLatestErrorLogAsync(CancellationToken cancellationToken = default)
@@ -39,13 +64,12 @@ public sealed class LogAccessService : ILogAccessService
 		cancellationToken.ThrowIfCancellationRequested();
 		EnsureLogsDirectory();
 
-		if (!File.Exists(_errorLogPath))
+		if (!File.Exists(_structuredLogPath))
 		{
-			var header = $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss zzz} ログファイルを作成しました。{Environment.NewLine}";
-			File.WriteAllText(_errorLogPath, header, Encoding.UTF8);
+			File.WriteAllText(_structuredLogPath, string.Empty, Encoding.UTF8);
 		}
 
-		OpenPath(_errorLogPath);
+		OpenPath(_structuredLogPath);
 		return Task.CompletedTask;
 	}
 
@@ -60,6 +84,28 @@ public sealed class LogAccessService : ILogAccessService
 	private void EnsureLogsDirectory()
 	{
 		Directory.CreateDirectory(_logsDirectoryPath);
+	}
+
+	private static TraceContext CreateTraceContext()
+	{
+		var traceId = Guid.NewGuid().ToString("N");
+		return new TraceContext(
+			TraceId: traceId,
+			SpanId: traceId[..16],
+			ParentSpanId: null,
+			TraceFlags: 1,
+			TraceState: null);
+	}
+
+	private static IReadOnlyDictionary<string, object?> BuildResource()
+	{
+		return new Dictionary<string, object?>
+		{
+			[ResourceKeys.ServiceName] = ServiceName,
+			[ResourceKeys.DeploymentEnvironment] = "local",
+			[ResourceKeys.HostName] = Environment.MachineName,
+			[ResourceKeys.ProcessId] = Environment.ProcessId
+		};
 	}
 
 	private void OpenPath(string path)

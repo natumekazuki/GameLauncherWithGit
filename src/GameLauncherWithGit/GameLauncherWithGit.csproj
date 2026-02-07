@@ -68,4 +68,9 @@
         <PackageReference Include="SkiaSharp" Version="2.88.9" />
     </ItemGroup>
 
+    <ItemGroup>
+        <ProjectReference Include="..\..\library\MonochromeMemory.Log\MonochromeMemory.Log\MonochromeMemory.Log.csproj" />
+        <ProjectReference Include="..\..\library\MonochromeMemory.Log\MonochromeMemory.Log.Sinks.File\MonochromeMemory.Log.Sinks.File.csproj" />
+    </ItemGroup>
+
 </Project>

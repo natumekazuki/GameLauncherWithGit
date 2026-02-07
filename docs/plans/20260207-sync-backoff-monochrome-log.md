@@ -10,13 +10,13 @@
   - ログ責務を `MonochromeMemory.Log` ベースへ更新
 
 # タスクリスト
-- [ ] `SyncOrchestrator` に指数バックオフ再試行を実装（初回失敗通知 + 連続失敗通知抑制 + 復旧通知）
-- [ ] `SyncOrchestrator` の失敗状態管理を更新（`ErrorPaused` と一時失敗再試行の切り分け）
-- [ ] `MonochromeMemory.Log` / `MonochromeMemory.Log.Sinks.File` を `GameLauncherWithGit` に参照追加
-- [ ] `MauiProgram` で `MonochromeMemory.Log` のDI登録とファイルSink設定を追加
-- [ ] `LogAccessService` を `MonochromeMemory.Log` 出力へ更新（既存UI導線は維持）
-- [ ] `docs/design/maui-blazor-architecture.md` を実装内容に同期
-- [ ] Windowsターゲットでビルド検証
+- [x] `SyncOrchestrator` に指数バックオフ再試行を実装（初回失敗通知 + 連続失敗通知抑制 + 復旧通知）
+- [x] `SyncOrchestrator` の失敗状態管理を更新（`ErrorPaused` と一時失敗再試行の切り分け）
+- [x] `MonochromeMemory.Log` / `MonochromeMemory.Log.Sinks.File` を `GameLauncherWithGit` に参照追加
+- [x] `MauiProgram` で `MonochromeMemory.Log` のDI登録とファイルSink設定を追加
+- [x] `LogAccessService` を `MonochromeMemory.Log` 出力へ更新（既存UI導線は維持）
+- [x] `docs/design/maui-blazor-architecture.md` を実装内容に同期
+- [x] Windowsターゲットでビルド検証
 
 # 変更対象ファイル
 - `src/GameLauncherWithGit/Application/Services/SyncOrchestrator.cs`
@@ -30,3 +30,7 @@
 - 再試行制御の競合で同一リポジトリ同期が二重実行される可能性
 - 連続失敗通知抑制の条件ミスで必要通知まで欠落する可能性
 - 新ログ形式(JSONL)により既存運用の目視確認手順が変わる可能性
+
+# Notes / Logs
+- 実行コマンド: `dotnet build GameLauncherWithGit.sln -f net9.0-windows10.0.19041.0 -p:UseAppHost=false`
+- 結果: ビルド成功（0 warnings / 0 errors）
