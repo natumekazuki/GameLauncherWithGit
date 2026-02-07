@@ -10,9 +10,9 @@
   - Home の環境設定からログビューア導線を追記
 
 # タスクリスト
-- [ ] ログ表示用モデル（時刻/レベル/メッセージ/詳細）を追加
-- [ ] `ILogAccessService` を拡張し、`app-events.jsonl` から直近ログ取得APIを追加
-- [ ] `LogAccessService` に JSONL 読込・簡易フィルタ（レベル/キーワード）処理を実装
+- [x] ログ表示用モデル（時刻/レベル/メッセージ/詳細）を追加
+- [x] `ILogAccessService` を拡張し、`app-events.jsonl` から直近ログ取得APIを追加
+- [x] `LogAccessService` に JSONL 読込・簡易フィルタ（レベル/キーワード）処理を実装
 - [ ] `Home.razor` の環境設定に「ログビューア」UIを追加（件数指定、フィルタ、更新、コピー）
 - [ ] ログ読込失敗時の通知とフォールバック動作を実装
 - [ ] `docs/design/maui-blazor-architecture.md` を実装内容に同期
