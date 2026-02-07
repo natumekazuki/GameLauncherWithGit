@@ -310,6 +310,45 @@ else
             </div>
 
             <div class="settings-section">
+                <h3>通知センター</h3>
+                <div class="editor-actions">
+                    <button type="button"
+                            class="launch-button"
+                            @onclick="CopyNotificationHistoryAsync"
+                            disabled="@(_isSettingsLoading || _notificationHistoryEntries.Count == 0)">
+                        全件コピー
+                    </button>
+                    <button type="button"
+                            class="secondary-button"
+                            @onclick="ClearNotificationHistory"
+                            disabled="@(_isSettingsLoading || _notificationHistoryEntries.Count == 0)">
+                        履歴クリア
+                    </button>
+                </div>
+                <div class="notification-center-list" role="log">
+                    @if (_notificationHistoryEntries.Count == 0)
+                    {
+                        <p class="notification-center-empty">通知履歴はありません。</p>
+                    }
+                    else
+                    {
+                        @foreach (var entry in _notificationHistoryEntries)
+                        {
+                            <article class="notification-center-item">
+                                <div class="notification-center-item-header">
+                                    <span class="notification-center-time">@FormatNotificationHistoryTimestamp(entry.Timestamp)</span>
+                                    <span class="notification-center-type @GetNotificationHistoryTypeClass(entry.IsSuccess)">
+                                        @GetNotificationHistoryTypeLabel(entry.IsSuccess)
+                                    </span>
+                                </div>
+                                <p class="notification-center-message">@entry.Message</p>
+                            </article>
+                        }
+                    }
+                </div>
+            </div>
+
+            <div class="settings-section">
                 <h3>ログビューア</h3>
                 <div class="settings-log-controls">
                     <label class="settings-log-control">
@@ -558,6 +597,7 @@ else
 @code {
     private const int SyncHistoryTimelineLimit = 3;
     private const int SyncHistoryRefreshIntervalSeconds = 5;
+    private const int NotificationHistoryMaxEntries = 200;
 
     private IReadOnlyList<GameCardItem>? _games;
     private string? _message;
@@ -603,6 +643,7 @@ else
     private readonly HashSet<string> _pinningGameIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _thumbnailDataUriCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, IReadOnlyList<RepositorySyncHistoryItem>> _syncHistoryByRepository = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<NotificationHistoryEntry> _notificationHistoryEntries = [];
     private readonly CancellationTokenSource _stateRefreshCts = new();
     private Task? _stateRefreshTask;
 
@@ -1664,15 +1705,93 @@ else
         };
     }
 
-    private void SetNotification(string message, bool? isSuccess)
+    private async Task CopyNotificationHistoryAsync()
+    {
+        if (_notificationHistoryEntries.Count == 0)
+        {
+            SetNotification("コピー対象の通知履歴がありません。", false, addToHistory: false);
+            return;
+        }
+
+        var lines = _notificationHistoryEntries
+            .Select(entry =>
+                $"{FormatNotificationHistoryTimestamp(entry.Timestamp)} [{GetNotificationHistoryTypeLabel(entry.IsSuccess)}] {entry.Message}")
+            .ToArray();
+
+        try
+        {
+            await Clipboard.Default.SetTextAsync(string.Join(Environment.NewLine, lines));
+            SetNotification("通知履歴をコピーしました。", true, addToHistory: false);
+        }
+        catch (Exception ex)
+        {
+            SetNotification($"通知履歴のコピーに失敗しました: {ex.Message}", false, addToHistory: false);
+        }
+    }
+
+    private void ClearNotificationHistory()
+    {
+        _notificationHistoryEntries.Clear();
+        SetNotification("通知履歴をクリアしました。", true, addToHistory: false);
+    }
+
+    private static string FormatNotificationHistoryTimestamp(DateTimeOffset value)
+    {
+        return value.LocalDateTime.ToString("MM-dd HH:mm:ss");
+    }
+
+    private static string GetNotificationHistoryTypeLabel(bool? isSuccess)
+    {
+        return isSuccess switch
+        {
+            true => "成功",
+            false => "失敗",
+            _ => "情報"
+        };
+    }
+
+    private static string GetNotificationHistoryTypeClass(bool? isSuccess)
+    {
+        return isSuccess switch
+        {
+            true => "notification-center-type-success",
+            false => "notification-center-type-error",
+            _ => "notification-center-type-info"
+        };
+    }
+
+    private void SetNotification(string message, bool? isSuccess, bool addToHistory = true)
     {
         _message = message;
         _isLastActionSuccess = isSuccess;
+
+        if (addToHistory)
+        {
+            AddNotificationHistory(message, isSuccess);
+        }
 
         if (isSuccess == false)
         {
             _ = WriteErrorLogSafeAsync(message);
         }
+    }
+
+    private void AddNotificationHistory(string message, bool? isSuccess)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return;
+        }
+
+        _notificationHistoryEntries.Insert(0, new NotificationHistoryEntry(DateTimeOffset.Now, isSuccess, message.Trim()));
+        if (_notificationHistoryEntries.Count <= NotificationHistoryMaxEntries)
+        {
+            return;
+        }
+
+        _notificationHistoryEntries.RemoveRange(
+            NotificationHistoryMaxEntries,
+            _notificationHistoryEntries.Count - NotificationHistoryMaxEntries);
     }
 
     private async Task WriteErrorLogSafeAsync(string message)
@@ -1723,6 +1842,11 @@ else
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .FirstOrDefault(static line => !string.IsNullOrWhiteSpace(line));
     }
+
+    private sealed record NotificationHistoryEntry(
+        DateTimeOffset Timestamp,
+        bool? IsSuccess,
+        string Message);
 
     private void OnSettingsOpenRequested(object? sender, EventArgs e)
     {
