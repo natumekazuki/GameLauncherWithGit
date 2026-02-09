@@ -51,6 +51,12 @@
         </button>
         <button type="button"
                 class="secondary-button utility-button"
+                @onclick="RefreshGitStatusesManuallyAsync"
+                disabled="@(!_isGitReady || _isGitStatusRefreshing || _games is null)">
+            @(_isGitStatusRefreshing ? "更新中..." : "Gitステータス更新")
+        </button>
+        <button type="button"
+                class="secondary-button utility-button"
                 @onclick="OpenSettingsAsync">
             環境設定
         </button>
@@ -94,10 +100,11 @@ else
                     @foreach (var game in filteredGames)
                     {
                         var effectiveStatus = GetEffectiveStatus(game);
+                        var gitVisualState = GetGitVisualState(game);
                         var syncHistory = GetSyncHistoryTimeline(game);
                         var hasThumbnail = HasThumbnail(game);
                         var thumbnailDataUri = hasThumbnail ? GetThumbnailDataUri(game) : null;
-                        <article class="game-card @(hasThumbnail ? "thumbnail-mode-card" : string.Empty)">
+                        <article class="@GetGameCardClass(hasThumbnail, gitVisualState)">
                             @if (hasThumbnail)
                             {
                                 <div class="game-thumbnail-panel">
@@ -664,9 +671,11 @@ else
     private readonly HashSet<string> _pinningGameIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _thumbnailDataUriCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, IReadOnlyList<RepositorySyncHistoryItem>> _syncHistoryByRepository = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, GitRepositoryVisualState> _gitVisualStateByRepository = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<NotificationHistoryEntry> _notificationHistoryEntries = [];
     private bool _showSuccessNotifications = true;
     private bool _showFailedNotifications = true;
+    private bool _isGitStatusRefreshing;
     private readonly CancellationTokenSource _stateRefreshCts = new();
     private Task? _stateRefreshTask;
 
@@ -823,6 +832,23 @@ else
 
         await AppSettingsService.SaveAsync(normalized);
         ApplyAppSettings(normalized);
+    }
+
+    private async Task RefreshGitStatusesManuallyAsync()
+    {
+        try
+        {
+            var isSuccess = await RefreshGitStatusesAsync();
+            SetNotification(
+                isSuccess
+                    ? "Gitステータスを更新しました。"
+                    : "一部のGitステータス更新に失敗しました。ログを確認してください。",
+                isSuccess);
+        }
+        catch (OperationCanceledException)
+        {
+            // 画面終了時のキャンセルは通知しない。
+        }
     }
 
     private Task DecreaseGameCardSizeAsync()
@@ -1295,6 +1321,7 @@ else
         _games = await GameLibraryService.GetGamesAsync();
         SyncThumbnailCache();
         await RefreshRepositorySyncHistoriesAsync();
+        await RefreshGitStatusesAsync();
     }
 
     private IReadOnlyList<GameCardItem> GetFilteredGames()
@@ -1418,6 +1445,23 @@ else
         }
     }
 
+    private static string? NormalizeRepositoryPath(string? repositoryPath)
+    {
+        if (string.IsNullOrWhiteSpace(repositoryPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            return Path.GetFullPath(repositoryPath.Trim());
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public void Dispose()
     {
         SettingsPanelService.OpenRequested -= OnSettingsOpenRequested;
@@ -1427,6 +1471,7 @@ else
         _pinningGameIds.Clear();
         _thumbnailDataUriCache.Clear();
         _syncHistoryByRepository.Clear();
+        _gitVisualStateByRepository.Clear();
     }
 
     private void StartStateRefreshLoop()
@@ -1438,17 +1483,27 @@ else
 
         _stateRefreshTask = Task.Run(async () =>
         {
-            var elapsedSeconds = 0;
+            var syncHistoryElapsedSeconds = 0;
+            var gitStatusElapsedSeconds = 0;
             while (!_stateRefreshCts.IsCancellationRequested)
             {
                 try
                 {
                     await Task.Delay(TimeSpan.FromSeconds(1), _stateRefreshCts.Token);
-                    elapsedSeconds++;
-                    if (elapsedSeconds >= SyncHistoryRefreshIntervalSeconds)
+                    syncHistoryElapsedSeconds++;
+                    gitStatusElapsedSeconds++;
+
+                    if (syncHistoryElapsedSeconds >= SyncHistoryRefreshIntervalSeconds)
                     {
-                        elapsedSeconds = 0;
+                        syncHistoryElapsedSeconds = 0;
                         await InvokeAsync(async () => await RefreshRepositorySyncHistoriesAsync(_stateRefreshCts.Token));
+                    }
+
+                    var gitStatusRefreshIntervalSeconds = Math.Max(1, _syncDebounceSeconds);
+                    if (gitStatusElapsedSeconds >= gitStatusRefreshIntervalSeconds)
+                    {
+                        gitStatusElapsedSeconds = 0;
+                        await InvokeAsync(async () => await RefreshGitStatusesAsync(_stateRefreshCts.Token));
                     }
 
                     await InvokeAsync(StateHasChanged);
@@ -1551,6 +1606,192 @@ else
         return _syncHistoryByRepository.TryGetValue(repositoryKey, out var entries)
             ? entries
             : Array.Empty<RepositorySyncHistoryItem>();
+    }
+
+    private async Task<bool> RefreshGitStatusesAsync(CancellationToken cancellationToken = default)
+    {
+        if (_isGitStatusRefreshing)
+        {
+            return true;
+        }
+
+        _isGitStatusRefreshing = true;
+        var isSuccess = true;
+        try
+        {
+            var nextStates = new Dictionary<string, GitRepositoryVisualState>(StringComparer.OrdinalIgnoreCase);
+            var repositoryPaths = _games?
+                .Select(game => NormalizeRepositoryPath(game.RelatedRepositoryPath))
+                .Where(static path => !string.IsNullOrWhiteSpace(path))
+                .Select(static path => path!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray()
+                ?? [];
+
+            foreach (var repositoryPath in repositoryPaths)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    nextStates[repositoryPath] = await EvaluateGitVisualStateAsync(repositoryPath, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch
+                {
+                    nextStates[repositoryPath] = GitRepositoryVisualState.Error;
+                    isSuccess = false;
+                }
+            }
+
+            _gitVisualStateByRepository.Clear();
+            foreach (var pair in nextStates)
+            {
+                _gitVisualStateByRepository[pair.Key] = pair.Value;
+            }
+        }
+        finally
+        {
+            _isGitStatusRefreshing = false;
+        }
+
+        return isSuccess;
+    }
+
+    private async Task<GitRepositoryVisualState> EvaluateGitVisualStateAsync(
+        string repositoryPath,
+        CancellationToken cancellationToken)
+    {
+        if (!Directory.Exists(repositoryPath))
+        {
+            return GitRepositoryVisualState.Error;
+        }
+
+        var result = await GitService.RunAsync(
+            repositoryPath,
+            "status --porcelain --branch",
+            cancellationToken);
+        if (!result.IsSuccess)
+        {
+            return GitRepositoryVisualState.Error;
+        }
+
+        return ParseGitVisualState(result.StandardOutput);
+    }
+
+    private static GitRepositoryVisualState ParseGitVisualState(string output)
+    {
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return GitRepositoryVisualState.Clean;
+        }
+
+        var lines = output
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (lines.Length == 0)
+        {
+            return GitRepositoryVisualState.Clean;
+        }
+
+        var headerLine = lines[0];
+        var hasWorkingTreeChanges = lines.Length > 1;
+        ParseAheadBehind(headerLine, out var aheadCount, out var behindCount);
+
+        if (aheadCount > 0 && behindCount > 0)
+        {
+            return GitRepositoryVisualState.Diverged;
+        }
+
+        if (behindCount > 0)
+        {
+            return GitRepositoryVisualState.Behind;
+        }
+
+        if (aheadCount > 0)
+        {
+            return GitRepositoryVisualState.Ahead;
+        }
+
+        return hasWorkingTreeChanges
+            ? GitRepositoryVisualState.Dirty
+            : GitRepositoryVisualState.Clean;
+    }
+
+    private static void ParseAheadBehind(string headerLine, out int aheadCount, out int behindCount)
+    {
+        aheadCount = 0;
+        behindCount = 0;
+
+        if (string.IsNullOrWhiteSpace(headerLine))
+        {
+            return;
+        }
+
+        var leftBracketIndex = headerLine.IndexOf('[');
+        if (leftBracketIndex < 0)
+        {
+            return;
+        }
+
+        var rightBracketIndex = headerLine.IndexOf(']', leftBracketIndex + 1);
+        if (rightBracketIndex <= leftBracketIndex)
+        {
+            return;
+        }
+
+        var summary = headerLine.Substring(leftBracketIndex + 1, rightBracketIndex - leftBracketIndex - 1);
+        var segments = summary
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var segment in segments)
+        {
+            if (segment.StartsWith("ahead ", StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(segment["ahead ".Length..], out var ahead))
+            {
+                aheadCount = ahead;
+            }
+            else if (segment.StartsWith("behind ", StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(segment["behind ".Length..], out var behind))
+            {
+                behindCount = behind;
+            }
+        }
+    }
+
+    private GitRepositoryVisualState GetGitVisualState(GameCardItem game)
+    {
+        if (string.IsNullOrWhiteSpace(game.RelatedRepositoryPath))
+        {
+            return GitRepositoryVisualState.NotConfigured;
+        }
+
+        var repositoryPath = NormalizeRepositoryPath(game.RelatedRepositoryPath);
+        if (repositoryPath is null)
+        {
+            return GitRepositoryVisualState.Error;
+        }
+
+        return _gitVisualStateByRepository.GetValueOrDefault(repositoryPath, GitRepositoryVisualState.Unknown);
+    }
+
+    private static string GetGameCardClass(bool hasThumbnail, GitRepositoryVisualState gitVisualState)
+    {
+        var gitStateClass = gitVisualState switch
+        {
+            GitRepositoryVisualState.Clean => "git-state-clean",
+            GitRepositoryVisualState.Dirty => "git-state-dirty",
+            GitRepositoryVisualState.Ahead => "git-state-ahead",
+            GitRepositoryVisualState.Behind => "git-state-behind",
+            GitRepositoryVisualState.Diverged => "git-state-diverged",
+            GitRepositoryVisualState.Error => "git-state-error",
+            GitRepositoryVisualState.NotConfigured => "git-state-not-configured",
+            _ => "git-state-unknown"
+        };
+
+        return hasThumbnail
+            ? $"game-card thumbnail-mode-card {gitStateClass}"
+            : $"game-card {gitStateClass}";
     }
 
     private static bool HasThumbnail(GameCardItem game)
@@ -1894,6 +2135,18 @@ else
         DateTimeOffset Timestamp,
         bool? IsSuccess,
         string Message);
+
+    private enum GitRepositoryVisualState
+    {
+        Unknown = 0,
+        NotConfigured = 1,
+        Clean = 2,
+        Dirty = 3,
+        Ahead = 4,
+        Behind = 5,
+        Diverged = 6,
+        Error = 7
+    }
 
     private void OnSettingsOpenRequested(object? sender, EventArgs e)
     {
