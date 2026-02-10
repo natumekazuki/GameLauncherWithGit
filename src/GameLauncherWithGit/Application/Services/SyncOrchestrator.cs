@@ -301,7 +301,8 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		var tracking = await TryGetTrackingInfoAsync(repositoryPath, startedAt, cancellationToken);
 		if (tracking is not null)
 		{
-			var pullCommand = $"pull --rebase --autostash {tracking.RemoteName} {tracking.MergeTarget}";
+			var pullCommand =
+				$"pull --rebase --autostash {EscapeGitArgument(tracking.RemoteName)} {EscapeGitArgument(tracking.MergeTarget)}";
 			var pullResult = await _gitService.RunAsync(repositoryPath, pullCommand, cancellationToken);
 			if (!pullResult.IsSuccess)
 			{
@@ -534,6 +535,19 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 			.Replace("\\", "\\\\", StringComparison.Ordinal)
 			.Replace("\"", "\\\"", StringComparison.Ordinal);
 		return $"branch.\"{escapedBranchName}\".{key}";
+	}
+
+	private static string EscapeGitArgument(string value)
+	{
+		if (string.IsNullOrEmpty(value))
+		{
+			return "\"\"";
+		}
+
+		var escaped = value
+			.Replace("\\", "\\\\", StringComparison.Ordinal)
+			.Replace("\"", "\\\"", StringComparison.Ordinal);
+		return $"\"{escaped}\"";
 	}
 
 	private static string NormalizeMergeTarget(string mergeTarget)

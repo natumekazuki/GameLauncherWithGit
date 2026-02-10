@@ -374,7 +374,7 @@ public sealed class LauncherService : ILauncherService
 		}
 
 		return new PullCommandBuildResult(
-			$"pull --rebase --autostash {remoteName} {mergeTarget}",
+			$"pull --rebase --autostash {EscapeGitArgument(remoteName)} {EscapeGitArgument(mergeTarget)}",
 			false,
 			null,
 			null);
@@ -403,6 +403,19 @@ public sealed class LauncherService : ILauncherService
 			.Replace("\\", "\\\\", StringComparison.Ordinal)
 			.Replace("\"", "\\\"", StringComparison.Ordinal);
 		return $"branch.\"{escapedBranchName}\".{key}";
+	}
+
+	private static string EscapeGitArgument(string value)
+	{
+		if (string.IsNullOrEmpty(value))
+		{
+			return "\"\"";
+		}
+
+		var escaped = value
+			.Replace("\\", "\\\\", StringComparison.Ordinal)
+			.Replace("\"", "\\\"", StringComparison.Ordinal);
+		return $"\"{escaped}\"";
 	}
 
 	private static string NormalizeMergeTarget(string mergeTarget)

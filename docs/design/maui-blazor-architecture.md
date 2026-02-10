@@ -45,7 +45,7 @@ flowchart LR
 - `SyncOrchestrator`
   - 監視イベント受信、デバウンス管理、同期ジョブ実行順序制御
   - 失敗分類とリトライポリシー適用（指数バックオフ再試行、通知抑制、復旧通知）
-  - pull は追跡設定（`branch.<name>.remote` / `branch.<name>.merge`）の有効値（`git config --get`）から明示的に組み立てて実行する
+  - pull は追跡設定（`branch.<name>.remote` / `branch.<name>.merge`）の有効値（`git config --get`）から明示的に組み立て、remote/branch 引数をエスケープして実行する
   - push は `git push` 既定解決（`branch.<name>.pushRemote` / `remote.pushDefault` 等）を利用して宛先を決定する
   - `branch/config` 取得の「キー未設定（exit=1 かつ出力空）」時は upstream 未設定として pull をスキップし、push は `git push` 既定解決で実行する（それ以外の取得失敗は同期エラー）
   - 同期結果（成功/失敗/停止）をリポジトリ単位の履歴ストアへ記録
