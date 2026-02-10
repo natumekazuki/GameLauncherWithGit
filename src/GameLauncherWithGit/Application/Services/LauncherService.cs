@@ -269,14 +269,6 @@ public sealed class LauncherService : ILauncherService
 		string repositoryPath,
 		CancellationToken cancellationToken)
 	{
-		if (!await HasCommitAsync(repositoryPath, cancellationToken))
-		{
-			_logger.LogInformation(
-				"Skip pull because repository has no commits yet. repositoryPath={RepositoryPath}",
-				repositoryPath);
-			return new GitCommandResult(0, "skip pull: unborn branch", string.Empty);
-		}
-
 		var pullCommand = await TryBuildPullCommandAsync(repositoryPath, cancellationToken);
 		if (string.IsNullOrWhiteSpace(pullCommand))
 		{
@@ -351,15 +343,6 @@ public sealed class LauncherService : ILauncherService
 		}
 
 		return $"pull --rebase --autostash {remoteName} {mergeTarget}";
-	}
-
-	private async Task<bool> HasCommitAsync(string repositoryPath, CancellationToken cancellationToken)
-	{
-		var verifyHeadResult = await _gitService.RunAsync(
-			repositoryPath,
-			"rev-parse --verify HEAD",
-			cancellationToken);
-		return verifyHeadResult.IsSuccess;
 	}
 
 	private static string NormalizeMergeTarget(string mergeTarget)
