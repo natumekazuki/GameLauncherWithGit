@@ -40,7 +40,7 @@ az group create --name $ResourceGroup --location $Location
 az keyvault create --name $VaultName --resource-group $ResourceGroup --location $Location
 ```
 
-`certificate-policy.json`（例: Key Vault で自己署名を発行、PFX エクスポート可能）
+`docs/design/certificate-policy.json`（例: Key Vault で自己署名を発行、PFX エクスポート可能）
 ```json
 {
   "issuerParameters": {
@@ -73,7 +73,7 @@ az keyvault create --name $VaultName --resource-group $ResourceGroup --location 
 az keyvault certificate create `
   --vault-name $VaultName `
   --name $CertName `
-  --policy "@certificate-policy.json"
+  --policy "@docs/design/certificate-policy.json"
 ```
 
 ### 4.3 証明書をダウンロード（PFX / CER）
@@ -82,13 +82,13 @@ az keyvault certificate create `
 az keyvault certificate download `
   --vault-name $VaultName `
   --name $CertName `
-  --file ".\codesign.cer"
+  --file ".\docs\design\codesign.cer"
 
 # PFX（秘密鍵付き、secret から取得）
 az keyvault secret download `
   --vault-name $VaultName `
   --name $CertName `
-  --file ".\codesign.pfx" `
+  --file ".\docs\design\codesign.pfx" `
   --encoding base64
 ```
 
@@ -96,23 +96,23 @@ az keyvault secret download `
 ```powershell
 # PFX を個人ストアへ登録（署名用）
 Import-PfxCertificate `
-  -FilePath ".\codesign.pfx" `
+  -FilePath ".\docs\design\codesign.pfx" `
   -CertStoreLocation "Cert:\CurrentUser\My"
 
 # 自己署名の場合は信頼ストアにも登録（配布先PC）
 Import-Certificate `
-  -FilePath ".\codesign.cer" `
+  -FilePath ".\docs\design\codesign.cer" `
   -CertStoreLocation "Cert:\CurrentUser\TrustedPeople"
 
 Import-Certificate `
-  -FilePath ".\codesign.cer" `
+  -FilePath ".\docs\design\codesign.cer" `
   -CertStoreLocation "Cert:\CurrentUser\Root"
 ```
 
 ### 4.5 MSIX を署名付きで発行
 ```powershell
 pwsh -File scripts/publish-windows-msix.ps1 `
-  -PackageCertificateKeyFile ".\codesign.pfx"
+  -PackageCertificateKeyFile ".\docs\design\codesign.pfx"
 ```
 
 補足:
@@ -123,7 +123,7 @@ pwsh -File scripts/publish-windows-msix.ps1 `
 
 事前確認（PFX）:
 ```powershell
-$cert = Get-PfxCertificate -FilePath ".\codesign.pfx"
+$cert = Get-PfxCertificate -FilePath ".\docs\design\codesign.pfx"
 $cert | Format-List Subject,HasPrivateKey,EnhancedKeyUsageList
 ```
 
