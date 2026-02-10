@@ -46,12 +46,12 @@ flowchart LR
   - 監視イベント受信、デバウンス管理、同期ジョブ実行順序制御
   - 失敗分類とリトライポリシー適用（指数バックオフ再試行、通知抑制、復旧通知）
   - pull/push は追跡設定（`branch.<name>.remote` / `branch.<name>.merge`）から明示的に組み立て、複数追跡設定時は先頭ターゲットを使用して実行する
-  - upstream 未設定時は pull/push をスキップし、無限再試行を回避する
+  - `branch/config` 取得の「キー未設定（exit=1 かつ出力空）」時のみ upstream 未設定として pull/push をスキップし、それ以外の取得失敗は同期エラーとして扱う
   - 同期結果（成功/失敗/停止）をリポジトリ単位の履歴ストアへ記録
 - `LauncherService`
   - ゲーム起動前に `fetch` を実行し、リモート先行でなければ `add -A -> commit(差分時のみ)` を実行
   - その後 `pull --rebase --autostash <remote> <branch>` を実行（追跡設定がない場合は pull をスキップ）
-  - unborn branch（初回コミット前）や upstream 未設定時の判定失敗を致命扱いせず、起動処理継続可否を安全側で判断する
+  - unborn branch（初回コミット前）や upstream 未設定は専用判定で分離し、追跡情報取得コマンド自体の失敗は同期失敗として扱う
   - 失敗時の起動ブロックとログ導線制御
 - `GitService`
   - Git コマンド実行と結果収集（exit code / stdout / stderr）

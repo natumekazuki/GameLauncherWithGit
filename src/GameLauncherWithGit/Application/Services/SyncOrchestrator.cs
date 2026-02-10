@@ -438,6 +438,18 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 			?? $"exit code: {result.ExitCode}";
 	}
 
+	private static bool IsMissingGitConfigValue(GitCommandResult result)
+	{
+		if (result.IsSuccess)
+		{
+			return false;
+		}
+
+		return result.ExitCode == 1
+			&& string.IsNullOrWhiteSpace(result.StandardError)
+			&& string.IsNullOrWhiteSpace(result.StandardOutput);
+	}
+
 	private async Task<TrackingInfo?> TryGetTrackingInfoAsync(
 		string repositoryPath,
 		DateTimeOffset startedAt,
@@ -446,7 +458,12 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		var branchResult = await _gitService.RunAsync(repositoryPath, "branch --show-current", cancellationToken);
 		if (!branchResult.IsSuccess)
 		{
-			return null;
+			throw new SyncCommandException(
+				repositoryPath,
+				"branch --show-current",
+				BuildFailureReason(branchResult),
+				startedAt,
+				shouldPauseRepository: true);
 		}
 
 		var branchName = FirstNonEmptyLine(branchResult.StandardOutput);
@@ -466,7 +483,17 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 			cancellationToken);
 		if (!remoteResult.IsSuccess)
 		{
-			return null;
+			if (IsMissingGitConfigValue(remoteResult))
+			{
+				return null;
+			}
+
+			throw new SyncCommandException(
+				repositoryPath,
+				$"config --get branch.{branchName}.remote",
+				BuildFailureReason(remoteResult),
+				startedAt,
+				shouldPauseRepository: true);
 		}
 
 		var remoteName = FirstNonEmptyLine(remoteResult.StandardOutput);
@@ -481,7 +508,17 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 			cancellationToken);
 		if (!mergeResult.IsSuccess)
 		{
-			return null;
+			if (IsMissingGitConfigValue(mergeResult))
+			{
+				return null;
+			}
+
+			throw new SyncCommandException(
+				repositoryPath,
+				$"config --get-all branch.{branchName}.merge",
+				BuildFailureReason(mergeResult),
+				startedAt,
+				shouldPauseRepository: true);
 		}
 
 		var mergeCandidates = GetNonEmptyLines(mergeResult.StandardOutput);
