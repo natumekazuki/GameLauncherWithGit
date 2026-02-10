@@ -269,8 +269,16 @@ public sealed class LauncherService : ILauncherService
 		string repositoryPath,
 		CancellationToken cancellationToken)
 	{
-		var pullCommand = await TryBuildPullCommandAsync(repositoryPath, cancellationToken);
-		if (string.IsNullOrWhiteSpace(pullCommand))
+		var pullTarget = await TryBuildPullCommandAsync(repositoryPath, cancellationToken);
+		if (pullTarget.IsDetachedHead)
+		{
+			_logger.LogWarning(
+				"Skip launch sync because repository is detached HEAD. repositoryPath={RepositoryPath}",
+				repositoryPath);
+			return new GitCommandResult(1, string.Empty, "skip pull: detached HEAD");
+		}
+
+		if (string.IsNullOrWhiteSpace(pullTarget.Command))
 		{
 			_logger.LogInformation(
 				"Skip pull because upstream is not configured. repositoryPath={RepositoryPath}",
@@ -278,23 +286,23 @@ public sealed class LauncherService : ILauncherService
 			return new GitCommandResult(0, "skip pull: no upstream", string.Empty);
 		}
 
-		return await _gitService.RunAsync(repositoryPath, pullCommand, cancellationToken);
+		return await _gitService.RunAsync(repositoryPath, pullTarget.Command, cancellationToken);
 	}
 
-	private async Task<string?> TryBuildPullCommandAsync(
+	private async Task<PullCommandBuildResult> TryBuildPullCommandAsync(
 		string repositoryPath,
 		CancellationToken cancellationToken)
 	{
 		var branchResult = await _gitService.RunAsync(repositoryPath, "branch --show-current", cancellationToken);
 		if (!branchResult.IsSuccess)
 		{
-			return null;
+			return PullCommandBuildResult.NoUpstream;
 		}
 
 		var branchName = FirstNonEmptyLine(branchResult.StandardOutput);
 		if (string.IsNullOrWhiteSpace(branchName))
 		{
-			return null;
+			return PullCommandBuildResult.DetachedHead;
 		}
 
 		var remoteResult = await _gitService.RunAsync(
@@ -303,13 +311,13 @@ public sealed class LauncherService : ILauncherService
 			cancellationToken);
 		if (!remoteResult.IsSuccess)
 		{
-			return null;
+			return PullCommandBuildResult.NoUpstream;
 		}
 
 		var remoteName = FirstNonEmptyLine(remoteResult.StandardOutput);
 		if (string.IsNullOrWhiteSpace(remoteName))
 		{
-			return null;
+			return PullCommandBuildResult.NoUpstream;
 		}
 
 		var mergeResult = await _gitService.RunAsync(
@@ -318,13 +326,13 @@ public sealed class LauncherService : ILauncherService
 			cancellationToken);
 		if (!mergeResult.IsSuccess)
 		{
-			return null;
+			return PullCommandBuildResult.NoUpstream;
 		}
 
 		var mergeCandidates = GetNonEmptyLines(mergeResult.StandardOutput);
 		if (mergeCandidates.Count == 0)
 		{
-			return null;
+			return PullCommandBuildResult.NoUpstream;
 		}
 
 		if (mergeCandidates.Count > 1)
@@ -339,10 +347,16 @@ public sealed class LauncherService : ILauncherService
 		var mergeTarget = NormalizeMergeTarget(mergeCandidates[0]);
 		if (string.IsNullOrWhiteSpace(mergeTarget))
 		{
-			return null;
+			return PullCommandBuildResult.NoUpstream;
 		}
 
-		return $"pull --rebase --autostash {remoteName} {mergeTarget}";
+		return new PullCommandBuildResult($"pull --rebase --autostash {remoteName} {mergeTarget}", false);
+	}
+
+	private sealed record PullCommandBuildResult(string? Command, bool IsDetachedHead)
+	{
+		public static PullCommandBuildResult NoUpstream { get; } = new(null, false);
+		public static PullCommandBuildResult DetachedHead { get; } = new(null, true);
 	}
 
 	private static string NormalizeMergeTarget(string mergeTarget)
