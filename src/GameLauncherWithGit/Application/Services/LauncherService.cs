@@ -351,7 +351,7 @@ public sealed class LauncherService : ILauncherService
 
 		var mergeResult = await _gitService.RunAsync(
 			repositoryPath,
-			$"config --get-all branch.{branchName}.merge",
+			$"config --get branch.{branchName}.merge",
 			cancellationToken);
 		if (!mergeResult.IsSuccess)
 		{
@@ -361,26 +361,11 @@ public sealed class LauncherService : ILauncherService
 			}
 
 			return PullCommandBuildResult.Failed(
-				$"config --get-all branch.{branchName}.merge",
+				$"config --get branch.{branchName}.merge",
 				mergeResult);
 		}
 
-		var mergeCandidates = GetNonEmptyLines(mergeResult.StandardOutput);
-		if (mergeCandidates.Count == 0)
-		{
-			return PullCommandBuildResult.NoUpstream;
-		}
-
-		if (mergeCandidates.Count > 1)
-		{
-			_logger.LogWarning(
-				"Multiple merge targets detected. Use first target for pull. repositoryPath={RepositoryPath}, branch={BranchName}, mergeTargets={MergeTargets}",
-				repositoryPath,
-				branchName,
-				string.Join(", ", mergeCandidates));
-		}
-
-		var mergeTarget = NormalizeMergeTarget(mergeCandidates[0]);
+		var mergeTarget = NormalizeMergeTarget(FirstNonEmptyLine(mergeResult.StandardOutput) ?? string.Empty);
 		if (string.IsNullOrWhiteSpace(mergeTarget))
 		{
 			return PullCommandBuildResult.NoUpstream;
@@ -417,19 +402,6 @@ public sealed class LauncherService : ILauncherService
 		return normalized.StartsWith(HeadsPrefix, StringComparison.OrdinalIgnoreCase)
 			? normalized[HeadsPrefix.Length..]
 			: normalized;
-	}
-
-	private static IReadOnlyList<string> GetNonEmptyLines(string value)
-	{
-		if (string.IsNullOrWhiteSpace(value))
-		{
-			return [];
-		}
-
-		return value
-			.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-			.Where(static line => !string.IsNullOrWhiteSpace(line))
-			.ToArray();
 	}
 
 	private static bool IsUnbornBranchError(string detail)

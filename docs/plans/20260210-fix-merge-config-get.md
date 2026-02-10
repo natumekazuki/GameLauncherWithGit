@@ -8,11 +8,11 @@
   - pull の追跡設定解決が「有効値1件（--get）」であることを明記する
 
 # タスクリスト
-- [ ] `SyncOrchestrator` の merge 取得を `--get-all` から `--get` に変更
-- [ ] `LauncherService` の merge 取得を `--get-all` から `--get` に変更
-- [ ] 不要化した複数候補処理（先頭採用ロジック）を削除
-- [ ] `docs/design/maui-blazor-architecture.md` を実装へ同期
-- [ ] ビルド検証を実施して結果を記録
+- [x] `SyncOrchestrator` の merge 取得を `--get-all` から `--get` に変更
+- [x] `LauncherService` の merge 取得を `--get-all` から `--get` に変更
+- [x] 不要化した複数候補処理（先頭採用ロジック）を削除
+- [x] `docs/design/maui-blazor-architecture.md` を実装へ同期
+- [x] ビルド検証を実施して結果を記録
 
 # 変更対象ファイル
 - `src/GameLauncherWithGit/Application/Services/SyncOrchestrator.cs`
@@ -23,3 +23,8 @@
 # リスク
 - `--get-all` 前提の挙動に依存した環境では、pull先の解決結果が変化する可能性
 - 追跡設定が未設定のリポジトリで、従来同様 pull スキップ条件が正しく維持されるか要確認
+
+# Notes / Logs
+- 実行コマンド: `dotnet build src/GameLauncherWithGit/GameLauncherWithGit.csproj -f net9.0-windows10.0.19041.0 -p:UseAppHost=false -v minimal`
+- 結果: 失敗（既知要因）
+  - `GameLauncherWithGit (PID 18780)` が DLL をロックしており `MSB3021/MSB3027` が発生
