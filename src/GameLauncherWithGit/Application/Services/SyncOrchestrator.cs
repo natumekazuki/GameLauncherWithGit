@@ -298,7 +298,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 
 		await EnsureCommandSuccessAsync(repositoryPath, "fetch", startedAt, shouldPauseRepository: false, cancellationToken);
 
-		var tracking = await TryGetTrackingInfoAsync(repositoryPath, cancellationToken);
+		var tracking = await TryGetTrackingInfoAsync(repositoryPath, startedAt, cancellationToken);
 		if (tracking is not null)
 		{
 			var pullCommand = $"pull --rebase --autostash {tracking.RemoteName} {tracking.MergeTarget}";
@@ -440,6 +440,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 
 	private async Task<TrackingInfo?> TryGetTrackingInfoAsync(
 		string repositoryPath,
+		DateTimeOffset startedAt,
 		CancellationToken cancellationToken)
 	{
 		var branchResult = await _gitService.RunAsync(repositoryPath, "branch --show-current", cancellationToken);
@@ -451,7 +452,12 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		var branchName = FirstNonEmptyLine(branchResult.StandardOutput);
 		if (string.IsNullOrWhiteSpace(branchName))
 		{
-			return null;
+			throw new SyncCommandException(
+				repositoryPath,
+				"branch --show-current",
+				"現在のブランチを特定できません。detached HEAD を解除してから同期してください。",
+				startedAt,
+				shouldPauseRepository: true);
 		}
 
 		var remoteResult = await _gitService.RunAsync(
