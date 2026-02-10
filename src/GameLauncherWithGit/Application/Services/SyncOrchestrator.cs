@@ -352,8 +352,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 
 		if (tracking is not null)
 		{
-			var pushCommand = $"push {tracking.RemoteName} HEAD:{tracking.MergeTarget}";
-			await EnsureCommandSuccessAsync(repositoryPath, pushCommand, startedAt, shouldPauseRepository: false, cancellationToken);
+			await EnsureCommandSuccessAsync(repositoryPath, "push", startedAt, shouldPauseRepository: false, cancellationToken);
 		}
 		else
 		{
