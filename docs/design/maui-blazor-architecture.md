@@ -47,7 +47,7 @@ flowchart LR
   - 失敗分類とリトライポリシー適用（指数バックオフ再試行、通知抑制、復旧通知）
   - pull は追跡設定（`branch.<name>.remote` / `branch.<name>.merge`）から明示的に組み立て、複数追跡設定時は先頭ターゲットを使用して実行する
   - push は `git push` 既定解決（`branch.<name>.pushRemote` / `remote.pushDefault` 等）を利用して宛先を決定する
-  - `branch/config` 取得の「キー未設定（exit=1 かつ出力空）」時のみ upstream 未設定として pull/push をスキップし、それ以外の取得失敗は同期エラーとして扱う
+  - `branch/config` 取得の「キー未設定（exit=1 かつ出力空）」時は upstream 未設定として pull をスキップし、push は `git push` 既定解決で実行する（それ以外の取得失敗は同期エラー）
   - 同期結果（成功/失敗/停止）をリポジトリ単位の履歴ストアへ記録
 - `LauncherService`
   - ゲーム起動前に `fetch` を実行し、リモート先行でなければ `add -A -> commit(差分時のみ)` を実行

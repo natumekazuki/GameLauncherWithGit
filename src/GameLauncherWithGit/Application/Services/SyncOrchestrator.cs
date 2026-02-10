@@ -350,17 +350,14 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 			}
 		}
 
-		if (tracking is not null)
-		{
-			await EnsureCommandSuccessAsync(repositoryPath, "push", startedAt, shouldPauseRepository: false, cancellationToken);
-		}
-		else
+		if (tracking is null)
 		{
 			_logger.LogInformation(
-				"Skip push because upstream is not configured. repositoryPath={RepositoryPath}",
+				"Pull tracking is not configured. Continue push with git default destination. repositoryPath={RepositoryPath}",
 				repositoryPath);
 		}
 
+		await EnsureCommandSuccessAsync(repositoryPath, "push", startedAt, shouldPauseRepository: false, cancellationToken);
 		_logger.LogInformation("Repository sync completed. repositoryId={RepositoryId}", repositoryId);
 	}
 
