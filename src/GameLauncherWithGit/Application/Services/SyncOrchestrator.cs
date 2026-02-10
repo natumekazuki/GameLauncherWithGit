@@ -298,15 +298,27 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 
 		await EnsureCommandSuccessAsync(repositoryPath, "fetch", startedAt, shouldPauseRepository: false, cancellationToken);
 
-		var pullResult = await _gitService.RunAsync(repositoryPath, "pull --rebase --autostash", cancellationToken);
-		if (!pullResult.IsSuccess)
+		var tracking = await TryGetTrackingInfoAsync(repositoryPath, startedAt, cancellationToken);
+		if (tracking is not null)
 		{
-			throw new SyncCommandException(
-				repositoryPath,
-				"pull --rebase --autostash",
-				BuildFailureReason(pullResult),
-				startedAt,
-				shouldPauseRepository: IsPullConflict(pullResult));
+			var pullCommand =
+				$"pull --rebase --autostash {EscapeGitArgument(tracking.RemoteName)} {EscapeGitArgument(tracking.MergeTarget)}";
+			var pullResult = await _gitService.RunAsync(repositoryPath, pullCommand, cancellationToken);
+			if (!pullResult.IsSuccess)
+			{
+				throw new SyncCommandException(
+					repositoryPath,
+					pullCommand,
+					BuildFailureReason(pullResult),
+					startedAt,
+					shouldPauseRepository: IsPullConflict(pullResult) || IsPullConfigurationError(pullResult));
+			}
+		}
+		else
+		{
+			_logger.LogInformation(
+				"Skip pull because upstream is not configured. repositoryPath={RepositoryPath}",
+				repositoryPath);
 		}
 
 		await EnsureCommandSuccessAsync(repositoryPath, "add -A", startedAt, shouldPauseRepository: false, cancellationToken);
@@ -337,6 +349,13 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 					startedAt,
 					shouldPauseRepository: false);
 			}
+		}
+
+		if (tracking is null)
+		{
+			_logger.LogInformation(
+				"Pull tracking is not configured. Continue push with git default destination. repositoryPath={RepositoryPath}",
+				repositoryPath);
 		}
 
 		await EnsureCommandSuccessAsync(repositoryPath, "push", startedAt, shouldPauseRepository: false, cancellationToken);
@@ -379,6 +398,22 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 			|| text.Contains("競合", StringComparison.OrdinalIgnoreCase);
 	}
 
+	private static bool IsPullConfigurationError(GitCommandResult result)
+	{
+		var text = $"{result.StandardError}\n{result.StandardOutput}";
+		if (string.IsNullOrWhiteSpace(text))
+		{
+			return false;
+		}
+
+		return text.Contains("Cannot rebase onto multiple branches", StringComparison.OrdinalIgnoreCase)
+			|| text.Contains("There is no tracking information for the current branch", StringComparison.OrdinalIgnoreCase)
+			|| text.Contains("no upstream configured", StringComparison.OrdinalIgnoreCase)
+			|| text.Contains("upstream branch", StringComparison.OrdinalIgnoreCase)
+			|| text.Contains("Please specify which branch you want to rebase against", StringComparison.OrdinalIgnoreCase)
+			|| text.Contains("Updating an unborn branch with changes added to the index", StringComparison.OrdinalIgnoreCase);
+	}
+
 	private static bool IsNothingToCommit(GitCommandResult result)
 	{
 		var text = $"{result.StandardError}\n{result.StandardOutput}";
@@ -398,6 +433,130 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		return FirstNonEmptyLine(result.StandardError)
 			?? FirstNonEmptyLine(result.StandardOutput)
 			?? $"exit code: {result.ExitCode}";
+	}
+
+	private static bool IsMissingGitConfigValue(GitCommandResult result)
+	{
+		if (result.IsSuccess)
+		{
+			return false;
+		}
+
+		return result.ExitCode == 1
+			&& string.IsNullOrWhiteSpace(result.StandardError)
+			&& string.IsNullOrWhiteSpace(result.StandardOutput);
+	}
+
+	private async Task<TrackingInfo?> TryGetTrackingInfoAsync(
+		string repositoryPath,
+		DateTimeOffset startedAt,
+		CancellationToken cancellationToken)
+	{
+		var branchResult = await _gitService.RunAsync(repositoryPath, "branch --show-current", cancellationToken);
+		if (!branchResult.IsSuccess)
+		{
+			throw new SyncCommandException(
+				repositoryPath,
+				"branch --show-current",
+				BuildFailureReason(branchResult),
+				startedAt,
+				shouldPauseRepository: true);
+		}
+
+		var branchName = FirstNonEmptyLine(branchResult.StandardOutput);
+		if (string.IsNullOrWhiteSpace(branchName))
+		{
+			throw new SyncCommandException(
+				repositoryPath,
+				"branch --show-current",
+				"現在のブランチを特定できません。detached HEAD を解除してから同期してください。",
+				startedAt,
+				shouldPauseRepository: true);
+		}
+
+		var remoteConfigKey = BuildBranchConfigKey(branchName, "remote");
+		var remoteResult = await _gitService.RunAsync(
+			repositoryPath,
+			$"config --get {remoteConfigKey}",
+			cancellationToken);
+		if (!remoteResult.IsSuccess)
+		{
+			if (IsMissingGitConfigValue(remoteResult))
+			{
+				return null;
+			}
+
+			throw new SyncCommandException(
+				repositoryPath,
+				$"config --get {remoteConfigKey}",
+				BuildFailureReason(remoteResult),
+				startedAt,
+				shouldPauseRepository: true);
+		}
+
+		var remoteName = FirstNonEmptyLine(remoteResult.StandardOutput);
+		if (string.IsNullOrWhiteSpace(remoteName))
+		{
+			return null;
+		}
+
+		var mergeConfigKey = BuildBranchConfigKey(branchName, "merge");
+		var mergeResult = await _gitService.RunAsync(
+			repositoryPath,
+			$"config --get {mergeConfigKey}",
+			cancellationToken);
+		if (!mergeResult.IsSuccess)
+		{
+			if (IsMissingGitConfigValue(mergeResult))
+			{
+				return null;
+			}
+
+			throw new SyncCommandException(
+				repositoryPath,
+				$"config --get {mergeConfigKey}",
+				BuildFailureReason(mergeResult),
+				startedAt,
+				shouldPauseRepository: true);
+		}
+
+		var mergeTarget = NormalizeMergeTarget(FirstNonEmptyLine(mergeResult.StandardOutput) ?? string.Empty);
+		if (string.IsNullOrWhiteSpace(mergeTarget))
+		{
+			return null;
+		}
+
+		return new TrackingInfo(remoteName, mergeTarget);
+	}
+
+	private static string BuildBranchConfigKey(string branchName, string key)
+	{
+		var escapedBranchName = branchName
+			.Replace("\\", "\\\\", StringComparison.Ordinal)
+			.Replace("\"", "\\\"", StringComparison.Ordinal);
+		return $"branch.\"{escapedBranchName}\".{key}";
+	}
+
+	private static string EscapeGitArgument(string value)
+	{
+		if (string.IsNullOrEmpty(value))
+		{
+			return "\"\"";
+		}
+
+		var escaped = value
+			.Replace("\\", "\\\\", StringComparison.Ordinal)
+			.Replace("\"", "\\\"", StringComparison.Ordinal);
+		return $"\"{escaped}\"";
+	}
+
+	private static string NormalizeMergeTarget(string mergeTarget)
+	{
+		const string HeadsPrefix = "refs/heads/";
+		var normalized = mergeTarget.Trim();
+		return normalized.StartsWith(HeadsPrefix, StringComparison.OrdinalIgnoreCase)
+			? normalized[HeadsPrefix.Length..]
+			: normalized;
 	}
 
 	private static string? FirstNonEmptyLine(string value)
@@ -638,6 +797,10 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		int FailureCount,
 		TimeSpan Delay,
 		bool ShouldNotify);
+
+	private sealed record TrackingInfo(
+		string RemoteName,
+		string MergeTarget);
 
 	private sealed class SyncCommandException : Exception
 	{

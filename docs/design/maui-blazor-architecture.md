@@ -45,10 +45,14 @@ flowchart LR
 - `SyncOrchestrator`
   - 監視イベント受信、デバウンス管理、同期ジョブ実行順序制御
   - 失敗分類とリトライポリシー適用（指数バックオフ再試行、通知抑制、復旧通知）
+  - pull は追跡設定（`branch.<name>.remote` / `branch.<name>.merge`）の有効値（`git config --get`）から明示的に組み立て、remote/branch 引数をエスケープして実行する
+  - push は `git push` 既定解決（`branch.<name>.pushRemote` / `remote.pushDefault` 等）を利用して宛先を決定する
+  - `branch/config` 取得の「キー未設定（exit=1 かつ出力空）」時は upstream 未設定として pull をスキップし、push は `git push` 既定解決で実行する（それ以外の取得失敗は同期エラー）
   - 同期結果（成功/失敗/停止）をリポジトリ単位の履歴ストアへ記録
 - `LauncherService`
   - ゲーム起動前に `fetch` を実行し、リモート先行でなければ `add -A -> commit(差分時のみ)` を実行
-  - その後 `pull --rebase --autostash` を実行
+  - その後 `pull --rebase --autostash <remote> <branch>` を実行（追跡設定がない場合は pull をスキップ）
+  - unborn branch（初回コミット前）や upstream 未設定は専用判定で分離し、追跡情報取得コマンド自体の失敗は同期失敗として扱う
   - 失敗時の起動ブロックとログ導線制御
 - `GitService`
   - Git コマンド実行と結果収集（exit code / stdout / stderr）
