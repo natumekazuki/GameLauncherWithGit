@@ -327,9 +327,10 @@ public sealed class LauncherService : ILauncherService
 			return PullCommandBuildResult.DetachedHead;
 		}
 
+		var remoteConfigKey = BuildBranchConfigKey(branchName, "remote");
 		var remoteResult = await _gitService.RunAsync(
 			repositoryPath,
-			$"config --get branch.{branchName}.remote",
+			$"config --get {remoteConfigKey}",
 			cancellationToken);
 		if (!remoteResult.IsSuccess)
 		{
@@ -339,7 +340,7 @@ public sealed class LauncherService : ILauncherService
 			}
 
 			return PullCommandBuildResult.Failed(
-				$"config --get branch.{branchName}.remote",
+				$"config --get {remoteConfigKey}",
 				remoteResult);
 		}
 
@@ -349,9 +350,10 @@ public sealed class LauncherService : ILauncherService
 			return PullCommandBuildResult.NoUpstream;
 		}
 
+		var mergeConfigKey = BuildBranchConfigKey(branchName, "merge");
 		var mergeResult = await _gitService.RunAsync(
 			repositoryPath,
-			$"config --get branch.{branchName}.merge",
+			$"config --get {mergeConfigKey}",
 			cancellationToken);
 		if (!mergeResult.IsSuccess)
 		{
@@ -361,7 +363,7 @@ public sealed class LauncherService : ILauncherService
 			}
 
 			return PullCommandBuildResult.Failed(
-				$"config --get branch.{branchName}.merge",
+				$"config --get {mergeConfigKey}",
 				mergeResult);
 		}
 
@@ -393,6 +395,14 @@ public sealed class LauncherService : ILauncherService
 
 		public static PullCommandBuildResult Failed(string command, GitCommandResult result) =>
 			new(null, false, command, result);
+	}
+
+	private static string BuildBranchConfigKey(string branchName, string key)
+	{
+		var escapedBranchName = branchName
+			.Replace("\\", "\\\\", StringComparison.Ordinal)
+			.Replace("\"", "\\\"", StringComparison.Ordinal);
+		return $"branch.\"{escapedBranchName}\".{key}";
 	}
 
 	private static string NormalizeMergeTarget(string mergeTarget)

@@ -473,9 +473,10 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 				shouldPauseRepository: true);
 		}
 
+		var remoteConfigKey = BuildBranchConfigKey(branchName, "remote");
 		var remoteResult = await _gitService.RunAsync(
 			repositoryPath,
-			$"config --get branch.{branchName}.remote",
+			$"config --get {remoteConfigKey}",
 			cancellationToken);
 		if (!remoteResult.IsSuccess)
 		{
@@ -486,7 +487,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 
 			throw new SyncCommandException(
 				repositoryPath,
-				$"config --get branch.{branchName}.remote",
+				$"config --get {remoteConfigKey}",
 				BuildFailureReason(remoteResult),
 				startedAt,
 				shouldPauseRepository: true);
@@ -498,9 +499,10 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 			return null;
 		}
 
+		var mergeConfigKey = BuildBranchConfigKey(branchName, "merge");
 		var mergeResult = await _gitService.RunAsync(
 			repositoryPath,
-			$"config --get branch.{branchName}.merge",
+			$"config --get {mergeConfigKey}",
 			cancellationToken);
 		if (!mergeResult.IsSuccess)
 		{
@@ -511,7 +513,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 
 			throw new SyncCommandException(
 				repositoryPath,
-				$"config --get branch.{branchName}.merge",
+				$"config --get {mergeConfigKey}",
 				BuildFailureReason(mergeResult),
 				startedAt,
 				shouldPauseRepository: true);
@@ -524,6 +526,14 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		}
 
 		return new TrackingInfo(remoteName, mergeTarget);
+	}
+
+	private static string BuildBranchConfigKey(string branchName, string key)
+	{
+		var escapedBranchName = branchName
+			.Replace("\\", "\\\\", StringComparison.Ordinal)
+			.Replace("\"", "\\\"", StringComparison.Ordinal);
+		return $"branch.\"{escapedBranchName}\".{key}";
 	}
 
 	private static string NormalizeMergeTarget(string mergeTarget)
