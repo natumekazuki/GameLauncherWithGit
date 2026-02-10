@@ -129,7 +129,7 @@ public sealed class LauncherService : ILauncherService
 				remoteAheadResult.RemoteAheadCount);
 		}
 
-		var pullResult = await _gitService.RunAsync(repositoryPath, "pull --rebase --autostash", cancellationToken);
+		var pullResult = await PullWithConfiguredTargetAsync(repositoryPath, cancellationToken);
 		if (!pullResult.IsSuccess)
 		{
 			return BuildFailureResult(repositoryPath, "pull --rebase --autostash", pullResult);
@@ -151,10 +151,11 @@ public sealed class LauncherService : ILauncherService
 			var detail = $"{result.StandardError}\n{result.StandardOutput}";
 			if (detail.Contains("no upstream configured", StringComparison.OrdinalIgnoreCase)
 				|| detail.Contains("upstream branch", StringComparison.OrdinalIgnoreCase)
-				|| detail.Contains("追跡ブランチ", StringComparison.OrdinalIgnoreCase))
+				|| detail.Contains("追跡ブランチ", StringComparison.OrdinalIgnoreCase)
+				|| IsUnbornBranchError(detail))
 			{
 				_logger.LogInformation(
-					"Upstream is not configured. Treat remote-ahead count as 0. repositoryPath={RepositoryPath}",
+					"Upstream is not ready. Treat remote-ahead count as 0. repositoryPath={RepositoryPath}",
 					repositoryPath);
 				return new RemoteAheadResult(true, 0, result);
 			}
@@ -262,6 +263,137 @@ public sealed class LauncherService : ILauncherService
 			|| text.Contains("no changes added to commit", StringComparison.OrdinalIgnoreCase)
 			|| text.Contains("作業ツリーはクリーン", StringComparison.OrdinalIgnoreCase)
 			|| text.Contains("コミットするものがありません", StringComparison.OrdinalIgnoreCase);
+	}
+
+	private async Task<GitCommandResult> PullWithConfiguredTargetAsync(
+		string repositoryPath,
+		CancellationToken cancellationToken)
+	{
+		if (!await HasCommitAsync(repositoryPath, cancellationToken))
+		{
+			_logger.LogInformation(
+				"Skip pull because repository has no commits yet. repositoryPath={RepositoryPath}",
+				repositoryPath);
+			return new GitCommandResult(0, "skip pull: unborn branch", string.Empty);
+		}
+
+		var pullCommand = await TryBuildPullCommandAsync(repositoryPath, cancellationToken);
+		if (string.IsNullOrWhiteSpace(pullCommand))
+		{
+			_logger.LogInformation(
+				"Skip pull because upstream is not configured. repositoryPath={RepositoryPath}",
+				repositoryPath);
+			return new GitCommandResult(0, "skip pull: no upstream", string.Empty);
+		}
+
+		return await _gitService.RunAsync(repositoryPath, pullCommand, cancellationToken);
+	}
+
+	private async Task<string?> TryBuildPullCommandAsync(
+		string repositoryPath,
+		CancellationToken cancellationToken)
+	{
+		var branchResult = await _gitService.RunAsync(repositoryPath, "branch --show-current", cancellationToken);
+		if (!branchResult.IsSuccess)
+		{
+			return null;
+		}
+
+		var branchName = FirstNonEmptyLine(branchResult.StandardOutput);
+		if (string.IsNullOrWhiteSpace(branchName))
+		{
+			return null;
+		}
+
+		var remoteResult = await _gitService.RunAsync(
+			repositoryPath,
+			$"config --get branch.{branchName}.remote",
+			cancellationToken);
+		if (!remoteResult.IsSuccess)
+		{
+			return null;
+		}
+
+		var remoteName = FirstNonEmptyLine(remoteResult.StandardOutput);
+		if (string.IsNullOrWhiteSpace(remoteName))
+		{
+			return null;
+		}
+
+		var mergeResult = await _gitService.RunAsync(
+			repositoryPath,
+			$"config --get-all branch.{branchName}.merge",
+			cancellationToken);
+		if (!mergeResult.IsSuccess)
+		{
+			return null;
+		}
+
+		var mergeCandidates = GetNonEmptyLines(mergeResult.StandardOutput);
+		if (mergeCandidates.Count == 0)
+		{
+			return null;
+		}
+
+		if (mergeCandidates.Count > 1)
+		{
+			_logger.LogWarning(
+				"Multiple merge targets detected. Use first target for pull. repositoryPath={RepositoryPath}, branch={BranchName}, mergeTargets={MergeTargets}",
+				repositoryPath,
+				branchName,
+				string.Join(", ", mergeCandidates));
+		}
+
+		var mergeTarget = NormalizeMergeTarget(mergeCandidates[0]);
+		if (string.IsNullOrWhiteSpace(mergeTarget))
+		{
+			return null;
+		}
+
+		return $"pull --rebase --autostash {remoteName} {mergeTarget}";
+	}
+
+	private async Task<bool> HasCommitAsync(string repositoryPath, CancellationToken cancellationToken)
+	{
+		var verifyHeadResult = await _gitService.RunAsync(
+			repositoryPath,
+			"rev-parse --verify HEAD",
+			cancellationToken);
+		return verifyHeadResult.IsSuccess;
+	}
+
+	private static string NormalizeMergeTarget(string mergeTarget)
+	{
+		const string HeadsPrefix = "refs/heads/";
+		var normalized = mergeTarget.Trim();
+		return normalized.StartsWith(HeadsPrefix, StringComparison.OrdinalIgnoreCase)
+			? normalized[HeadsPrefix.Length..]
+			: normalized;
+	}
+
+	private static IReadOnlyList<string> GetNonEmptyLines(string value)
+	{
+		if (string.IsNullOrWhiteSpace(value))
+		{
+			return [];
+		}
+
+		return value
+			.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+			.Where(static line => !string.IsNullOrWhiteSpace(line))
+			.ToArray();
+	}
+
+	private static bool IsUnbornBranchError(string detail)
+	{
+		if (string.IsNullOrWhiteSpace(detail))
+		{
+			return false;
+		}
+
+		return detail.Contains("no such branch: 'HEAD...'", StringComparison.OrdinalIgnoreCase)
+			|| detail.Contains("ambiguous argument 'HEAD...@'", StringComparison.OrdinalIgnoreCase)
+			|| detail.Contains("needed a single revision", StringComparison.OrdinalIgnoreCase);
 	}
 
 	private sealed record RemoteAheadResult(
