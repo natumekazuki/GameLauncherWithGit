@@ -75,8 +75,10 @@ public partial class App : Microsoft.Maui.Controls.Application
 
 				_ = ShowWindow(handle, SW_SHOW);
 				_ = ShowWindow(handle, SW_RESTORE);
-				_ = SetForegroundWindow(handle);
-				return true;
+				if (SetForegroundWindow(handle) || GetForegroundWindow() == handle)
+				{
+					return true;
+				}
 			}
 		}
 		finally
@@ -147,4 +149,7 @@ public partial class App : Microsoft.Maui.Controls.Application
 	[DllImport("user32.dll")]
 	[return: MarshalAs(UnmanagedType.Bool)]
 	private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+	[DllImport("user32.dll")]
+	private static extern IntPtr GetForegroundWindow();
 }
