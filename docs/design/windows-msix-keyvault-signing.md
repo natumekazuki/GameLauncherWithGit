@@ -1,6 +1,6 @@
 # Windows 配布運用: MSIX と Azure Key Vault 証明書
 
-更新日: 2026-02-08
+更新日: 2026-02-14
 対象: `src/GameLauncherWithGit`（.NET MAUI Blazor Hybrid / Windows 11）
 
 ## 1. 目的
@@ -176,3 +176,20 @@ Add-AppxPackage -Path $msix -ForceApplicationShutdown
 - Azure Key Vault から secret ダウンロード（PFX 取得）: https://learn.microsoft.com/cli/azure/keyvault/secret
 - Import-Certificate: https://learn.microsoft.com/powershell/module/pki/import-certificate
 - SignTool（MSIX 署名/検証）: https://learn.microsoft.com/windows/msix/package/sign-app-package-using-signtool
+
+## 7. バージョン更新チェックリスト
+アプリバージョンを更新するときは、以下を必ず同時に確認する。
+
+1. `src/GameLauncherWithGit/GameLauncherWithGit.csproj`
+   - `<ApplicationDisplayVersion>` を更新する（例: `1.1.3`）。
+   - `<ApplicationVersion>` をインクリメントする（例: `5` -> `6`）。
+2. `src/GameLauncherWithGit/Platforms/Windows/Package.appxmanifest`
+   - `<Identity ... Version=\"X.Y.Z.0\" />` を `ApplicationDisplayVersion` と整合させる（例: `1.1.3.0`）。
+3. 整合確認コマンド
+```powershell
+rg -n "ApplicationDisplayVersion|ApplicationVersion" src/GameLauncherWithGit/GameLauncherWithGit.csproj
+rg -n "<Identity .*Version=" src/GameLauncherWithGit/Platforms/Windows/Package.appxmanifest
+```
+4. リリース前確認
+   - `dotnet build src/GameLauncherWithGit/GameLauncherWithGit.csproj -f net9.0-windows10.0.19041.0 -v minimal`
+   - 必要に応じて `scripts/publish-windows-msix.ps1` で生成した MSIX のインストール確認を行う。

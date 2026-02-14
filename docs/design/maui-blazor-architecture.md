@@ -193,6 +193,13 @@ sequenceDiagram
   - `Resources/TrayIcon/tray-idle.ico`: 待機状態トレイアイコン
   - `Resources/TrayIcon/tray-syncing.ico`: 同期中トレイアイコン
   - `Resources/TrayIcon/tray-error.ico`: エラー停止トレイアイコン
+- バージョン更新時の更新対象
+  - `src/GameLauncherWithGit/GameLauncherWithGit.csproj`
+    - `ApplicationDisplayVersion`
+    - `ApplicationVersion`
+  - `src/GameLauncherWithGit/Platforms/Windows/Package.appxmanifest`
+    - `Identity Version`（`X.Y.Z.0` 形式）
+  - 運用詳細は `docs/design/windows-msix-keyvault-signing.md` の「7. バージョン更新チェックリスト」を参照
 
 ## 10. エラーハンドリング方針
 - 競合（rebase conflict）
