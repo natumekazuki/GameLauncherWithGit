@@ -60,6 +60,11 @@
                 @onclick="OpenSettingsAsync">
             環境設定
         </button>
+        <button type="button"
+                class="secondary-button utility-button"
+                @onclick="OpenHelp">
+            Help
+        </button>
     </section>
 }
 
@@ -104,6 +109,9 @@ else
                         var syncHistory = GetSyncHistoryTimeline(game);
                         var hasThumbnail = HasThumbnail(game);
                         var thumbnailDataUri = hasThumbnail ? GetThumbnailDataUri(game) : null;
+                        var showCardTitle = _showCardTitle;
+                        var showCardSyncStatus = _showCardSyncStatus;
+                        var hasCardHeader = showCardTitle || showCardSyncStatus;
                         <article class="@GetGameCardClass(hasThumbnail, gitVisualState)">
                             @if (hasThumbnail)
                             {
@@ -119,15 +127,38 @@ else
                                              alt="@($"{game.Title} サムネイル")" />
                                     }
                                 </div>
+
+                                @if (hasCardHeader)
+                                {
+                                    <div class="thumbnail-card-meta">
+                                        @if (showCardTitle)
+                                        {
+                                            <h2 class="thumbnail-card-title">@game.Title</h2>
+                                        }
+                                        @if (showCardSyncStatus)
+                                        {
+                                            <span class="status-badge @GetStatusClass(effectiveStatus)">@GetStatusLabel(effectiveStatus)</span>
+                                        }
+                                    </div>
+                                }
                             }
                             else
                             {
-                                <div class="game-card-header">
-                                    <h2>@game.Title</h2>
-                                    <span class="status-badge @GetStatusClass(effectiveStatus)">@GetStatusLabel(effectiveStatus)</span>
-                                </div>
+                                @if (hasCardHeader)
+                                {
+                                    <div class="game-card-header @(!showCardTitle && showCardSyncStatus ? "game-card-header-status-only" : string.Empty)">
+                                        @if (showCardTitle)
+                                        {
+                                            <h2>@game.Title</h2>
+                                        }
+                                        @if (showCardSyncStatus)
+                                        {
+                                            <span class="status-badge @GetStatusClass(effectiveStatus)">@GetStatusLabel(effectiveStatus)</span>
+                                        }
+                                    </div>
+                                }
 
-                                <div class="game-card-body">
+                                <div class="game-card-body @(hasCardHeader ? string.Empty : "game-card-body-no-header")">
                                     <p class="meta-label">実行ファイル</p>
                                     <p class="meta-value">@game.ExecutablePath</p>
                                     <p class="meta-label">関連リポジトリ</p>
@@ -221,9 +252,118 @@ else
     }
 </div>
 
+@if (_isHelpOpen)
+{
+    <div class="editor-overlay help-overlay" @onclick="CloseHelp">
+        <section class="help-modal" @onclick:stopPropagation="true">
+            <h2>Help / 使い方ガイド</h2>
+
+            <div class="help-section">
+                <h3>基本操作</h3>
+                <ul>
+                    <li>`+ 新規追加`: ゲームを登録します。</li>
+                    <li>`▶`: 起動前に同期チェックしてからゲームを起動します。</li>
+                    <li>`Gitステータス更新`: カード枠色の元になる Git 状態を再取得します。</li>
+                    <li>`環境設定`: 同期設定・通知・ログ・カード表示設定を変更します。</li>
+                </ul>
+            </div>
+
+            <div class="help-section">
+                <h3>カードの見方</h3>
+                <ul>
+                    <li>カード枠色: リポジトリの Git 状態（clean/dirty/ahead など）</li>
+                    <li>同期ステータス: `同期中 / 同期OK / エラー / 未同期`</li>
+                    <li>同期履歴: 直近3件の結果・時刻・所要時間（必要に応じて command/reason）</li>
+                </ul>
+            </div>
+
+            <div class="help-section">
+                <h3>Git状態の意味</h3>
+                <table class="help-git-table">
+                    <thead>
+                        <tr>
+                            <th>状態</th>
+                            <th>枠色</th>
+                            <th>意味</th>
+                            <th>推奨アクション</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Clean</td>
+                            <td><span class="help-git-swatch help-git-swatch-clean" aria-label="Cleanの枠色"></span></td>
+                            <td>作業ツリーに変更なし</td>
+                            <td>そのまま利用</td>
+                        </tr>
+                        <tr>
+                            <td>Dirty</td>
+                            <td><span class="help-git-swatch help-git-swatch-dirty" aria-label="Dirtyの枠色"></span></td>
+                            <td>未コミット変更あり</td>
+                            <td>差分を確認してコミット方針を決める</td>
+                        </tr>
+                        <tr>
+                            <td>Ahead</td>
+                            <td><span class="help-git-swatch help-git-swatch-ahead" aria-label="Aheadの枠色"></span></td>
+                            <td>ローカルがリモートより先行</td>
+                            <td>必要なら push</td>
+                        </tr>
+                        <tr>
+                            <td>Behind</td>
+                            <td><span class="help-git-swatch help-git-swatch-behind" aria-label="Behindの枠色"></span></td>
+                            <td>リモートが先行</td>
+                            <td>pull して追従</td>
+                        </tr>
+                        <tr>
+                            <td>Diverged</td>
+                            <td><span class="help-git-swatch help-git-swatch-diverged" aria-label="Divergedの枠色"></span></td>
+                            <td>ローカルとリモートが分岐</td>
+                            <td>履歴を確認して統合方針を決める</td>
+                        </tr>
+                        <tr>
+                            <td>Error</td>
+                            <td><span class="help-git-swatch help-git-swatch-error" aria-label="Errorの枠色"></span></td>
+                            <td>状態判定でエラー</td>
+                            <td>ログビューアで詳細確認</td>
+                        </tr>
+                        <tr>
+                            <td>NotConfigured</td>
+                            <td><span class="help-git-swatch help-git-swatch-not-configured" aria-label="NotConfiguredの枠色"></span></td>
+                            <td>関連リポジトリ未設定</td>
+                            <td>ゲーム編集で設定</td>
+                        </tr>
+                        <tr>
+                            <td>Unknown</td>
+                            <td><span class="help-git-swatch help-git-swatch-unknown" aria-label="Unknownの枠色"></span></td>
+                            <td>判定前/判定不可</td>
+                            <td>Gitステータス更新を実行</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="help-section">
+                <h3>トラブル時の導線</h3>
+                <ul>
+                    <li>右下通知ドックで直近メッセージを確認</li>
+                    <li>環境設定 → ログビューア でエラー詳細を確認</li>
+                    <li>必要なら `最新エラーログを開く` / `ログフォルダを開く` を利用</li>
+                </ul>
+            </div>
+
+            <div class="editor-actions">
+                <button type="button"
+                        class="secondary-button"
+                        @onclick="CloseHelp">
+                    閉じる
+                </button>
+            </div>
+        </section>
+    </div>
+}
+
 @if (_isSettingsOpen)
 {
-    <div class="editor-overlay" @onclick="() => CloseSettings()">
+    <div class="editor-overlay settings-overlay" @onclick="() => CloseSettings()">
         <section class="settings-modal" @onclick:stopPropagation="true">
             <h2>環境設定</h2>
 
@@ -241,56 +381,75 @@ else
                 }
             </div>
 
-            <div class="settings-section">
+            <div class="settings-section settings-sync-section">
                 <h3>同期・通知設定</h3>
+                <div class="settings-sync-grid">
+                    <label class="settings-value-row">
+                        <span class="settings-value-label">変更検知デバウンス秒</span>
+                        <input type="number"
+                               min="1"
+                               max="300"
+                               @bind="_syncDebounceSeconds"
+                               disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                    </label>
+                    <label class="settings-value-row">
+                        <span class="settings-value-label">再試行 初期待機秒</span>
+                        <input type="number"
+                               min="1"
+                               max="600"
+                               @bind="_syncRetryInitialSeconds"
+                               disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                    </label>
+                    <label class="settings-value-row">
+                        <span class="settings-value-label">再試行 最大待機秒</span>
+                        <input type="number"
+                               min="1"
+                               max="3600"
+                               @bind="_syncRetryMaxSeconds"
+                               disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                    </label>
+                    <label class="settings-value-row">
+                        <span class="settings-value-label">通知抑制秒（0で無効）</span>
+                        <input type="number"
+                               min="0"
+                               max="600"
+                               @bind="_notificationSuppressSeconds"
+                               disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                    </label>
+                    <label class="settings-value-row">
+                        <span class="settings-value-label">ログ保持日数</span>
+                        <input type="number"
+                               min="1"
+                               max="365"
+                               @bind="_logRetentionDays"
+                               disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                    </label>
+                    <label class="settings-value-row">
+                        <span class="settings-value-label">ログ最大サイズMB</span>
+                        <input type="number"
+                               min="1"
+                               max="1024"
+                               @bind="_logMaxFileSizeMb"
+                               disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                    </label>
+                </div>
+            </div>
+
+            <div class="settings-section">
+                <h3>カード表示設定</h3>
                 <label class="settings-toggle-row">
-                    <span>変更検知デバウンス秒</span>
-                    <input type="number"
-                           min="1"
-                           max="300"
-                           @bind="_syncDebounceSeconds"
+                    <span>タイトルを表示</span>
+                    <input type="checkbox"
+                           @bind="_showCardTitle"
                            disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
                 </label>
                 <label class="settings-toggle-row">
-                    <span>再試行 初期待機秒</span>
-                    <input type="number"
-                           min="1"
-                           max="600"
-                           @bind="_syncRetryInitialSeconds"
+                    <span>同期ステータスを表示</span>
+                    <input type="checkbox"
+                           @bind="_showCardSyncStatus"
                            disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
                 </label>
-                <label class="settings-toggle-row">
-                    <span>再試行 最大待機秒</span>
-                    <input type="number"
-                           min="1"
-                           max="3600"
-                           @bind="_syncRetryMaxSeconds"
-                           disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
-                </label>
-                <label class="settings-toggle-row">
-                    <span>通知抑制秒（0で無効）</span>
-                    <input type="number"
-                           min="0"
-                           max="600"
-                           @bind="_notificationSuppressSeconds"
-                           disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
-                </label>
-                <label class="settings-toggle-row">
-                    <span>ログ保持日数</span>
-                    <input type="number"
-                           min="1"
-                           max="365"
-                           @bind="_logRetentionDays"
-                           disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
-                </label>
-                <label class="settings-toggle-row">
-                    <span>ログ最大サイズMB</span>
-                    <input type="number"
-                           min="1"
-                           max="1024"
-                           @bind="_logMaxFileSizeMb"
-                           disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
-                </label>
+                <p class="settings-note">表示項目に応じてサムネイルカードの高さを自動調整します。</p>
                 <div class="editor-actions">
                     <button type="button"
                             class="launch-button"
@@ -644,6 +803,7 @@ else
     private string? _editorThumbnailSourcePath;
     private bool _editorHasThumbnail;
     private bool _editorClearThumbnail;
+    private bool _isHelpOpen;
     private bool _isSettingsOpen;
     private bool _isSettingsLoading;
     private bool _isAutoStartSaving;
@@ -657,6 +817,8 @@ else
     private int _logRetentionDays = AppSettings.Default.LogRetentionDays;
     private int _logMaxFileSizeMb = AppSettings.Default.LogMaxFileSizeMb;
     private int _gameCardSizePercent = AppSettings.Default.GameCardSizePercent;
+    private bool _showCardTitle = AppSettings.Default.ShowCardTitle;
+    private bool _showCardSyncStatus = AppSettings.Default.ShowCardSyncStatus;
     private int _logViewerLimit = 100;
     private string _logViewerSeverityFilter = "all";
     private string _logViewerKeyword = string.Empty;
@@ -730,6 +892,16 @@ else
         await LoadSettingsAsync();
     }
 
+    private void OpenHelp()
+    {
+        _isHelpOpen = true;
+    }
+
+    private void CloseHelp()
+    {
+        _isHelpOpen = false;
+    }
+
     private void CloseSettings(bool force = false)
     {
         if ((_isSettingsLoading || _isAutoStartSaving || _isAppSettingsSaving || _isCardSizeSaving) && !force)
@@ -798,7 +970,7 @@ else
         }
         catch (Exception ex)
         {
-            SetNotification($"同期・通知設定の保存に失敗しました: {ex.Message}", false);
+            SetNotification($"アプリ設定の保存に失敗しました: {ex.Message}", false);
         }
         finally
         {
@@ -816,6 +988,8 @@ else
         _logRetentionDays = normalized.LogRetentionDays;
         _logMaxFileSizeMb = normalized.LogMaxFileSizeMb;
         _gameCardSizePercent = normalized.GameCardSizePercent;
+        _showCardTitle = normalized.ShowCardTitle;
+        _showCardSyncStatus = normalized.ShowCardSyncStatus;
     }
 
     private async Task SaveCurrentAppSettingsAsync()
@@ -827,7 +1001,9 @@ else
             NotificationSuppressSeconds: _notificationSuppressSeconds,
             LogRetentionDays: _logRetentionDays,
             LogMaxFileSizeMb: _logMaxFileSizeMb,
-            GameCardSizePercent: _gameCardSizePercent);
+            GameCardSizePercent: _gameCardSizePercent,
+            ShowCardTitle: _showCardTitle,
+            ShowCardSyncStatus: _showCardSyncStatus);
         var normalized = requested.Normalize();
 
         await AppSettingsService.SaveAsync(normalized);
@@ -900,7 +1076,29 @@ else
     {
         var scale = _gameCardSizePercent / 100d;
         var scaleText = scale.ToString("0.00", global::System.Globalization.CultureInfo.InvariantCulture);
-        return $"--game-card-scale:{scaleText};";
+        var thumbnailExtraHeight = GetThumbnailCardExtraHeightPx();
+        return $"--game-card-scale:{scaleText};--thumbnail-extra-height:{thumbnailExtraHeight}px;";
+    }
+
+    private int GetThumbnailCardExtraHeightPx()
+    {
+        var visibleCount = 0;
+        if (_showCardTitle)
+        {
+            visibleCount++;
+        }
+
+        if (_showCardSyncStatus)
+        {
+            visibleCount++;
+        }
+
+        return visibleCount switch
+        {
+            2 => 64,
+            1 => 38,
+            _ => 0
+        };
     }
 
     private async Task OpenLatestErrorLogAsync()
