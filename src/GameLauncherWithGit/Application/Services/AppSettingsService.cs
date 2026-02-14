@@ -76,7 +76,8 @@ public sealed class AppSettingsService : IAppSettingsService
 		{
 			var content = File.ReadAllText(_settingsFilePath, Encoding.UTF8);
 			var loaded = JsonSerializer.Deserialize<AppSettings>(content, JsonOptions);
-			_current = (loaded ?? AppSettings.Default).Normalize();
+			var migrated = ApplyCompatibilityDefaults(loaded ?? AppSettings.Default, content);
+			_current = migrated.Normalize();
 		}
 		catch (Exception ex)
 		{
@@ -85,6 +86,61 @@ public sealed class AppSettingsService : IAppSettingsService
 		}
 
 		_isLoaded = true;
+	}
+
+	private static AppSettings ApplyCompatibilityDefaults(AppSettings settings, string jsonContent)
+	{
+		if (!TryReadRootObject(jsonContent, out var root))
+		{
+			return settings;
+		}
+
+		var hasShowCardTitle = HasProperty(root, "showCardTitle");
+		var hasShowCardSyncStatus = HasProperty(root, "showCardSyncStatus");
+
+		if (hasShowCardTitle && hasShowCardSyncStatus)
+		{
+			return settings;
+		}
+
+		return settings with
+		{
+			ShowCardTitle = hasShowCardTitle ? settings.ShowCardTitle : AppSettings.Default.ShowCardTitle,
+			ShowCardSyncStatus = hasShowCardSyncStatus ? settings.ShowCardSyncStatus : AppSettings.Default.ShowCardSyncStatus
+		};
+	}
+
+	private static bool TryReadRootObject(string jsonContent, out JsonElement root)
+	{
+		root = default;
+		try
+		{
+			using var document = JsonDocument.Parse(jsonContent);
+			if (document.RootElement.ValueKind != JsonValueKind.Object)
+			{
+				return false;
+			}
+
+			root = document.RootElement.Clone();
+			return true;
+		}
+		catch
+		{
+			return false;
+		}
+	}
+
+	private static bool HasProperty(JsonElement root, string propertyNameCamelCase)
+	{
+		foreach (var property in root.EnumerateObject())
+		{
+			if (string.Equals(property.Name, propertyNameCamelCase, StringComparison.OrdinalIgnoreCase))
+			{
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	private void EnsureDirectoryCore()
