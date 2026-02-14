@@ -70,6 +70,9 @@ flowchart LR
   - エラー停止時はトレイバルーンで注意喚起
   - 右クリックメニュー（今すぐ同期 / 設定 / ログを開く / 終了）を提供
   - `WM_CLOSE` 捕捉により「閉じる=非表示、終了=明示操作のみ」を実現
+- `App (Single Instance)`
+  - Windowsでは名前付き `Mutex` で単一インスタンスを保証する
+  - 多重起動時は新規プロセスを終了し、既存インスタンスのトップレベルウィンドウを `ShowWindow(SW_RESTORE)` + `SetForegroundWindow` で前面復帰する
 - `ThumbnailService`
   - 画像を長辺 512px の PNG に変換して `FileSystem.AppDataDirectory/thumbnails` に保存
 - `PathPickerService`
