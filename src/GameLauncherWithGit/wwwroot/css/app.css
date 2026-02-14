@@ -121,42 +121,47 @@ h1:focus {
 }
 
 .game-card.git-state-clean {
-    border-color: #3e8f63;
-    background: linear-gradient(165deg, #ffffff, #f3fff8);
+    border-color: #2bb673;
+    background: linear-gradient(165deg, #ffffff, #eafbf3);
 }
 
 .game-card.git-state-dirty {
-    border-color: #9e6a22;
-    background: linear-gradient(165deg, #ffffff, #fff8ec);
+    border-color: #e67e22;
+    background: linear-gradient(165deg, #ffffff, #fff4e8);
 }
 
 .game-card.git-state-ahead {
-    border-color: #2d6ecc;
-    background: linear-gradient(165deg, #ffffff, #edf5ff);
+    border-color: #2d8cff;
+    background: linear-gradient(165deg, #ffffff, #eaf3ff);
 }
 
 .game-card.git-state-behind {
-    border-color: #b35a22;
-    background: linear-gradient(165deg, #ffffff, #fff1e8);
+    border-color: #f1c40f;
+    background: linear-gradient(165deg, #ffffff, #fffbe4);
 }
 
 .game-card.git-state-diverged {
-    border-color: #a0454b;
-    background: linear-gradient(165deg, #ffffff, #fff0f1);
+    border-color: #a855f7;
+    background: linear-gradient(165deg, #ffffff, #f7edff);
 }
 
 .game-card.git-state-error {
-    border-color: #a33444;
-    background: linear-gradient(165deg, #ffffff, #ffedef);
+    border-color: #ef4444;
+    background: linear-gradient(165deg, #ffffff, #ffeef0);
 }
 
-.game-card.git-state-not-configured,
+.game-card.git-state-not-configured {
+    border-color: #94a3b8;
+    background: linear-gradient(165deg, #ffffff, #f4f6fb);
+}
+
 .game-card.git-state-unknown {
-    border-color: #6f7d92;
+    border-color: #14b8a6;
+    background: linear-gradient(165deg, #ffffff, #e8fffb);
 }
 
 .thumbnail-mode-card {
-    min-height: calc(320px * var(--game-card-scale));
+    min-height: calc((320px + var(--thumbnail-extra-height, 0px)) * var(--game-card-scale));
     padding: calc(0.6rem * var(--game-card-scale));
 }
 
@@ -201,6 +206,23 @@ h1:focus {
     line-height: 1.35;
 }
 
+.game-card-header-status-only {
+    justify-content: flex-end;
+}
+
+.thumbnail-card-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+}
+
+.thumbnail-card-title {
+    margin: 0;
+    font-size: 0.98rem;
+    line-height: 1.3;
+}
+
 .status-badge {
     display: inline-flex;
     align-items: center;
@@ -234,6 +256,10 @@ h1:focus {
 
 .game-card-body {
     margin-top: 0.8rem;
+}
+
+.game-card-body-no-header {
+    margin-top: 0;
 }
 
 .meta-label {
@@ -613,36 +639,50 @@ a,
 }
 
 .game-card.git-state-clean {
-    border-color: #2f7d55;
-    background: linear-gradient(165deg, rgba(20, 48, 38, 0.94), rgba(12, 28, 24, 0.95));
+    border-color: #2bb673;
+    background: linear-gradient(165deg, rgba(14, 64, 45, 0.94), rgba(10, 37, 30, 0.95));
 }
 
 .game-card.git-state-dirty {
-    border-color: #9c6a2c;
-    background: linear-gradient(165deg, rgba(60, 40, 18, 0.94), rgba(33, 23, 12, 0.95));
+    border-color: #e67e22;
+    background: linear-gradient(165deg, rgba(78, 45, 14, 0.94), rgba(39, 24, 10, 0.95));
 }
 
 .game-card.git-state-ahead {
-    border-color: #2d6ecc;
-    background: linear-gradient(165deg, rgba(18, 43, 80, 0.94), rgba(10, 23, 45, 0.95));
+    border-color: #2d8cff;
+    background: linear-gradient(165deg, rgba(16, 50, 95, 0.94), rgba(10, 28, 53, 0.95));
 }
 
 .game-card.git-state-behind {
-    border-color: #bf5d31;
-    background: linear-gradient(165deg, rgba(74, 32, 18, 0.94), rgba(38, 18, 12, 0.95));
+    border-color: #f1c40f;
+    background: linear-gradient(165deg, rgba(86, 69, 16, 0.94), rgba(44, 35, 10, 0.95));
 }
 
 .game-card.git-state-diverged {
-    border-color: #a0454b;
-    background: linear-gradient(165deg, rgba(72, 24, 34, 0.94), rgba(36, 14, 19, 0.95));
+    border-color: #a855f7;
+    background: linear-gradient(165deg, rgba(56, 28, 84, 0.94), rgba(30, 15, 48, 0.95));
 }
 
 .game-card.git-state-error {
-    border-color: #b33a4a;
-    background: linear-gradient(165deg, rgba(77, 21, 31, 0.95), rgba(38, 12, 17, 0.96));
+    border-color: #ef4444;
+    background: linear-gradient(165deg, rgba(90, 20, 32, 0.95), rgba(45, 11, 17, 0.96));
+}
+
+.game-card.git-state-not-configured {
+    border-color: #94a3b8;
+    background: linear-gradient(165deg, rgba(42, 50, 68, 0.94), rgba(22, 28, 40, 0.95));
+}
+
+.game-card.git-state-unknown {
+    border-color: #14b8a6;
+    background: linear-gradient(165deg, rgba(12, 63, 58, 0.94), rgba(10, 34, 33, 0.95));
 }
 
 .game-card-header h2 {
+    color: #eff5ff;
+}
+
+.thumbnail-card-title {
     color: #eff5ff;
 }
 
@@ -865,12 +905,131 @@ a,
 }
 
 .settings-modal {
-    width: min(520px, 100%);
+    width: min(760px, 100%);
+    max-height: 70vh;
+    max-height: 70dvh;
+    overflow-y: auto;
     background: linear-gradient(160deg, #161f32, #101827);
     border: 1px solid #2d3f5f;
     border-radius: 14px;
     padding: 1rem;
     box-shadow: 0 12px 30px rgba(14, 24, 48, 0.2);
+}
+
+.settings-overlay {
+    overflow-y: auto;
+}
+
+.help-overlay {
+    overflow-y: auto;
+}
+
+.help-modal {
+    width: min(920px, 100%);
+    max-height: 78vh;
+    max-height: 78dvh;
+    overflow-y: auto;
+    background: linear-gradient(160deg, #141f34, #101a2d);
+    border: 1px solid #35507a;
+    border-radius: 14px;
+    padding: 1rem;
+    box-shadow: 0 12px 30px rgba(14, 24, 48, 0.2);
+}
+
+.help-modal h2 {
+    margin: 0 0 0.8rem;
+    color: #e7eef9;
+    font-size: 1.22rem;
+}
+
+.help-section {
+    margin-bottom: 0.72rem;
+    border: 1px solid #314666;
+    border-radius: 10px;
+    background: #0f1829;
+    padding: 0.68rem 0.75rem;
+}
+
+.help-section h3 {
+    margin: 0 0 0.45rem;
+    color: #dce8fc;
+    font-size: 0.92rem;
+}
+
+.help-section ul {
+    margin: 0;
+    padding-left: 1.1rem;
+    color: #d5e3fa;
+    font-size: 0.84rem;
+    line-height: 1.42;
+}
+
+.help-section li + li {
+    margin-top: 0.2rem;
+}
+
+.help-git-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+    color: #d5e3fa;
+}
+
+.help-git-table th,
+.help-git-table td {
+    border: 1px solid #304566;
+    padding: 0.36rem 0.42rem;
+    text-align: left;
+    vertical-align: top;
+    line-height: 1.35;
+}
+
+.help-git-table thead th {
+    background: #18253e;
+    color: #e8f0ff;
+    font-size: 0.78rem;
+}
+
+.help-git-swatch {
+    display: inline-block;
+    width: 2.6rem;
+    height: 0.82rem;
+    border-radius: 999px;
+    border: 2px solid #94a3b8;
+    background: rgba(14, 24, 40, 0.8);
+    vertical-align: middle;
+}
+
+.help-git-swatch-clean {
+    border-color: #2bb673;
+}
+
+.help-git-swatch-dirty {
+    border-color: #e67e22;
+}
+
+.help-git-swatch-ahead {
+    border-color: #2d8cff;
+}
+
+.help-git-swatch-behind {
+    border-color: #f1c40f;
+}
+
+.help-git-swatch-diverged {
+    border-color: #a855f7;
+}
+
+.help-git-swatch-error {
+    border-color: #ef4444;
+}
+
+.help-git-swatch-not-configured {
+    border-color: #94a3b8;
+}
+
+.help-git-swatch-unknown {
+    border-color: #14b8a6;
 }
 
 .settings-modal h2 {
@@ -887,6 +1046,13 @@ a,
     background: #0f1829;
 }
 
+.settings-section h3 {
+    margin: 0 0 0.7rem;
+    color: #dce8fc;
+    font-size: 0.92rem;
+    font-weight: 700;
+}
+
 .settings-toggle-row {
     display: flex;
     align-items: center;
@@ -895,9 +1061,88 @@ a,
     color: #dce8fc;
 }
 
+.settings-toggle-row + .settings-toggle-row {
+    margin-top: 0.45rem;
+}
+
 .settings-toggle-row input[type="checkbox"] {
     width: 1.2rem;
     height: 1.2rem;
+}
+
+.settings-sync-section {
+    border-color: #3b5580;
+    background: linear-gradient(160deg, #101d33, #0d182a);
+}
+
+.settings-sync-section .editor-actions {
+    margin-top: 0.65rem;
+}
+
+.settings-sync-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem 0.9rem;
+}
+
+.settings-value-row {
+    display: grid;
+    grid-template-columns: 11rem 5.75rem;
+    align-items: center;
+    gap: 0.28rem;
+    color: #dce8fc;
+    justify-self: start;
+    padding: 0.22rem 0.35rem;
+    border: 1px solid #2f476d;
+    border-radius: 8px;
+    background: rgba(11, 22, 39, 0.8);
+}
+
+.settings-value-label {
+    font-size: 0.84rem;
+    color: #d7e5fc;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.settings-value-label::after {
+    content: ":";
+    margin-left: 0.08rem;
+    color: #9fb6da;
+}
+
+.settings-value-row input[type="number"] {
+    width: 100%;
+    min-width: 0;
+    border: 1px solid #456192;
+    border-radius: 8px;
+    background: #0b1425;
+    color: #e6eefb;
+    padding: 0.28rem 0.45rem;
+    text-align: right;
+    font-size: 0.84rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.settings-value-row input[type="number"]:focus {
+    outline: 2px solid #4d7ce0;
+    border-color: #4d7ce0;
+}
+
+@media (max-width: 860px) {
+    .settings-sync-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .settings-value-row {
+        grid-template-columns: minmax(0, 1fr) 5.75rem;
+        width: 100%;
+    }
+
+    .help-git-table {
+        font-size: 0.76rem;
+    }
 }
 
 .settings-note {

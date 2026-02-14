@@ -7,7 +7,9 @@ public sealed record AppSettings(
 	int NotificationSuppressSeconds,
 	int LogRetentionDays,
 	int LogMaxFileSizeMb,
-	int GameCardSizePercent = 100)
+	int GameCardSizePercent = 100,
+	bool ShowCardTitle = true,
+	bool ShowCardSyncStatus = true)
 {
 	public const int GameCardSizePercentMin = 10;
 	public const int GameCardSizePercentMax = 500;
@@ -19,7 +21,9 @@ public sealed record AppSettings(
 		NotificationSuppressSeconds: 20,
 		LogRetentionDays: 30,
 		LogMaxFileSizeMb: 20,
-		GameCardSizePercent: 100);
+		GameCardSizePercent: 100,
+		ShowCardTitle: true,
+		ShowCardSyncStatus: true);
 
 	public AppSettings Normalize()
 	{
@@ -36,6 +40,8 @@ public sealed record AppSettings(
 		var gameCardSizePercent = GameCardSizePercent <= 0
 			? Default.GameCardSizePercent
 			: Clamp(GameCardSizePercent, min: GameCardSizePercentMin, max: GameCardSizePercentMax);
+		var showCardTitle = ShowCardTitle;
+		var showCardSyncStatus = ShowCardSyncStatus;
 
 		return this with
 		{
@@ -45,7 +51,9 @@ public sealed record AppSettings(
 			NotificationSuppressSeconds = suppress,
 			LogRetentionDays = retentionDays,
 			LogMaxFileSizeMb = maxFileSizeMb,
-			GameCardSizePercent = gameCardSizePercent
+			GameCardSizePercent = gameCardSizePercent,
+			ShowCardTitle = showCardTitle,
+			ShowCardSyncStatus = showCardSyncStatus
 		};
 	}
 
