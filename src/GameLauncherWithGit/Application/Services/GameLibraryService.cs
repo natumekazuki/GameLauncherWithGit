@@ -164,13 +164,13 @@ public sealed class GameLibraryService : IGameLibraryService
 
 		var normalizedInput = NormalizeInput(input);
 		await EnsureRepositoryPathIsGitAsync(normalizedInput.RelatedRepositoryPath, cancellationToken);
+		var normalizedSaveLinks = _saveLinkService.NormalizeForGame(gameId, saveLinks);
 		var thumbnailPath = normalizedInput.ClearThumbnail
 			? null
 			: await TryCreateThumbnailAsync(
 				sourceImagePath: normalizedInput.ThumbnailSourcePath,
 				fallbackPath: game.ThumbnailPath,
 				cancellationToken);
-		var normalizedSaveLinks = _saveLinkService.NormalizeForGame(gameId, saveLinks);
 
 		var updated = game with
 		{

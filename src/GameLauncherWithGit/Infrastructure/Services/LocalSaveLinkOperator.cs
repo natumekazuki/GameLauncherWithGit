@@ -194,7 +194,7 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 				throw new InvalidOperationException(createResult.Message);
 			}
 
-			Directory.Delete(backupPath, recursive: true);
+			TryDeleteBackupDirectory(backupPath, localPath, targetPath);
 			return new JunctionEnsureResult(true, "既存フォルダを移行してジャンクションを作成しました。");
 		}
 		catch (OperationCanceledException)
@@ -213,6 +213,26 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 			RollbackTargetDirectory(copyResult);
 			RollbackLocalDirectory(localPath, backupPath);
 			return new JunctionEnsureResult(false, $"既存フォルダの移行に失敗しました。path={localPath}, reason={ex.Message}");
+		}
+	}
+
+	private void TryDeleteBackupDirectory(string backupPath, string localPath, string targetPath)
+	{
+		try
+		{
+			if (Directory.Exists(backupPath))
+			{
+				Directory.Delete(backupPath, recursive: true);
+			}
+		}
+		catch (Exception ex)
+		{
+			_logger.LogWarning(
+				ex,
+				"Backup cleanup failed after successful junction conversion. backupPath={BackupPath}, localPath={LocalPath}, targetPath={TargetPath}",
+				backupPath,
+				localPath,
+				targetPath);
 		}
 	}
 
