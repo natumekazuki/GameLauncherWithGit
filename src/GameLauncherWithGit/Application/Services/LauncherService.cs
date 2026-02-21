@@ -46,15 +46,13 @@ public sealed class LauncherService : ILauncherService
 			var syncResult = await SynchronizeBeforeLaunchAsync(game, cancellationToken);
 			if (!syncResult.IsSuccess)
 			{
-				await _gameLibraryService.SetStatusAsync(game.Id, GameCardStatus.Error, cancellationToken);
-				return syncResult;
+				return await SetErrorStatusAndReturnAsync(game.Id, syncResult, cancellationToken);
 			}
 
 			var launchResult = StartGameProcess(game);
 			if (!launchResult.IsSuccess)
 			{
-				await _gameLibraryService.SetStatusAsync(game.Id, GameCardStatus.Error, cancellationToken);
-				return launchResult;
+				return await SetErrorStatusAndReturnAsync(game.Id, launchResult, cancellationToken);
 			}
 
 			await _gameLibraryService.SetStatusAsync(game.Id, GameCardStatus.Synced, cancellationToken);
@@ -73,6 +71,15 @@ public sealed class LauncherService : ILauncherService
 			_logger.LogError(ex, "Launch failed unexpectedly. gameId={GameId}", gameId);
 			return new LaunchResult(false, "起動前同期に失敗しました。ログを確認してください。");
 		}
+	}
+
+	private async Task<LaunchResult> SetErrorStatusAndReturnAsync(
+		string gameId,
+		LaunchResult failureResult,
+		CancellationToken cancellationToken)
+	{
+		await _gameLibraryService.SetStatusAsync(gameId, GameCardStatus.Error, cancellationToken);
+		return failureResult;
 	}
 
 	private async Task<LaunchResult> SynchronizeBeforeLaunchAsync(GameCardItem game, CancellationToken cancellationToken)
