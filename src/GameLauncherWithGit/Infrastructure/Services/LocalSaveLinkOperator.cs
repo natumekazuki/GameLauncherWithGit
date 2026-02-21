@@ -199,8 +199,7 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 		}
 		catch (OperationCanceledException)
 		{
-			RollbackTargetDirectory(copyResult);
-			RollbackLocalDirectory(localPath, backupPath);
+			RollbackConversion(localPath, backupPath, copyResult);
 			throw;
 		}
 		catch (Exception ex)
@@ -210,10 +209,15 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 				"Directory to junction conversion failed. localPath={LocalPath}, targetPath={TargetPath}",
 				localPath,
 				targetPath);
-			RollbackTargetDirectory(copyResult);
-			RollbackLocalDirectory(localPath, backupPath);
+			RollbackConversion(localPath, backupPath, copyResult);
 			return new JunctionEnsureResult(false, $"既存フォルダの移行に失敗しました。path={localPath}, reason={ex.Message}");
 		}
+	}
+
+	private static void RollbackConversion(string localPath, string backupPath, CopyDirectoryResult? copyResult)
+	{
+		RollbackTargetDirectory(copyResult);
+		RollbackLocalDirectory(localPath, backupPath);
 	}
 
 	private void TryDeleteBackupDirectory(string backupPath, string localPath, string targetPath)
@@ -319,6 +323,16 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 	{
 		var createdDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 		var createdFiles = new List<string>();
+		CopyDirectoryResult BuildCopyResult(bool isSuccess, string message)
+		{
+			return new CopyDirectoryResult(
+				isSuccess,
+				message,
+				createdDirectories
+					.OrderByDescending(static path => path.Length)
+					.ToArray(),
+				createdFiles.AsReadOnly());
+		}
 
 		try
 		{
@@ -339,13 +353,7 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 				var destinationDirectoryPath = Path.Combine(destinationPath, relativePath);
 				if (File.Exists(destinationDirectoryPath))
 				{
-					return new CopyDirectoryResult(
-						false,
-						$"既存ファイルと競合しました。path={destinationDirectoryPath}",
-						createdDirectories
-							.OrderByDescending(static path => path.Length)
-							.ToArray(),
-						createdFiles.AsReadOnly());
+					return BuildCopyResult(false, $"既存ファイルと競合しました。path={destinationDirectoryPath}");
 				}
 			}
 
@@ -356,13 +364,7 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 				var destinationFilePath = Path.Combine(destinationPath, relativePath);
 				if (File.Exists(destinationFilePath) || Directory.Exists(destinationFilePath))
 				{
-					return new CopyDirectoryResult(
-						false,
-						$"既存ファイルと競合しました。path={destinationFilePath}",
-						createdDirectories
-							.OrderByDescending(static path => path.Length)
-							.ToArray(),
-						createdFiles.AsReadOnly());
+					return BuildCopyResult(false, $"既存ファイルと競合しました。path={destinationFilePath}");
 				}
 			}
 
@@ -393,13 +395,7 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 				createdFiles.Add(destinationFilePath);
 			}
 
-			return new CopyDirectoryResult(
-				true,
-				$"既存データをリンク先へ移行しました。files={sourceFiles.Length}",
-				createdDirectories
-					.OrderByDescending(static path => path.Length)
-					.ToArray(),
-				createdFiles.AsReadOnly());
+			return BuildCopyResult(true, $"既存データをリンク先へ移行しました。files={sourceFiles.Length}");
 		}
 		catch (OperationCanceledException)
 		{
@@ -407,13 +403,7 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 		}
 		catch (Exception ex)
 		{
-			return new CopyDirectoryResult(
-				false,
-				$"既存データの移行中に失敗しました。reason={ex.Message}",
-				createdDirectories
-					.OrderByDescending(static path => path.Length)
-					.ToArray(),
-				createdFiles.AsReadOnly());
+			return BuildCopyResult(false, $"既存データの移行中に失敗しました。reason={ex.Message}");
 		}
 	}
 
@@ -460,17 +450,7 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 		}
 		catch (OperationCanceledException)
 		{
-			try
-			{
-				if (!process.HasExited)
-				{
-					process.Kill(entireProcessTree: true);
-				}
-			}
-			catch (InvalidOperationException)
-			{
-			}
-
+			TryKillProcess(process);
 			throw;
 		}
 		catch (Exception ex)
@@ -478,6 +458,20 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 			return new JunctionEnsureResult(
 				false,
 				$"ジャンクション作成に失敗しました。local={localPath}, target={targetPath}, reason={ex.Message}");
+		}
+	}
+
+	private static void TryKillProcess(Process process)
+	{
+		try
+		{
+			if (!process.HasExited)
+			{
+				process.Kill(entireProcessTree: true);
+			}
+		}
+		catch (InvalidOperationException)
+		{
 		}
 	}
 
