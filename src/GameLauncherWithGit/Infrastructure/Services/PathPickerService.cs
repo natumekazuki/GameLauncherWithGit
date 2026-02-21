@@ -48,8 +48,14 @@ public sealed class PathPickerService : IPathPickerService
 
 	public Task<string?> PickRepositoryDirectoryPathAsync(CancellationToken cancellationToken = default)
 	{
+		return PickFolderPathAsync("関連リポジトリフォルダを選択", cancellationToken);
+	}
+
+	public Task<string?> PickFolderPathAsync(string title, CancellationToken cancellationToken = default)
+	{
 #if WINDOWS
-		return PickWindowsFolderPathAsync("関連リポジトリフォルダを選択", cancellationToken);
+		var resolvedTitle = string.IsNullOrWhiteSpace(title) ? "フォルダを選択" : title.Trim();
+		return PickWindowsFolderPathAsync(resolvedTitle, cancellationToken);
 #else
 		return Task.FromResult<string?>(null);
 #endif

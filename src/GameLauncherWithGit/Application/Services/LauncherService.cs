@@ -10,15 +10,18 @@ namespace GameLauncherWithGit.Application.Services;
 public sealed class LauncherService : ILauncherService
 {
 	private readonly IGameLibraryService _gameLibraryService;
+	private readonly ISaveLinkService _saveLinkService;
 	private readonly IGitService _gitService;
 	private readonly ILogger<LauncherService> _logger;
 
 	public LauncherService(
 		IGameLibraryService gameLibraryService,
+		ISaveLinkService saveLinkService,
 		IGitService gitService,
 		ILogger<LauncherService> logger)
 	{
 		_gameLibraryService = gameLibraryService;
+		_saveLinkService = saveLinkService;
 		_gitService = gitService;
 		_logger = logger;
 	}
@@ -74,6 +77,12 @@ public sealed class LauncherService : ILauncherService
 
 	private async Task<LaunchResult> SynchronizeBeforeLaunchAsync(GameCardItem game, CancellationToken cancellationToken)
 	{
+		var saveLinkPrepareResult = await _saveLinkService.EnsureReadyForLaunchAsync(game.Id, cancellationToken);
+		if (!saveLinkPrepareResult.IsSuccess)
+		{
+			return BuildSaveLinkFailureResult(game, saveLinkPrepareResult);
+		}
+
 		if (string.IsNullOrWhiteSpace(game.RelatedRepositoryPath))
 		{
 			_logger.LogInformation("Related repository is not configured. gameId={GameId}", game.Id);
@@ -136,6 +145,21 @@ public sealed class LauncherService : ILauncherService
 		}
 
 		return new LaunchResult(true, "起動前同期に成功しました。");
+	}
+
+	private static LaunchResult BuildSaveLinkFailureResult(GameCardItem game, SaveLinkPrepareResult result)
+	{
+		var failedStep = result.Details
+			.LastOrDefault(static detail => !detail.IsSuccess)
+			?? result.Details.LastOrDefault();
+		if (failedStep is null)
+		{
+			return new LaunchResult(false, "起動前のセーブリンク準備に失敗しました。");
+		}
+
+		var message =
+			$"起動前のセーブリンク準備に失敗しました。game={game.Title}, link={failedStep.DisplayName}, stage={failedStep.Stage}, reason={failedStep.Message}";
+		return new LaunchResult(false, message);
 	}
 
 	private async Task<RemoteAheadResult> TryGetRemoteAheadCountAsync(
