@@ -909,6 +909,7 @@ else
     private readonly HashSet<string> _pinningGameIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _thumbnailDataUriCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, IReadOnlyList<GameSaveLinkItem>> _saveLinksByGame = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _saveLinkLoadFailedGameIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, IReadOnlyList<RepositorySyncHistoryItem>> _syncHistoryByRepository = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, GitRepositoryVisualState> _gitVisualStateByRepository = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<NotificationHistoryEntry> _notificationHistoryEntries = [];
@@ -1367,6 +1368,14 @@ else
 
     private void OpenEditEditor(GameCardItem game)
     {
+        if (_saveLinkLoadFailedGameIds.Contains(game.Id))
+        {
+            SetNotification(
+                "セーブリンクの取得に失敗しているため編集を開始できません。再読み込みしてから再試行してください。",
+                false);
+            return;
+        }
+
         _isEditMode = true;
         _editingGameId = game.Id;
         _editorTitle = game.Title;
@@ -1481,6 +1490,14 @@ else
                 if (string.IsNullOrWhiteSpace(_editingGameId))
                 {
                     SetNotification("編集対象が不正です。", false);
+                    return;
+                }
+
+                if (_saveLinkLoadFailedGameIds.Contains(_editingGameId))
+                {
+                    SetNotification(
+                        "セーブリンク取得に失敗しているため保存できません。再読み込みしてから再試行してください。",
+                        false);
                     return;
                 }
 
@@ -1795,11 +1812,23 @@ else
 
     private async Task RefreshSaveLinksAsync()
     {
-        _saveLinksByGame.Clear();
+        _saveLinkLoadFailedGameIds.Clear();
 
         if (_games is null || _games.Count == 0)
         {
+            _saveLinksByGame.Clear();
             return;
+        }
+
+        var activeGameIds = _games
+            .Select(static game => game.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var staleGameIds = _saveLinksByGame.Keys
+            .Where(gameId => !activeGameIds.Contains(gameId))
+            .ToArray();
+        foreach (var staleGameId in staleGameIds)
+        {
+            _saveLinksByGame.Remove(staleGameId);
         }
 
         foreach (var game in _games)
@@ -1811,13 +1840,18 @@ else
             }
             catch
             {
-                _saveLinksByGame[game.Id] = Array.Empty<GameSaveLinkItem>();
+                _saveLinkLoadFailedGameIds.Add(game.Id);
             }
         }
     }
 
     private string GetSaveLinkSummary(GameCardItem game)
     {
+        if (_saveLinkLoadFailedGameIds.Contains(game.Id))
+        {
+            return "取得失敗";
+        }
+
         if (!_saveLinksByGame.TryGetValue(game.Id, out var saveLinks) || saveLinks.Count == 0)
         {
             return "未設定";

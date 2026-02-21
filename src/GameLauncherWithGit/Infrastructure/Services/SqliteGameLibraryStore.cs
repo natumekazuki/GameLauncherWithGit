@@ -123,24 +123,32 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncH
 
 		await EnsureInitializedAsync(cancellationToken);
 
+		var normalizedGameId = gameId.Trim();
 		await using var connection = await OpenConnectionAsync(cancellationToken);
+		await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
 		await using (var deleteLinksCommand = connection.CreateCommand())
 		{
+			deleteLinksCommand.Transaction = transaction;
 			deleteLinksCommand.CommandText = """
 				DELETE FROM GameSaveLinks
 				WHERE GameId = $gameId;
 				""";
-			deleteLinksCommand.Parameters.AddWithValue("$gameId", gameId.Trim());
+			deleteLinksCommand.Parameters.AddWithValue("$gameId", normalizedGameId);
 			await deleteLinksCommand.ExecuteNonQueryAsync(cancellationToken);
 		}
 
-		await using var command = connection.CreateCommand();
-		command.CommandText = """
-			DELETE FROM Games
-			WHERE Id = $id;
-			""";
-		command.Parameters.AddWithValue("$id", gameId.Trim());
-		await command.ExecuteNonQueryAsync(cancellationToken);
+		await using (var command = connection.CreateCommand())
+		{
+			command.Transaction = transaction;
+			command.CommandText = """
+				DELETE FROM Games
+				WHERE Id = $id;
+				""";
+			command.Parameters.AddWithValue("$id", normalizedGameId);
+			await command.ExecuteNonQueryAsync(cancellationToken);
+		}
+
+		await transaction.CommitAsync(cancellationToken);
 	}
 
 	public async Task<IReadOnlyList<GameSaveLinkItem>> GetByGameIdAsync(
