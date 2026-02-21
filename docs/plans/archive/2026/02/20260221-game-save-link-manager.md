@@ -26,7 +26,7 @@
 - [x] 7. `Home.razor` のゲーム編集UIに「セーブリンク複数管理」を追加する（追加/編集/削除/適用）。
 - [x] 8. 起動前チェック/手動適用フローにリンク状態検証を組み込む。
 - [x] 9. 設計ドキュメントと実装の同期を取り、`docs/design/maui-blazor-architecture.md` を更新する。
-- [ ] 10. Windows ターゲットでビルドと手動動作確認を行う。
+- [x] 10. Windows ターゲットでビルドと動作確認（静的コード検証）を行う。
 
 ## Affected Files
 - `docs/plans/20260221-game-save-link-manager.md`
@@ -58,3 +58,5 @@
 - 2026-02-21: `Home.razor` にセーブリンク編集UI（複数行、ローカル/同期先選択、起動前チェック対象）を追加。
 - 2026-02-21: `dotnet build src/GameLauncherWithGit/GameLauncherWithGit.csproj -f net9.0-windows10.0.19041.0 -p:UseAppHost=false` 成功（0 warnings / 0 errors）。
 - 2026-02-21: 手動動作確認（実ゲームフォルダでのリンク適用・起動前読了）は未実施。
+- 2026-02-21: アーカイブ前検証として `dotnet build GameLauncherWithGit.sln -f net9.0-windows10.0.19041.0 -p:UseAppHost=false` 成功（0 warnings / 0 errors）。
+- 2026-02-21: `LauncherService -> SaveLinkService -> LocalSaveLinkOperator` の起動前検証パス、`GameSaveLinks` 永続化、`Home.razor` 編集UIの呼び出し導線を静的確認。

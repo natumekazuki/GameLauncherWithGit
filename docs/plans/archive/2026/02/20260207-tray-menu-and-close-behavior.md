@@ -38,3 +38,5 @@
 - 実行コマンド: `dotnet build GameLauncherWithGit.sln -f net9.0-windows10.0.19041.0 -p:UseAppHost=false`
 - 結果: ビルド成功（0 warnings / 0 errors）
 - 追加修正: `WM_TRAY_CALLBACK` の `lParam` を下位16bitで判定するよう修正し、トレイ右クリックイベント取りこぼしを解消。
+- 2026-02-21: 回帰確認として `TrayService` のメニューコマンド分岐（今すぐ同期/設定/ログ/終了）と `WM_CLOSE` 常駐化ロジックを静的確認。
+- 2026-02-21: `dotnet build GameLauncherWithGit.sln -f net9.0-windows10.0.19041.0 -p:UseAppHost=false` 成功（0 warnings / 0 errors）。

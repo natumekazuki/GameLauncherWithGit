@@ -34,3 +34,5 @@
 # Notes / Logs
 - 実行コマンド: `dotnet build GameLauncherWithGit.sln -f net9.0-windows10.0.19041.0 -p:UseAppHost=false`
 - 結果: ビルド成功（0 warnings / 0 errors）
+- 2026-02-21: 回帰確認として `SyncOrchestrator` のバックオフ再試行ロジック、`LogAccessService` と `MauiProgram` の `MonochromeMemory.Log` 連携箇所を静的確認。
+- 2026-02-21: `dotnet build GameLauncherWithGit.sln -f net9.0-windows10.0.19041.0 -p:UseAppHost=false` 成功（0 warnings / 0 errors）。
