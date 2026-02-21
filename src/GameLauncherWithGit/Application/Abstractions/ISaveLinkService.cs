@@ -8,6 +8,10 @@ public interface ISaveLinkService
 		string gameId,
 		CancellationToken cancellationToken = default);
 
+	void ValidateForGame(
+		string gameId,
+		IReadOnlyList<GameSaveLinkEditInput> links);
+
 	Task ReplaceForGameAsync(
 		string gameId,
 		IReadOnlyList<GameSaveLinkEditInput> links,

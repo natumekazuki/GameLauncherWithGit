@@ -47,6 +47,18 @@ public sealed class SaveLinkService : ISaveLinkService
 		await _saveLinkStore.ReplaceByGameIdAsync(gameId.Trim(), normalized, cancellationToken);
 	}
 
+	public void ValidateForGame(
+		string gameId,
+		IReadOnlyList<GameSaveLinkEditInput> links)
+	{
+		if (string.IsNullOrWhiteSpace(gameId))
+		{
+			throw new InvalidOperationException("セーブリンク検証に失敗しました。ゲームIDが不正です。");
+		}
+
+		_ = NormalizeInputs(gameId.Trim(), links);
+	}
+
 	public async Task<SaveLinkPrepareResult> EnsureReadyForLaunchAsync(
 		string gameId,
 		CancellationToken cancellationToken = default)

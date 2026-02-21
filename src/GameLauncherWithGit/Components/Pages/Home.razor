@@ -776,9 +776,10 @@ else
                     {
                         @for (var index = 0; index < _editorSaveLinks.Count; index++)
                         {
+                            var currentIndex = index;
                             var entry = _editorSaveLinks[index];
                             <div class="save-link-item">
-                                <p class="save-link-item-title">リンク @(index + 1)</p>
+                                <p class="save-link-item-title">リンク @(currentIndex + 1)</p>
                                 <p class="save-link-item-label">ローカルセーブフォルダ</p>
                                 <p class="save-link-item-value">@GetEditorSaveLinkPathLabel(entry.LocalPath)</p>
                                 <p class="save-link-item-label">同期先フォルダ（OneDrive など）</p>
@@ -786,38 +787,38 @@ else
                                 <label class="save-link-item-checkbox">
                                     <input type="checkbox"
                                            checked="@entry.EnsureOnLaunch"
-                                           @onchange="args => SetEditorSaveLinkEnsureOnLaunch(index, ParseCheckboxValue(args))"
+                                           @onchange="args => SetEditorSaveLinkEnsureOnLaunch(currentIndex, ParseCheckboxValue(args))"
                                            disabled="@_isSaving" />
                                     <span>起動前チェック対象</span>
                                 </label>
                                 <div class="single-repo-actions">
                                     <button type="button"
                                             class="secondary-button picker-button"
-                                            @onclick="() => PickEditorSaveLocalPathAsync(index)"
+                                            @onclick="() => PickEditorSaveLocalPathAsync(currentIndex)"
                                             disabled="@_isSaving">
                                         ローカル選択
                                     </button>
                                     <button type="button"
                                             class="secondary-button picker-button"
-                                            @onclick="() => PickEditorSaveTargetPathAsync(index)"
+                                            @onclick="() => PickEditorSaveTargetPathAsync(currentIndex)"
                                             disabled="@_isSaving">
                                         同期先選択
                                     </button>
                                     <button type="button"
                                             class="secondary-button picker-button"
-                                            @onclick="() => MoveEditorSaveLink(index, -1)"
-                                            disabled="@(_isSaving || index == 0)">
+                                            @onclick="() => MoveEditorSaveLink(currentIndex, -1)"
+                                            disabled="@(_isSaving || currentIndex == 0)">
                                         ↑
                                     </button>
                                     <button type="button"
                                             class="secondary-button picker-button"
-                                            @onclick="() => MoveEditorSaveLink(index, 1)"
-                                            disabled="@(_isSaving || index >= _editorSaveLinks.Count - 1)">
+                                            @onclick="() => MoveEditorSaveLink(currentIndex, 1)"
+                                            disabled="@(_isSaving || currentIndex >= _editorSaveLinks.Count - 1)">
                                         ↓
                                     </button>
                                     <button type="button"
                                             class="danger-button picker-button"
-                                            @onclick="() => RemoveEditorSaveLink(index)"
+                                            @onclick="() => RemoveEditorSaveLink(currentIndex)"
                                             disabled="@_isSaving">
                                         削除
                                     </button>
@@ -1483,6 +1484,7 @@ else
                     return;
                 }
 
+                SaveLinkService.ValidateForGame(_editingGameId, saveLinkInputs);
                 var updated = await GameLibraryService.UpdateAsync(_editingGameId, input);
                 if (updated is null)
                 {
