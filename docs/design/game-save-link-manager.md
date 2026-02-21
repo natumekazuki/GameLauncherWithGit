@@ -1,0 +1,197 @@
+# ゲーム別セーブリンク管理設計
+
+更新日: 2026-02-21
+対象: `src/GameLauncherWithGit`（Windows 11 / .NET 9 / MAUI Blazor Hybrid）
+状態: Draft（実装前）
+
+## 1. 目的
+- ゲームごとにセーブデータ保存先のリンク設定を管理し、ローカル保存パスを OneDrive 配下へ切り替えられるようにする。
+- 1ゲームで複数のセーブフォルダを持つケース（例: `SaveData` と `Profiles`）を扱えるようにする。
+- 既存セーブデータを破損させない、安全なリンク作成・再適用・検証フローを提供する。
+
+## 2. 背景
+- 現行実装は `GameCardItem.RelatedRepositoryPath` の単一リポジトリ管理が中心で、セーブ保存先のリンク管理機能は持っていない。
+- セーブデータ容量が大きいゲームでは Git 管理に不向きなため、OneDrive 同期へ切り替える運用ニーズがある。
+- ゲームによってセーブ保存先が複数ディレクトリに分かれ、単一パス前提では運用しづらい。
+
+## 3. スコープ
+
+### 3.1 In Scope（MVP）
+- ゲームごとの「セーブリンク定義（複数）」の CRUD。
+- 各リンク定義に対する手動適用（リンク作成）と状態検証。
+- 既存ローカルフォルダを OneDrive へ移行してリンク化する安全フロー。
+- 起動前チェックでリンク不整合を検知し、必要に応じて起動をブロックする導線。
+
+### 3.2 Out of Scope（MVP外）
+- OneDrive API 連携（クラウド状態の詳細取得、競合解決UI）。
+- ネットワーク越し UNC パス向けの特殊最適化。
+- ファイル単位リンク（ハードリンク）管理。
+
+## 4. 用語
+- ローカルパス: ゲームが実際に参照するセーブフォルダパス。
+- ターゲットパス: 実データを保持する保存先（例: OneDrive 配下）。
+- セーブリンク: 「ローカルパス -> ターゲットパス」のリンク定義。
+- 適用: ローカルパスにリンクを作成し、必要なら既存データを移行する処理。
+
+## 5. データモデル
+
+```mermaid
+erDiagram
+    Games ||--o{ GameSaveLinks : has
+
+    Games {
+        text Id PK
+        text Title
+        text ExecutablePath
+        text RelatedRepositoryPath
+        text ThumbnailPath
+        text LastPlayedAt
+        int Status
+    }
+
+    GameSaveLinks {
+        text Id PK
+        text GameId FK
+        text DisplayName
+        text LocalPath
+        text TargetPath
+        int LinkType
+        int EnsureOnLaunch
+        int OrderNo
+        text CreatedAt
+        text UpdatedAt
+    }
+```
+
+### 5.1 モデル案
+- `GameSaveLinkItem`
+  - `Id: string`
+  - `GameId: string`
+  - `DisplayName: string?`
+  - `LocalPath: string`（ゲーム側参照先）
+  - `TargetPath: string`（OneDrive 等の実体保存先）
+  - `LinkType: SaveLinkType`（`DirectorySymbolicLink` / `DirectoryJunction`）
+  - `EnsureOnLaunch: bool`（起動前に検証対象とするか）
+  - `OrderNo: int`（UI並び順）
+- `SaveLinkStatus`
+  - `Healthy`
+  - `NotApplied`
+  - `Broken`
+  - `Conflict`
+  - `PermissionDenied`
+  - `InvalidPath`
+
+## 6. コンポーネント設計
+
+```mermaid
+flowchart LR
+    UI[Home.razor\nゲーム編集モーダル] --> APP1[GameSaveLinkService]
+    APP1 --> STORE[ISaveLinkStore\nSQLite]
+    APP1 --> FS[IFileLinkOperator\nWindows Link Ops]
+    APP1 --> LOG[ILogAccessService]
+    LAUNCH[LauncherService] --> APP1
+```
+
+### 6.1 追加インターフェース（案）
+- `ISaveLinkService`
+  - `GetByGameIdAsync(gameId)`
+  - `UpsertAsync(gameId, input)`
+  - `DeleteAsync(gameId, linkId)`
+  - `GetStatusesAsync(gameId)`
+  - `ApplyAsync(gameId, linkId)`
+  - `ApplyAllAsync(gameId)`
+- `ISaveLinkStore`
+  - SQLite 永続化（`GameSaveLinks`）
+- `IFileLinkOperator`
+  - `CreateDirectorySymbolicLink(localPath, targetPath)`
+  - `CreateDirectoryJunction(localPath, targetPath)`
+  - `DeleteLink(localPath)`
+  - `ResolveLinkTarget(localPath)`
+
+## 7. リンク作成方針（Windows）
+- 基本方針: ユーザーがリンク方式を選択可能にする。
+  - `DirectorySymbolicLink`: ユーザー要望に合致。
+  - `DirectoryJunction`: 権限問題時の実用フォールバック。
+- 既定値: `DirectorySymbolicLink`。
+- 実行時に権限不足で失敗した場合は、明示的に `DirectoryJunction` へ切り替える導線を表示する。
+
+## 8. 適用フロー（データ移行付き）
+
+```mermaid
+sequenceDiagram
+    participant UI as Home UI
+    participant S as SaveLinkService
+    participant F as FileLinkOperator
+    participant D as Disk
+
+    UI->>S: Apply(linkId)
+    S->>S: パス正規化/妥当性チェック
+    S->>F: ローカルパス状態確認
+    alt 既に正しいリンク
+        S-->>UI: Healthy
+    else 通常ディレクトリ
+        S->>D: ローカルを一時バックアップへリネーム
+        S->>D: バックアップ内容をターゲットへマージ
+        S->>F: ローカルにリンク作成
+        alt 成功
+            S->>D: バックアップ削除
+            S-->>UI: Healthy
+        else 失敗
+            S->>F: 失敗時クリーンアップ
+            S->>D: バックアップをローカルへ復元
+            S-->>UI: Failed
+        end
+    else ローカル未存在
+        S->>D: ターゲット作成(必要時)
+        S->>F: ローカルにリンク作成
+        S-->>UI: Healthy/Failed
+    end
+```
+
+## 9. UI 設計（Home.razor 拡張）
+- ゲーム編集モーダルに `セーブリンク（複数）` セクションを追加。
+- 一覧行ごとに表示:
+  - 表示名
+  - ローカルパス
+  - ターゲットパス
+  - リンク方式
+  - 現在ステータス
+- 操作:
+  - `追加`
+  - `編集`
+  - `削除`
+  - `適用`
+- セクション全体操作:
+  - `全リンク適用`
+  - `OneDrive候補を開く`（環境変数ベースで初期ディレクトリを提示）
+
+## 10. 起動前チェック連携
+- `LauncherService.LaunchAsync` の起動前処理に「リンク状態チェック」を挿入する。
+- `EnsureOnLaunch=true` のリンクが `Healthy` でない場合:
+  - 自動適用を試行（設定で有効時）
+  - 失敗時は起動をブロックし、対象リンクと理由を表示
+
+## 11. 既存機能との整合
+- `RelatedRepositoryPath`（Git同期）とは独立した機能として追加する。
+- 既存の監視同期/トレイ/通知はそのまま維持し、リンク適用失敗は通知履歴とログへ記録する。
+- SQLite は `Games` テーブル互換を維持し、`GameSaveLinks` を新設する。
+
+## 12. テスト観点
+- 正常系:
+  - 複数リンク登録・保存・再読込。
+  - ローカル未存在状態でのリンク作成。
+  - ローカル既存データ移行後のリンク作成。
+- 異常系:
+  - 権限不足（シンボリックリンク作成失敗）。
+  - ローカルが別ターゲットへの既存リンク。
+  - ターゲット側のファイルロック競合。
+  - パス不正（相対、空文字、同一パス）。
+- 回帰:
+  - 既存ゲーム登録/編集/削除。
+  - 既存Git同期と起動前同期。
+
+## 13. 未確定事項（ユーザー確認）
+1. 既定リンク方式を `DirectorySymbolicLink` 固定にするか、`DirectoryJunction` を既定にするか。
+2. 適用時の既存データ競合（同名ファイル）を「上書き」「スキップ」「停止」のどれで扱うか。
+3. 起動前の自動適用を既定で有効にするか（失敗時は起動ブロック）。
+4. 解除機能（リンク解除して通常フォルダへ戻す）を MVP に含めるか。
