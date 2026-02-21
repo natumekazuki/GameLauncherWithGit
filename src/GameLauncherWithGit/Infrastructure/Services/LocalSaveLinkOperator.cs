@@ -178,10 +178,11 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 	{
 		var backupPath = BuildBackupPath(localPath);
 		Directory.Move(localPath, backupPath);
+		CopyDirectoryResult? copyResult = null;
 
 		try
 		{
-			var copyResult = CopyDirectoryStrict(backupPath, targetPath, cancellationToken);
+			copyResult = CopyDirectoryStrict(backupPath, targetPath, cancellationToken);
 			if (!copyResult.IsSuccess)
 			{
 				throw new InvalidOperationException(copyResult.Message);
@@ -198,6 +199,7 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 		}
 		catch (OperationCanceledException)
 		{
+			RollbackTargetDirectory(copyResult);
 			RollbackLocalDirectory(localPath, backupPath);
 			throw;
 		}
@@ -208,8 +210,54 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 				"Directory to junction conversion failed. localPath={LocalPath}, targetPath={TargetPath}",
 				localPath,
 				targetPath);
+			RollbackTargetDirectory(copyResult);
 			RollbackLocalDirectory(localPath, backupPath);
 			return new JunctionEnsureResult(false, $"既存フォルダの移行に失敗しました。path={localPath}, reason={ex.Message}");
+		}
+	}
+
+	private static void RollbackTargetDirectory(CopyDirectoryResult? copyResult)
+	{
+		if (copyResult is null)
+		{
+			return;
+		}
+
+		foreach (var filePath in copyResult.CreatedFiles)
+		{
+			try
+			{
+				if (File.Exists(filePath))
+				{
+					File.Delete(filePath);
+				}
+			}
+			catch
+			{
+				// ターゲット側ロールバック失敗は、ローカル復旧継続を優先する。
+			}
+		}
+
+		foreach (var directoryPath in copyResult.CreatedDirectories.OrderByDescending(static path => path.Length))
+		{
+			try
+			{
+				if (!Directory.Exists(directoryPath))
+				{
+					continue;
+				}
+
+				if (Directory.EnumerateFileSystemEntries(directoryPath).Any())
+				{
+					continue;
+				}
+
+				Directory.Delete(directoryPath);
+			}
+			catch
+			{
+				// ディレクトリ削除失敗は無視し、復旧処理の継続を優先する。
+			}
 		}
 	}
 
@@ -249,6 +297,9 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 		string destinationPath,
 		CancellationToken cancellationToken)
 	{
+		var createdDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		var createdFiles = new List<string>();
+
 		try
 		{
 			Directory.CreateDirectory(destinationPath);
@@ -270,7 +321,11 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 				{
 					return new CopyDirectoryResult(
 						false,
-						$"既存ファイルと競合しました。path={destinationDirectoryPath}");
+						$"既存ファイルと競合しました。path={destinationDirectoryPath}",
+						createdDirectories
+							.OrderByDescending(static path => path.Length)
+							.ToArray(),
+						createdFiles.AsReadOnly());
 				}
 			}
 
@@ -283,7 +338,11 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 				{
 					return new CopyDirectoryResult(
 						false,
-						$"既存ファイルと競合しました。path={destinationFilePath}");
+						$"既存ファイルと競合しました。path={destinationFilePath}",
+						createdDirectories
+							.OrderByDescending(static path => path.Length)
+							.ToArray(),
+						createdFiles.AsReadOnly());
 				}
 			}
 
@@ -292,7 +351,11 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 				cancellationToken.ThrowIfCancellationRequested();
 				var relativePath = Path.GetRelativePath(sourcePath, sourceDirectory);
 				var destinationDirectoryPath = Path.Combine(destinationPath, relativePath);
-				Directory.CreateDirectory(destinationDirectoryPath);
+				if (!Directory.Exists(destinationDirectoryPath))
+				{
+					Directory.CreateDirectory(destinationDirectoryPath);
+					createdDirectories.Add(destinationDirectoryPath);
+				}
 			}
 
 			foreach (var sourceFile in sourceFiles)
@@ -307,11 +370,16 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 				}
 
 				File.Copy(sourceFile, destinationFilePath, overwrite: false);
+				createdFiles.Add(destinationFilePath);
 			}
 
 			return new CopyDirectoryResult(
 				true,
-				$"既存データをリンク先へ移行しました。files={sourceFiles.Length}");
+				$"既存データをリンク先へ移行しました。files={sourceFiles.Length}",
+				createdDirectories
+					.OrderByDescending(static path => path.Length)
+					.ToArray(),
+				createdFiles.AsReadOnly());
 		}
 		catch (OperationCanceledException)
 		{
@@ -319,7 +387,13 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 		}
 		catch (Exception ex)
 		{
-			return new CopyDirectoryResult(false, $"既存データの移行中に失敗しました。reason={ex.Message}");
+			return new CopyDirectoryResult(
+				false,
+				$"既存データの移行中に失敗しました。reason={ex.Message}",
+				createdDirectories
+					.OrderByDescending(static path => path.Length)
+					.ToArray(),
+				createdFiles.AsReadOnly());
 		}
 	}
 
@@ -419,7 +493,9 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 
 	private sealed record CopyDirectoryResult(
 		bool IsSuccess,
-		string Message);
+		string Message,
+		IReadOnlyList<string> CreatedDirectories,
+		IReadOnlyList<string> CreatedFiles);
 #endif
 
 	private static string? NormalizeAbsolutePath(string path)

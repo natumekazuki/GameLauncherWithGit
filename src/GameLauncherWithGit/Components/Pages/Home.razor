@@ -1497,7 +1497,7 @@ else
             else
             {
                 var created = await GameLibraryService.CreateAsync(input);
-                await SaveLinkService.ReplaceForGameAsync(created.Id, saveLinkInputs);
+                await SaveLinksForCreatedGameAsync(created.Id, saveLinkInputs);
                 SetNotification($"ゲームを登録しました: {created.Title}", true);
             }
 
@@ -1516,6 +1516,43 @@ else
             {
                 CloseEditor(force: true);
             }
+        }
+    }
+
+    private async Task SaveLinksForCreatedGameAsync(string gameId, IReadOnlyList<GameSaveLinkEditInput> saveLinkInputs)
+    {
+        try
+        {
+            await SaveLinkService.ReplaceForGameAsync(gameId, saveLinkInputs);
+        }
+        catch (Exception ex)
+        {
+            var rollbackError = await TryRollbackCreatedGameAsync(gameId);
+            if (string.IsNullOrWhiteSpace(rollbackError))
+            {
+                throw new InvalidOperationException(
+                    $"セーブリンク保存に失敗したため、作成済みゲームをロールバックしました。reason={ex.Message}",
+                    ex);
+            }
+
+            throw new InvalidOperationException(
+                $"セーブリンク保存に失敗し、作成済みゲームのロールバックにも失敗しました。gameId={gameId}, rollbackReason={rollbackError}, reason={ex.Message}",
+                ex);
+        }
+    }
+
+    private async Task<string?> TryRollbackCreatedGameAsync(string gameId)
+    {
+        try
+        {
+            var isDeleted = await GameLibraryService.DeleteAsync(gameId);
+            return isDeleted
+                ? null
+                : $"gameId={gameId} の削除結果が false でした。";
+        }
+        catch (Exception rollbackEx)
+        {
+            return rollbackEx.Message;
         }
     }
 

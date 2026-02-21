@@ -136,6 +136,7 @@ sequenceDiagram
             S-->>UI: Healthy
         else 失敗
             S->>F: 失敗時クリーンアップ
+            S->>D: targetPath へ追加した差分を削除
             S->>D: バックアップをローカルへ復元
             S-->>UI: Failed
         end
@@ -147,8 +148,14 @@ sequenceDiagram
 ```
 
 - 既存データ移行時に同名ファイル競合がある場合は **停止** し、既存ローカルフォルダへロールバックする。
+- 既存データ移行が途中失敗した場合は、`targetPath` 側に今回追加したファイル/ディレクトリ差分を削除して再試行可能な状態へ戻す。
 - 入力制約として、`LocalPath` と `TargetPath` は同一パスに加えて **親子関係（祖先/子孫）も禁止** する。
   - 例: `LocalPath=C:\\Games\\Foo\\Save` と `TargetPath=C:\\Games\\Foo\\Save\\OneDriveMirror` は不可。
+
+### 8.1 ゲーム新規作成時の保存整合性
+- 新規作成時は `Games` 登録後に `GameSaveLinks` 保存を実行する。
+- `GameSaveLinks` 保存に失敗した場合は、直前に作成したゲームを補償削除して全体を失敗扱いにする。
+- 補償削除まで失敗した場合は、手動復旧が必要な状態として明示的にエラーを返す。
 
 ## 9. UI 設計（Home.razor 拡張）
 - ゲーム編集モーダルに `セーブリンク（複数）` セクションを追加。
