@@ -1501,15 +1501,12 @@ else
                     return;
                 }
 
-                SaveLinkService.ValidateForGame(_editingGameId, saveLinkInputs);
-                var updated = await GameLibraryService.UpdateAsync(_editingGameId, input);
+                var updated = await GameLibraryService.UpdateWithSaveLinksAsync(_editingGameId, input, saveLinkInputs);
                 if (updated is null)
                 {
                     SetNotification("編集対象のゲームが見つかりません。", false);
                     return;
                 }
-
-                await SaveLinkService.ReplaceForGameAsync(updated.Id, saveLinkInputs);
 
                 SetNotification($"ゲーム設定を更新しました: {updated.Title}", true);
             }

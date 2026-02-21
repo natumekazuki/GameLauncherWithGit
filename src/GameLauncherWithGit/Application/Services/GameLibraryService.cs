@@ -9,6 +9,7 @@ namespace GameLauncherWithGit.Application.Services;
 public sealed class GameLibraryService : IGameLibraryService
 {
 	private readonly IGameLibraryStore _store;
+	private readonly ISaveLinkService _saveLinkService;
 	private readonly IGitService _gitService;
 	private readonly IThumbnailService _thumbnailService;
 	private readonly ILogger<GameLibraryService> _logger;
@@ -16,11 +17,13 @@ public sealed class GameLibraryService : IGameLibraryService
 
 	public GameLibraryService(
 		IGameLibraryStore store,
+		ISaveLinkService saveLinkService,
 		IGitService gitService,
 		IThumbnailService thumbnailService,
 		ILogger<GameLibraryService> logger)
 	{
 		_store = store;
+		_saveLinkService = saveLinkService;
 		_gitService = gitService;
 		_thumbnailService = thumbnailService;
 		_logger = logger;
@@ -144,6 +147,40 @@ public sealed class GameLibraryService : IGameLibraryService
 		};
 
 		await _store.UpsertAsync(updated, cancellationToken);
+		return updated;
+	}
+
+	public async Task<GameCardItem?> UpdateWithSaveLinksAsync(
+		string gameId,
+		GameEditInput input,
+		IReadOnlyList<GameSaveLinkEditInput> saveLinks,
+		CancellationToken cancellationToken = default)
+	{
+		var game = await _store.FindByIdAsync(gameId, cancellationToken);
+		if (game is null)
+		{
+			return null;
+		}
+
+		var normalizedInput = NormalizeInput(input);
+		await EnsureRepositoryPathIsGitAsync(normalizedInput.RelatedRepositoryPath, cancellationToken);
+		var thumbnailPath = normalizedInput.ClearThumbnail
+			? null
+			: await TryCreateThumbnailAsync(
+				sourceImagePath: normalizedInput.ThumbnailSourcePath,
+				fallbackPath: game.ThumbnailPath,
+				cancellationToken);
+		var normalizedSaveLinks = _saveLinkService.NormalizeForGame(gameId, saveLinks);
+
+		var updated = game with
+		{
+			Title = normalizedInput.Title,
+			ExecutablePath = normalizedInput.ExecutablePath,
+			RelatedRepositoryPath = normalizedInput.RelatedRepositoryPath,
+			ThumbnailPath = thumbnailPath
+		};
+
+		await _store.UpsertWithSaveLinksAsync(updated, normalizedSaveLinks, cancellationToken);
 		return updated;
 	}
 

@@ -38,16 +38,11 @@ public sealed class SaveLinkService : ISaveLinkService
 		IReadOnlyList<GameSaveLinkEditInput> links,
 		CancellationToken cancellationToken = default)
 	{
-		if (string.IsNullOrWhiteSpace(gameId))
-		{
-			throw new InvalidOperationException("セーブリンク保存に失敗しました。ゲームIDが不正です。");
-		}
-
-		var normalized = NormalizeInputs(gameId.Trim(), links);
+		var normalized = NormalizeForGame(gameId, links);
 		await _saveLinkStore.ReplaceByGameIdAsync(gameId.Trim(), normalized, cancellationToken);
 	}
 
-	public void ValidateForGame(
+	public IReadOnlyList<GameSaveLinkItem> NormalizeForGame(
 		string gameId,
 		IReadOnlyList<GameSaveLinkEditInput> links)
 	{
@@ -56,7 +51,14 @@ public sealed class SaveLinkService : ISaveLinkService
 			throw new InvalidOperationException("セーブリンク検証に失敗しました。ゲームIDが不正です。");
 		}
 
-		_ = NormalizeInputs(gameId.Trim(), links);
+		return NormalizeInputs(gameId.Trim(), links);
+	}
+
+	public void ValidateForGame(
+		string gameId,
+		IReadOnlyList<GameSaveLinkEditInput> links)
+	{
+		_ = NormalizeForGame(gameId, links);
 	}
 
 	public async Task<SaveLinkPrepareResult> EnsureReadyForLaunchAsync(
@@ -223,8 +225,14 @@ public sealed class SaveLinkService : ISaveLinkService
 
 		try
 		{
-			var normalized = Path.GetFullPath(path.Trim());
-			return Path.IsPathRooted(normalized) ? normalized : null;
+			var trimmedPath = path.Trim();
+			if (!Path.IsPathFullyQualified(trimmedPath))
+			{
+				return null;
+			}
+
+			var normalized = Path.GetFullPath(trimmedPath);
+			return Path.IsPathFullyQualified(normalized) ? normalized : null;
 		}
 		catch
 		{

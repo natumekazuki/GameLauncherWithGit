@@ -10,5 +10,10 @@ public interface IGameLibraryStore
 
 	Task UpsertAsync(GameCardItem game, CancellationToken cancellationToken = default);
 
+	Task UpsertWithSaveLinksAsync(
+		GameCardItem game,
+		IReadOnlyList<GameSaveLinkItem> links,
+		CancellationToken cancellationToken = default);
+
 	Task DeleteAsync(string gameId, CancellationToken cancellationToken = default);
 }

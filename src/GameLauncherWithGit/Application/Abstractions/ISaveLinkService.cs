@@ -8,6 +8,10 @@ public interface ISaveLinkService
 		string gameId,
 		CancellationToken cancellationToken = default);
 
+	IReadOnlyList<GameSaveLinkItem> NormalizeForGame(
+		string gameId,
+		IReadOnlyList<GameSaveLinkEditInput> links);
+
 	void ValidateForGame(
 		string gameId,
 		IReadOnlyList<GameSaveLinkEditInput> links);
