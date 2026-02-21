@@ -1675,7 +1675,7 @@ else
 
     private void RemoveEditorSaveLink(int index)
     {
-        if (index < 0 || index >= _editorSaveLinks.Count)
+        if (!IsEditorSaveLinkIndexValid(index))
         {
             return;
         }
@@ -1685,7 +1685,7 @@ else
 
     private void MoveEditorSaveLink(int index, int direction)
     {
-        if (index < 0 || index >= _editorSaveLinks.Count)
+        if (!IsEditorSaveLinkIndexValid(index))
         {
             return;
         }
@@ -1702,31 +1702,53 @@ else
 
     private void SetEditorSaveLinkEnsureOnLaunch(int index, bool ensureOnLaunch)
     {
-        if (index < 0 || index >= _editorSaveLinks.Count)
+        if (!TryGetEditorSaveLink(index, out var entry))
         {
             return;
         }
 
-        _editorSaveLinks[index].EnsureOnLaunch = ensureOnLaunch;
+        entry.EnsureOnLaunch = ensureOnLaunch;
     }
 
     private async Task PickEditorSaveLocalPathAsync(int index)
     {
-        if (index < 0 || index >= _editorSaveLinks.Count)
+        await PickEditorSavePathAsync(
+            index,
+            "ローカルセーブフォルダを選択",
+            "ローカルセーブフォルダが選択されませんでした。",
+            static (entry, selectedPath) => entry.LocalPath = selectedPath);
+    }
+
+    private async Task PickEditorSaveTargetPathAsync(int index)
+    {
+        await PickEditorSavePathAsync(
+            index,
+            "同期先フォルダを選択",
+            "同期先フォルダが選択されませんでした。",
+            static (entry, selectedPath) => entry.TargetPath = selectedPath);
+    }
+
+    private async Task PickEditorSavePathAsync(
+        int index,
+        string pickerTitle,
+        string emptySelectionMessage,
+        Action<EditorSaveLinkEntry, string> applySelectedPath)
+    {
+        if (!TryGetEditorSaveLink(index, out var entry))
         {
             return;
         }
 
         try
         {
-            var selectedPath = await PathPickerService.PickFolderPathAsync("ローカルセーブフォルダを選択");
+            var selectedPath = await PathPickerService.PickFolderPathAsync(pickerTitle);
             if (!string.IsNullOrWhiteSpace(selectedPath))
             {
-                _editorSaveLinks[index].LocalPath = selectedPath;
+                applySelectedPath(entry, selectedPath);
                 return;
             }
 
-            SetNotification("ローカルセーブフォルダが選択されませんでした。", false);
+            SetNotification(emptySelectionMessage, false);
         }
         catch (Exception ex)
         {
@@ -1734,28 +1756,21 @@ else
         }
     }
 
-    private async Task PickEditorSaveTargetPathAsync(int index)
+    private bool IsEditorSaveLinkIndexValid(int index)
     {
-        if (index < 0 || index >= _editorSaveLinks.Count)
+        return index >= 0 && index < _editorSaveLinks.Count;
+    }
+
+    private bool TryGetEditorSaveLink(int index, out EditorSaveLinkEntry entry)
+    {
+        if (!IsEditorSaveLinkIndexValid(index))
         {
-            return;
+            entry = null!;
+            return false;
         }
 
-        try
-        {
-            var selectedPath = await PathPickerService.PickFolderPathAsync("同期先フォルダを選択");
-            if (!string.IsNullOrWhiteSpace(selectedPath))
-            {
-                _editorSaveLinks[index].TargetPath = selectedPath;
-                return;
-            }
-
-            SetNotification("同期先フォルダが選択されませんでした。", false);
-        }
-        catch (Exception ex)
-        {
-            SetNotification(ex.Message, false);
-        }
+        entry = _editorSaveLinks[index];
+        return true;
     }
 
     private static string GetEditorSaveLinkPathLabel(string? path)

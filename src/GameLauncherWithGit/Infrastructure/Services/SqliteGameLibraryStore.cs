@@ -110,26 +110,17 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncH
 
 	public async Task DeleteAsync(string gameId, CancellationToken cancellationToken = default)
 	{
-		if (string.IsNullOrWhiteSpace(gameId))
+		var normalizedGameId = NormalizeGameId(gameId);
+		if (normalizedGameId is null)
 		{
 			return;
 		}
 
 		await EnsureInitializedAsync(cancellationToken);
 
-		var normalizedGameId = gameId.Trim();
 		await using var connection = await OpenConnectionAsync(cancellationToken);
 		await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-		await using (var deleteLinksCommand = connection.CreateCommand())
-		{
-			deleteLinksCommand.Transaction = transaction;
-			deleteLinksCommand.CommandText = """
-				DELETE FROM GameSaveLinks
-				WHERE GameId = $gameId;
-				""";
-			deleteLinksCommand.Parameters.AddWithValue("$gameId", normalizedGameId);
-			await deleteLinksCommand.ExecuteNonQueryAsync(cancellationToken);
-		}
+		await DeleteSaveLinksByGameIdAsync(connection, transaction, normalizedGameId, cancellationToken);
 
 		await using (var command = connection.CreateCommand())
 		{
@@ -149,7 +140,8 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncH
 		string gameId,
 		CancellationToken cancellationToken = default)
 	{
-		if (string.IsNullOrWhiteSpace(gameId))
+		var normalizedGameId = NormalizeGameId(gameId);
+		if (normalizedGameId is null)
 		{
 			return Array.Empty<GameSaveLinkItem>();
 		}
@@ -164,7 +156,7 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncH
 			WHERE GameId = $gameId
 			ORDER BY OrderNo ASC, CreatedAt ASC;
 			""";
-		command.Parameters.AddWithValue("$gameId", gameId.Trim());
+		command.Parameters.AddWithValue("$gameId", normalizedGameId);
 
 		var result = new List<GameSaveLinkItem>();
 		await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -181,14 +173,13 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncH
 		IReadOnlyList<GameSaveLinkItem> links,
 		CancellationToken cancellationToken = default)
 	{
-		if (string.IsNullOrWhiteSpace(gameId))
+		var normalizedGameId = NormalizeGameId(gameId);
+		if (normalizedGameId is null)
 		{
 			return;
 		}
 
 		await EnsureInitializedAsync(cancellationToken);
-
-		var normalizedGameId = gameId.Trim();
 
 		await using var connection = await OpenConnectionAsync(cancellationToken);
 		await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
@@ -204,7 +195,8 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncH
 
 	public async Task DeleteByGameIdAsync(string gameId, CancellationToken cancellationToken = default)
 	{
-		if (string.IsNullOrWhiteSpace(gameId))
+		var normalizedGameId = NormalizeGameId(gameId);
+		if (normalizedGameId is null)
 		{
 			return;
 		}
@@ -212,13 +204,7 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncH
 		await EnsureInitializedAsync(cancellationToken);
 
 		await using var connection = await OpenConnectionAsync(cancellationToken);
-		await using var command = connection.CreateCommand();
-		command.CommandText = """
-			DELETE FROM GameSaveLinks
-			WHERE GameId = $gameId;
-			""";
-		command.Parameters.AddWithValue("$gameId", gameId.Trim());
-		await command.ExecuteNonQueryAsync(cancellationToken);
+		await DeleteSaveLinksByGameIdAsync(connection, null, normalizedGameId, cancellationToken);
 	}
 
 	public async Task AppendAsync(RepositorySyncHistoryItem entry, CancellationToken cancellationToken = default)
@@ -565,16 +551,7 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncH
 		CancellationToken cancellationToken)
 	{
 		var now = DateTimeOffset.UtcNow.ToString("O");
-		await using (var deleteCommand = connection.CreateCommand())
-		{
-			deleteCommand.Transaction = transaction;
-			deleteCommand.CommandText = """
-				DELETE FROM GameSaveLinks
-				WHERE GameId = $gameId;
-				""";
-			deleteCommand.Parameters.AddWithValue("$gameId", normalizedGameId);
-			await deleteCommand.ExecuteNonQueryAsync(cancellationToken);
-		}
+		await DeleteSaveLinksByGameIdAsync(connection, transaction, normalizedGameId, cancellationToken);
 
 		if (links is null)
 		{
@@ -610,6 +587,22 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncH
 			insertCommand.Parameters.AddWithValue("$updatedAt", now);
 			await insertCommand.ExecuteNonQueryAsync(cancellationToken);
 		}
+	}
+
+	private static async Task DeleteSaveLinksByGameIdAsync(
+		SqliteConnection connection,
+		SqliteTransaction? transaction,
+		string normalizedGameId,
+		CancellationToken cancellationToken)
+	{
+		await using var command = connection.CreateCommand();
+		command.Transaction = transaction;
+		command.CommandText = """
+			DELETE FROM GameSaveLinks
+			WHERE GameId = $gameId;
+			""";
+		command.Parameters.AddWithValue("$gameId", normalizedGameId);
+		await command.ExecuteNonQueryAsync(cancellationToken);
 	}
 
 	private static GameCardItem MapGame(SqliteDataReader reader)
@@ -671,6 +664,16 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncH
 		}
 
 		return repositoryPath.Trim();
+	}
+
+	private static string? NormalizeGameId(string? gameId)
+	{
+		if (string.IsNullOrWhiteSpace(gameId))
+		{
+			return null;
+		}
+
+		return gameId.Trim();
 	}
 
 	private static string? NormalizeThumbnailPath(string? thumbnailPath)
