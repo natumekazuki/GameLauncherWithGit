@@ -185,6 +185,11 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 			copyResult = CopyDirectoryStrict(backupPath, targetPath, cancellationToken);
 			if (!copyResult.IsSuccess)
 			{
+				if (copyResult.IsCanceled)
+				{
+					throw new OperationCanceledException(copyResult.Message, cancellationToken);
+				}
+
 				throw new InvalidOperationException(copyResult.Message);
 			}
 
@@ -323,11 +328,12 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 	{
 		var createdDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 		var createdFiles = new List<string>();
-		CopyDirectoryResult BuildCopyResult(bool isSuccess, string message)
+		CopyDirectoryResult BuildCopyResult(bool isSuccess, string message, bool isCanceled = false)
 		{
 			return new CopyDirectoryResult(
 				isSuccess,
 				message,
+				isCanceled,
 				createdDirectories
 					.OrderByDescending(static path => path.Length)
 					.ToArray(),
@@ -399,7 +405,7 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 		}
 		catch (OperationCanceledException)
 		{
-			throw;
+			return BuildCopyResult(false, "既存データの移行がキャンセルされました。", isCanceled: true);
 		}
 		catch (Exception ex)
 		{
@@ -508,6 +514,7 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 	private sealed record CopyDirectoryResult(
 		bool IsSuccess,
 		string Message,
+		bool IsCanceled,
 		IReadOnlyList<string> CreatedDirectories,
 		IReadOnlyList<string> CreatedFiles);
 #endif
