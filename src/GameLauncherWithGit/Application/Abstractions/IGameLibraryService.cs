@@ -12,6 +12,12 @@ public interface IGameLibraryService
 
 	Task<GameCardItem?> UpdateAsync(string gameId, GameEditInput input, CancellationToken cancellationToken = default);
 
+	Task<GameCardItem?> UpdateWithSaveLinksAsync(
+		string gameId,
+		GameEditInput input,
+		IReadOnlyList<GameSaveLinkEditInput> saveLinks,
+		CancellationToken cancellationToken = default);
+
 	Task<bool> DeleteAsync(string gameId, CancellationToken cancellationToken = default);
 
 	Task SetPinnedAsync(string gameId, bool isPinned, CancellationToken cancellationToken = default);

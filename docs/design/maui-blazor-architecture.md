@@ -52,6 +52,8 @@ flowchart LR
   - `branch/config` 取得の「キー未設定（exit=1 かつ出力空）」時は upstream 未設定として pull をスキップし、push は `git push` 既定解決で実行する（それ以外の取得失敗は同期エラー）
   - 同期結果（成功/失敗/停止）をリポジトリ単位の履歴ストアへ記録
 - `LauncherService`
+  - 起動前にセーブリンク（ジャンクション）を検証し、リンク先配下の全ファイルを読了して OneDrive 実体化を待つ
+  - セーブリンク準備が1件でも失敗した場合はゲーム起動をブロックする
   - ゲーム起動前に `fetch` を実行し、リモート先行でなければ `add -A -> commit(差分時のみ)` を実行
   - その後 `pull --rebase --autostash <remote> <branch>` を実行（追跡設定がない場合は pull をスキップ）
   - unborn branch（初回コミット前）や upstream 未設定は専用判定で分離し、追跡情報取得コマンド自体の失敗は同期失敗として扱う
@@ -76,11 +78,17 @@ flowchart LR
 - `ThumbnailService`
   - 画像を長辺 512px の PNG に変換して `FileSystem.AppDataDirectory/thumbnails` に保存
 - `PathPickerService`
-  - 実行ファイル、サムネイル画像、関連リポジトリフォルダの選択をOSピッカー経由で提供
+  - 実行ファイル、サムネイル画像、関連リポジトリフォルダ、任意フォルダ（セーブリンク用）の選択をOSピッカー経由で提供
   - UI層から Windows API へ直接依存しないための抽象境界を維持
 - `GameLibraryService`
   - ゲーム登録/更新/削除のアプリケーション操作を提供
   - 削除時に `thumbnails` 配下の管理対象サムネイルをクリーンアップ
+- `SaveLinkService`
+  - ゲームごとのセーブリンク定義（複数）を保存/取得する
+  - 起動前にリンクごとのジャンクション適用とリンク先読了処理を実行する
+- `LocalSaveLinkOperator`
+  - 既存セーブフォルダを退避してリンク先へ移行し、ジャンクションを作成する
+  - リンク先配下の全ファイルを読了し、OneDrive のプレースホルダを実体化する
 - `LogAccessService`
   - `MonochromeMemory.Log` を使って `FileSystem.AppDataDirectory/logs/app-events.jsonl` へ構造化エラーログを記録
   - 最新エラーログ/ログフォルダをOSシェルで開く
@@ -93,6 +101,7 @@ flowchart LR
   - トレイメニューなどUI外部から設定モーダルを開くためのイベントブリッジ
 - `GameLibraryStore (SQLite)`
   - ゲーム設定（タイトル/実行ファイル/関連リポジトリ/サムネイルパス/状態/ピン留め）をSQLiteへ保存・読込
+  - `GameSaveLinks` テーブルでセーブリンク定義（`LocalPath`、`TargetPath`、`EnsureOnLaunch`、`OrderNo`）を保存・読込
   - 並び順を `IsPinned DESC -> LastPlayedAt DESC -> Title` で返却
 - `RepositorySyncHistoryStore (SQLite)`
   - 同期履歴（`RepositoryId`、`Status`、`StartedAt`、`FinishedAt`、`DurationMs`、`Command`、`Reason`）を保存
@@ -133,10 +142,16 @@ sequenceDiagram
 sequenceDiagram
     participant UI as GameCard
     participant L as LauncherService
+    participant S as SaveLinkService
     participant G as GitService
     participant P as ProcessLauncher
 
     UI->>L: 起動要求(gameId)
+    L->>S: セーブリンク検証/適用（ジャンクション）
+    L->>S: リンク先全ファイル読了（OneDrive実体化）
+    alt セーブリンク準備失敗
+        L-->>UI: 起動中止 + 失敗理由表示
+    else セーブリンク準備成功
     L->>G: 関連Repoごとに fetch
     L->>G: remote ahead判定
     alt remote aheadでない
@@ -148,6 +163,7 @@ sequenceDiagram
         L-->>UI: 起動成功
     else 1件でも失敗
         L-->>UI: 起動中止 + ログ導線
+    end
     end
 ```
 
@@ -165,6 +181,10 @@ sequenceDiagram
   - `ExecutablePath`: 実行ファイルパス（必須）
   - `ThumbnailPath`: 生成済みサムネイル画像パス（任意）
   - `RelatedRepositoryPath`: 関連リポジトリフォルダ（任意、単一）
+- セーブリンク設定モデル（ゲームごと複数）
+  - `LocalPath`: ゲーム側セーブフォルダ（ジャンクション作成先）
+  - `TargetPath`: 実データ保存先フォルダ（OneDrive 配下を想定）
+  - `EnsureOnLaunch`: 起動前チェック対象フラグ
 
 ## 8. DI ライフサイクル（MVP）
 | サービス | ライフサイクル | 理由 |
@@ -178,14 +198,18 @@ sequenceDiagram
 | SettingsPanelService | Singleton | トレイなど外部導線から設定モーダル表示要求を共有するため |
 | AutoStartService | Singleton | Windows Runキーの自動起動設定を集約するため |
 | LogAccessService | Singleton | ログ記録とログ表示導線を共有するため |
+| LocalSaveLinkOperator | Singleton | ジャンクション作成/リンク先読了を共有するため |
 | GitService | Transient | コマンド実行を独立単位で扱うため |
 | ThumbnailService | Scoped | UI操作単位で生成しやすくするため |
 | LauncherService | Scoped | 画面操作からの起動処理単位で扱うため |
+| GameLibraryService | Scoped | 画面操作からのゲーム設定処理単位で扱うため |
+| SaveLinkService | Scoped | 画面操作/起動前処理からセーブリンク管理を扱うため |
 
 ## 9. 永続化
 - 保存先: `FileSystem.AppDataDirectory`
 - 保存対象
   - `game-library.db`: ゲーム設定（タイトル、実行ファイル、関連リポジトリ、サムネイルパス、状態、最終プレイ日時）
+    - `GameSaveLinks` テーブル: ゲームごとのセーブリンク定義（`LocalPath`、`TargetPath`、`EnsureOnLaunch`、`OrderNo`）
     - `RepositorySyncHistory` テーブル: リポジトリ単位の同期履歴（最新50件/リポジトリ）
   - `settings.json`: 同期/通知/ログ/表示設定（デバウンス秒、再試行初期秒、再試行最大秒、通知抑制秒、ログ保持日数、ログ最大サイズMB、カードサイズ%、カードタイトル表示、カード同期ステータス表示）
   - `logs/app-events.jsonl`: 構造化エラーログ（MonochromeMemory.Log）
@@ -217,6 +241,7 @@ sequenceDiagram
 ## 11. テスト観点
 - 同期: デバウンス、単一実行制御、同期順序、再実行フラグ
 - ランチャー: 起動前 pull 成功時のみ起動、失敗時ブロック
+- セーブリンク: ジャンクション作成、既存フォルダ移行、リンク先全ファイル読了、読了失敗時の起動ブロック
 - Windows連携: トレイ状態遷移、Toast 発火、自動起動設定
 - サムネイル: 512px変換、PNG化、失敗時フォールバック
 - ログビューア: JSONL破損行スキップ、フィルタ結果表示、`repo/command/exitCode` 表示、`detail/stdout/stderr` 折りたたみ、拡張メタデータ込みクリップボードコピー
@@ -258,6 +283,10 @@ sequenceDiagram
   - 環境設定にログ運用設定を追加（保持日数、最大サイズMB）
   - `settings.json` 永続化（同期/通知/ログ運用/カード表示設定）
   - ゲーム登録/編集モーダル（タイトル/実行ファイル/関連リポジトリ）
+  - ゲーム登録/編集モーダルにセーブリンク管理を追加（複数リンク、ローカル/同期先フォルダ選択、起動前チェック対象フラグ）
+  - `GameSaveLinks` テーブル永続化（ゲーム単位の置換保存、削除連動）
+  - `SaveLinkService` / `LocalSaveLinkOperator` を追加（ジャンクション適用、既存フォルダ移行、リンク先全ファイル読了）
+  - `LauncherService` の起動前処理にセーブリンク準備を追加（読了失敗時は起動ブロック）
   - ゲーム削除導線（確認モーダル + SQLite削除 + サムネイル削除）
   - ゲーム登録/編集モーダルのサムネイル画像選択（参照/解除）
   - `ThumbnailService` の実装（長辺512px・PNG変換、`FileSystem.AppDataDirectory/thumbnails` 保存）

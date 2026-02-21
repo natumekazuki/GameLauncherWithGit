@@ -6,7 +6,7 @@ using System.Text.Json;
 
 namespace GameLauncherWithGit.Infrastructure.Services;
 
-public sealed class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncHistoryStore
+public sealed class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncHistoryStore, ISaveLinkStore
 {
 	private const string DatabaseFileName = "game-library.db";
 	private const int DefaultMaxHistoryPerRepository = 50;
@@ -76,47 +76,42 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncH
 	{
 		await EnsureInitializedAsync(cancellationToken);
 
+		await using var connection = await OpenConnectionAsync(cancellationToken);
+		var now = DateTimeOffset.Now.ToString("O");
+		await UpsertGameInternalAsync(connection, null, game, now, cancellationToken);
+	}
+
+	public async Task UpsertWithSaveLinksAsync(
+		GameCardItem game,
+		IReadOnlyList<GameSaveLinkItem> links,
+		CancellationToken cancellationToken = default)
+	{
+		await EnsureInitializedAsync(cancellationToken);
+
+		if (string.IsNullOrWhiteSpace(game.Id))
+		{
+			throw new InvalidOperationException("ゲーム更新に失敗しました。ゲームIDが不正です。");
+		}
+
+		var normalizedGameId = game.Id.Trim();
+		var normalizedGame = game with { Id = normalizedGameId };
 		var now = DateTimeOffset.Now.ToString("O");
 		await using var connection = await OpenConnectionAsync(cancellationToken);
-		await using var command = connection.CreateCommand();
-		command.CommandText = """
-			INSERT INTO Games (
-			    Id, Title, ExecutablePath, RelatedRepositoryPath, RelatedRepositoryPathsJson, ThumbnailPath, LastPlayedAt, Status, IsPinned, CreatedAt, UpdatedAt
-			)
-			VALUES (
-			    $id, $title, $executablePath, $relatedRepositoryPath, $relatedRepositoryPathsJson, $thumbnailPath, $lastPlayedAt, $status, $isPinned, $createdAt, $updatedAt
-			)
-			ON CONFLICT(Id) DO UPDATE SET
-			    Title = excluded.Title,
-			    ExecutablePath = excluded.ExecutablePath,
-			    RelatedRepositoryPath = excluded.RelatedRepositoryPath,
-			    RelatedRepositoryPathsJson = excluded.RelatedRepositoryPathsJson,
-			    ThumbnailPath = excluded.ThumbnailPath,
-			    LastPlayedAt = excluded.LastPlayedAt,
-			    Status = excluded.Status,
-			    IsPinned = excluded.IsPinned,
-			    UpdatedAt = excluded.UpdatedAt;
-			""";
-
-		var normalizedRepositoryPath = NormalizeSingleRepositoryPath(game.RelatedRepositoryPath);
-		command.Parameters.AddWithValue("$id", game.Id);
-		command.Parameters.AddWithValue("$title", game.Title);
-		command.Parameters.AddWithValue("$executablePath", game.ExecutablePath);
-		command.Parameters.AddWithValue("$relatedRepositoryPath", normalizedRepositoryPath ?? (object)DBNull.Value);
-		command.Parameters.AddWithValue("$relatedRepositoryPathsJson", SerializeLegacyRepositoryPaths(normalizedRepositoryPath));
-		command.Parameters.AddWithValue("$thumbnailPath", NormalizeThumbnailPath(game.ThumbnailPath) ?? (object)DBNull.Value);
-		command.Parameters.AddWithValue("$lastPlayedAt", game.LastPlayedAt?.ToString("O") ?? (object)DBNull.Value);
-		command.Parameters.AddWithValue("$status", (int)game.Status);
-		command.Parameters.AddWithValue("$isPinned", game.IsPinned ? 1 : 0);
-		command.Parameters.AddWithValue("$createdAt", now);
-		command.Parameters.AddWithValue("$updatedAt", now);
-
-		await command.ExecuteNonQueryAsync(cancellationToken);
+		await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+		await UpsertGameInternalAsync(connection, transaction, normalizedGame, now, cancellationToken);
+		await ReplaceSaveLinksByGameIdInternalAsync(
+			connection,
+			transaction,
+			normalizedGameId,
+			links,
+			cancellationToken);
+		await transaction.CommitAsync(cancellationToken);
 	}
 
 	public async Task DeleteAsync(string gameId, CancellationToken cancellationToken = default)
 	{
-		if (string.IsNullOrWhiteSpace(gameId))
+		var normalizedGameId = NormalizeGameId(gameId);
+		if (normalizedGameId is null)
 		{
 			return;
 		}
@@ -124,13 +119,92 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncH
 		await EnsureInitializedAsync(cancellationToken);
 
 		await using var connection = await OpenConnectionAsync(cancellationToken);
+		await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+		await DeleteSaveLinksByGameIdAsync(connection, transaction, normalizedGameId, cancellationToken);
+
+		await using (var command = connection.CreateCommand())
+		{
+			command.Transaction = transaction;
+			command.CommandText = """
+				DELETE FROM Games
+				WHERE Id = $id;
+				""";
+			command.Parameters.AddWithValue("$id", normalizedGameId);
+			await command.ExecuteNonQueryAsync(cancellationToken);
+		}
+
+		await transaction.CommitAsync(cancellationToken);
+	}
+
+	public async Task<IReadOnlyList<GameSaveLinkItem>> GetByGameIdAsync(
+		string gameId,
+		CancellationToken cancellationToken = default)
+	{
+		var normalizedGameId = NormalizeGameId(gameId);
+		if (normalizedGameId is null)
+		{
+			return Array.Empty<GameSaveLinkItem>();
+		}
+
+		await EnsureInitializedAsync(cancellationToken);
+
+		await using var connection = await OpenConnectionAsync(cancellationToken);
 		await using var command = connection.CreateCommand();
 		command.CommandText = """
-			DELETE FROM Games
-			WHERE Id = $id;
+			SELECT Id, GameId, DisplayName, LocalPath, TargetPath, EnsureOnLaunch, OrderNo
+			FROM GameSaveLinks
+			WHERE GameId = $gameId
+			ORDER BY OrderNo ASC, CreatedAt ASC;
 			""";
-		command.Parameters.AddWithValue("$id", gameId.Trim());
-		await command.ExecuteNonQueryAsync(cancellationToken);
+		command.Parameters.AddWithValue("$gameId", normalizedGameId);
+
+		var result = new List<GameSaveLinkItem>();
+		await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+		while (await reader.ReadAsync(cancellationToken))
+		{
+			result.Add(MapSaveLink(reader));
+		}
+
+		return result;
+	}
+
+	public async Task ReplaceByGameIdAsync(
+		string gameId,
+		IReadOnlyList<GameSaveLinkItem> links,
+		CancellationToken cancellationToken = default)
+	{
+		var normalizedGameId = NormalizeGameId(gameId);
+		if (normalizedGameId is null)
+		{
+			return;
+		}
+
+		await EnsureInitializedAsync(cancellationToken);
+
+		await using var connection = await OpenConnectionAsync(cancellationToken);
+		await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+		await ReplaceSaveLinksByGameIdInternalAsync(
+			connection,
+			transaction,
+			normalizedGameId,
+			links,
+			cancellationToken);
+
+		await transaction.CommitAsync(cancellationToken);
+	}
+
+	public async Task DeleteByGameIdAsync(string gameId, CancellationToken cancellationToken = default)
+	{
+		var normalizedGameId = NormalizeGameId(gameId);
+		if (normalizedGameId is null)
+		{
+			return;
+		}
+
+		await EnsureInitializedAsync(cancellationToken);
+
+		await using var connection = await OpenConnectionAsync(cancellationToken);
+		await DeleteSaveLinksByGameIdAsync(connection, null, normalizedGameId, cancellationToken);
 	}
 
 	public async Task AppendAsync(RepositorySyncHistoryItem entry, CancellationToken cancellationToken = default)
@@ -297,6 +371,29 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncH
 		await EnsureColumnExistsAsync(connection, "ThumbnailPath", "TEXT NULL", cancellationToken);
 		await EnsureColumnExistsAsync(connection, "IsPinned", "INTEGER NOT NULL DEFAULT 0", cancellationToken);
 
+		await using var createSaveLinksTableCommand = connection.CreateCommand();
+		createSaveLinksTableCommand.CommandText = """
+			CREATE TABLE IF NOT EXISTS GameSaveLinks (
+			    Id TEXT NOT NULL PRIMARY KEY,
+			    GameId TEXT NOT NULL,
+			    DisplayName TEXT NOT NULL,
+			    LocalPath TEXT NOT NULL,
+			    TargetPath TEXT NOT NULL,
+			    EnsureOnLaunch INTEGER NOT NULL DEFAULT 1,
+			    OrderNo INTEGER NOT NULL DEFAULT 0,
+			    CreatedAt TEXT NOT NULL,
+			    UpdatedAt TEXT NOT NULL
+			);
+			""";
+		await createSaveLinksTableCommand.ExecuteNonQueryAsync(cancellationToken);
+
+		await using var createSaveLinksGameIdIndexCommand = connection.CreateCommand();
+		createSaveLinksGameIdIndexCommand.CommandText = """
+			CREATE INDEX IF NOT EXISTS IX_GameSaveLinks_GameId_OrderNo
+			ON GameSaveLinks (GameId, OrderNo ASC);
+			""";
+		await createSaveLinksGameIdIndexCommand.ExecuteNonQueryAsync(cancellationToken);
+
 		await using var createHistoryTableCommand = connection.CreateCommand();
 		createHistoryTableCommand.CommandText = """
 			CREATE TABLE IF NOT EXISTS RepositorySyncHistory (
@@ -402,6 +499,112 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncH
 		return connection;
 	}
 
+	private static async Task UpsertGameInternalAsync(
+		SqliteConnection connection,
+		SqliteTransaction? transaction,
+		GameCardItem game,
+		string timestamp,
+		CancellationToken cancellationToken)
+	{
+		await using var command = connection.CreateCommand();
+		command.Transaction = transaction;
+		command.CommandText = """
+			INSERT INTO Games (
+			    Id, Title, ExecutablePath, RelatedRepositoryPath, RelatedRepositoryPathsJson, ThumbnailPath, LastPlayedAt, Status, IsPinned, CreatedAt, UpdatedAt
+			)
+			VALUES (
+			    $id, $title, $executablePath, $relatedRepositoryPath, $relatedRepositoryPathsJson, $thumbnailPath, $lastPlayedAt, $status, $isPinned, $createdAt, $updatedAt
+			)
+			ON CONFLICT(Id) DO UPDATE SET
+			    Title = excluded.Title,
+			    ExecutablePath = excluded.ExecutablePath,
+			    RelatedRepositoryPath = excluded.RelatedRepositoryPath,
+			    RelatedRepositoryPathsJson = excluded.RelatedRepositoryPathsJson,
+			    ThumbnailPath = excluded.ThumbnailPath,
+			    LastPlayedAt = excluded.LastPlayedAt,
+			    Status = excluded.Status,
+			    IsPinned = excluded.IsPinned,
+			    UpdatedAt = excluded.UpdatedAt;
+			""";
+
+		var normalizedRepositoryPath = NormalizeSingleRepositoryPath(game.RelatedRepositoryPath);
+		command.Parameters.AddWithValue("$id", game.Id);
+		command.Parameters.AddWithValue("$title", game.Title);
+		command.Parameters.AddWithValue("$executablePath", game.ExecutablePath);
+		command.Parameters.AddWithValue("$relatedRepositoryPath", normalizedRepositoryPath ?? (object)DBNull.Value);
+		command.Parameters.AddWithValue("$relatedRepositoryPathsJson", SerializeLegacyRepositoryPaths(normalizedRepositoryPath));
+		command.Parameters.AddWithValue("$thumbnailPath", NormalizeThumbnailPath(game.ThumbnailPath) ?? (object)DBNull.Value);
+		command.Parameters.AddWithValue("$lastPlayedAt", game.LastPlayedAt?.ToString("O") ?? (object)DBNull.Value);
+		command.Parameters.AddWithValue("$status", (int)game.Status);
+		command.Parameters.AddWithValue("$isPinned", game.IsPinned ? 1 : 0);
+		command.Parameters.AddWithValue("$createdAt", timestamp);
+		command.Parameters.AddWithValue("$updatedAt", timestamp);
+
+		await command.ExecuteNonQueryAsync(cancellationToken);
+	}
+
+	private static async Task ReplaceSaveLinksByGameIdInternalAsync(
+		SqliteConnection connection,
+		SqliteTransaction transaction,
+		string normalizedGameId,
+		IReadOnlyList<GameSaveLinkItem>? links,
+		CancellationToken cancellationToken)
+	{
+		var now = DateTimeOffset.UtcNow.ToString("O");
+		await DeleteSaveLinksByGameIdAsync(connection, transaction, normalizedGameId, cancellationToken);
+
+		if (links is null)
+		{
+			return;
+		}
+
+		foreach (var link in links.OrderBy(static item => item.OrderNo))
+		{
+			var id = string.IsNullOrWhiteSpace(link.Id)
+				? $"save-link-{Guid.NewGuid():N}"
+				: link.Id.Trim();
+			var displayName = string.IsNullOrWhiteSpace(link.DisplayName)
+				? link.LocalPath
+				: link.DisplayName.Trim();
+			await using var insertCommand = connection.CreateCommand();
+			insertCommand.Transaction = transaction;
+			insertCommand.CommandText = """
+				INSERT INTO GameSaveLinks (
+				    Id, GameId, DisplayName, LocalPath, TargetPath, EnsureOnLaunch, OrderNo, CreatedAt, UpdatedAt
+				)
+				VALUES (
+				    $id, $gameId, $displayName, $localPath, $targetPath, $ensureOnLaunch, $orderNo, $createdAt, $updatedAt
+				);
+				""";
+			insertCommand.Parameters.AddWithValue("$id", id);
+			insertCommand.Parameters.AddWithValue("$gameId", normalizedGameId);
+			insertCommand.Parameters.AddWithValue("$displayName", displayName);
+			insertCommand.Parameters.AddWithValue("$localPath", link.LocalPath.Trim());
+			insertCommand.Parameters.AddWithValue("$targetPath", link.TargetPath.Trim());
+			insertCommand.Parameters.AddWithValue("$ensureOnLaunch", link.EnsureOnLaunch ? 1 : 0);
+			insertCommand.Parameters.AddWithValue("$orderNo", Math.Max(0, link.OrderNo));
+			insertCommand.Parameters.AddWithValue("$createdAt", now);
+			insertCommand.Parameters.AddWithValue("$updatedAt", now);
+			await insertCommand.ExecuteNonQueryAsync(cancellationToken);
+		}
+	}
+
+	private static async Task DeleteSaveLinksByGameIdAsync(
+		SqliteConnection connection,
+		SqliteTransaction? transaction,
+		string normalizedGameId,
+		CancellationToken cancellationToken)
+	{
+		await using var command = connection.CreateCommand();
+		command.Transaction = transaction;
+		command.CommandText = """
+			DELETE FROM GameSaveLinks
+			WHERE GameId = $gameId;
+			""";
+		command.Parameters.AddWithValue("$gameId", normalizedGameId);
+		await command.ExecuteNonQueryAsync(cancellationToken);
+	}
+
 	private static GameCardItem MapGame(SqliteDataReader reader)
 	{
 		var gameId = reader.GetString(0);
@@ -463,6 +666,16 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncH
 		return repositoryPath.Trim();
 	}
 
+	private static string? NormalizeGameId(string? gameId)
+	{
+		if (string.IsNullOrWhiteSpace(gameId))
+		{
+			return null;
+		}
+
+		return gameId.Trim();
+	}
+
 	private static string? NormalizeThumbnailPath(string? thumbnailPath)
 	{
 		if (string.IsNullOrWhiteSpace(thumbnailPath))
@@ -493,6 +706,26 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncH
 		return Enum.IsDefined(typeof(GameCardStatus), value)
 			? (GameCardStatus)value
 			: GameCardStatus.Unknown;
+	}
+
+	private static GameSaveLinkItem MapSaveLink(SqliteDataReader reader)
+	{
+		var id = reader.GetString(0);
+		var gameId = reader.GetString(1);
+		var displayName = reader.GetString(2);
+		var localPath = reader.GetString(3);
+		var targetPath = reader.GetString(4);
+		var ensureOnLaunch = !reader.IsDBNull(5) && reader.GetInt32(5) != 0;
+		var orderNo = !reader.IsDBNull(6) ? Math.Max(0, reader.GetInt32(6)) : 0;
+
+		return new GameSaveLinkItem(
+			Id: id,
+			GameId: gameId,
+			DisplayName: displayName,
+			LocalPath: localPath,
+			TargetPath: targetPath,
+			OrderNo: orderNo,
+			EnsureOnLaunch: ensureOnLaunch);
 	}
 
 	private static RepositorySyncHistoryItem MapRepositorySyncHistory(SqliteDataReader reader)

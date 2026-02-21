@@ -48,8 +48,14 @@ public sealed class PathPickerService : IPathPickerService
 
 	public Task<string?> PickRepositoryDirectoryPathAsync(CancellationToken cancellationToken = default)
 	{
+		return PickFolderPathAsync("関連リポジトリフォルダを選択", cancellationToken);
+	}
+
+	public Task<string?> PickFolderPathAsync(string title, CancellationToken cancellationToken = default)
+	{
 #if WINDOWS
-		return PickWindowsFolderPathAsync("関連リポジトリフォルダを選択", cancellationToken);
+		var resolvedTitle = string.IsNullOrWhiteSpace(title) ? "フォルダを選択" : title.Trim();
+		return PickWindowsFolderPathAsync(resolvedTitle, cancellationToken);
 #else
 		return Task.FromResult<string?>(null);
 #endif
@@ -93,55 +99,50 @@ public sealed class PathPickerService : IPathPickerService
 		IReadOnlyList<ComDlgFilterSpec> filters,
 		CancellationToken cancellationToken)
 	{
-		try
-		{
-			return await MainThread.InvokeOnMainThreadAsync(() =>
-			{
-				var hwnd = GetWindowHandle();
-				if (hwnd == IntPtr.Zero)
-				{
-					throw new InvalidOperationException("有効なウィンドウハンドルを取得できませんでした。");
-				}
-
-				return ShowFileOpenDialog(
-					hwnd,
-					title,
-					filters,
-					FileOpenOptions.ForceFileSystem | FileOpenOptions.PathMustExist | FileOpenOptions.FileMustExist | FileOpenOptions.DontAddToRecent);
-			});
-		}
-		catch (OperationCanceledException)
-		{
-			return null;
-		}
-		catch (Exception ex)
-		{
-			_logger.LogError(ex, "Failed to pick executable/image path. title={PickerTitle}", title);
-			throw new InvalidOperationException($"ファイル参照に失敗しました。詳細: {BuildErrorDetail(ex)}", ex);
-		}
-		finally
-		{
-			cancellationToken.ThrowIfCancellationRequested();
-		}
+		return await ExecuteWindowsPickerAsync(
+			showDialog: hwnd => ShowFileOpenDialog(
+				hwnd,
+				title,
+				filters,
+				FileOpenOptions.ForceFileSystem | FileOpenOptions.PathMustExist | FileOpenOptions.FileMustExist | FileOpenOptions.DontAddToRecent),
+			logOnError: ex => _logger.LogError(ex, "Failed to pick executable/image path. title={PickerTitle}", title),
+			failureMessage: "ファイル参照に失敗しました。",
+			cancellationToken);
 	}
 
 	private async Task<string?> PickWindowsFolderPathAsync(string title, CancellationToken cancellationToken)
+	{
+		return await ExecuteWindowsPickerAsync(
+			showDialog: hwnd => ShowFileOpenDialog(
+				hwnd,
+				title,
+				filters: [],
+				FileOpenOptions.PickFolders | FileOpenOptions.ForceFileSystem | FileOpenOptions.PathMustExist | FileOpenOptions.DontAddToRecent),
+			logOnError: ex => _logger.LogError(ex, "Failed to pick repository directory path."),
+			failureMessage: "関連リポジトリフォルダの参照に失敗しました。",
+			cancellationToken);
+	}
+
+	private static IntPtr GetRequiredWindowHandle()
+	{
+		var hwnd = GetWindowHandle();
+		return hwnd == IntPtr.Zero
+			? throw new InvalidOperationException("有効なウィンドウハンドルを取得できませんでした。")
+			: hwnd;
+	}
+
+	private async Task<string?> ExecuteWindowsPickerAsync(
+		Func<IntPtr, string?> showDialog,
+		Action<Exception> logOnError,
+		string failureMessage,
+		CancellationToken cancellationToken)
 	{
 		try
 		{
 			return await MainThread.InvokeOnMainThreadAsync(() =>
 			{
-				var hwnd = GetWindowHandle();
-				if (hwnd == IntPtr.Zero)
-				{
-					throw new InvalidOperationException("有効なウィンドウハンドルを取得できませんでした。");
-				}
-
-				return ShowFileOpenDialog(
-					hwnd,
-					title,
-					filters: [],
-					FileOpenOptions.PickFolders | FileOpenOptions.ForceFileSystem | FileOpenOptions.PathMustExist | FileOpenOptions.DontAddToRecent);
+				var hwnd = GetRequiredWindowHandle();
+				return showDialog(hwnd);
 			});
 		}
 		catch (OperationCanceledException)
@@ -150,8 +151,8 @@ public sealed class PathPickerService : IPathPickerService
 		}
 		catch (Exception ex)
 		{
-			_logger.LogError(ex, "Failed to pick repository directory path.");
-			throw new InvalidOperationException($"関連リポジトリフォルダの参照に失敗しました。詳細: {BuildErrorDetail(ex)}", ex);
+			logOnError(ex);
+			throw new InvalidOperationException($"{failureMessage}詳細: {BuildErrorDetail(ex)}", ex);
 		}
 		finally
 		{

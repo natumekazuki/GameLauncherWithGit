@@ -45,6 +45,7 @@ public static class MauiProgram
 		builder.Services.AddSingleton<SqliteGameLibraryStore>();
 		builder.Services.AddSingleton<IGameLibraryStore>(serviceProvider => serviceProvider.GetRequiredService<SqliteGameLibraryStore>());
 		builder.Services.AddSingleton<IRepositorySyncHistoryStore>(serviceProvider => serviceProvider.GetRequiredService<SqliteGameLibraryStore>());
+		builder.Services.AddSingleton<ISaveLinkStore>(serviceProvider => serviceProvider.GetRequiredService<SqliteGameLibraryStore>());
 		builder.Services.AddSingleton<IAppSettingsService, AppSettingsService>();
 		builder.Services.AddSingleton<ISettingsPanelService, SettingsPanelService>();
 		builder.Services.AddSingleton<ISyncOrchestrator, SyncOrchestrator>();
@@ -53,10 +54,12 @@ public static class MauiProgram
 		builder.Services.AddSingleton<ITrayService, TrayService>();
 		builder.Services.AddSingleton<IAutoStartService, AutoStartService>();
 		builder.Services.AddSingleton<ILogAccessService, LogAccessService>();
+		builder.Services.AddSingleton<ILocalSaveLinkOperator, LocalSaveLinkOperator>();
 		builder.Services.AddTransient<IGitService, GitService>();
 		builder.Services.AddScoped<IThumbnailService, ThumbnailService>();
 		builder.Services.AddScoped<ILauncherService, LauncherService>();
 		builder.Services.AddScoped<IGameLibraryService, GameLibraryService>();
+		builder.Services.AddScoped<ISaveLinkService, SaveLinkService>();
 		builder.Services.AddScoped<IPathPickerService, PathPickerService>();
 
 #if DEBUG

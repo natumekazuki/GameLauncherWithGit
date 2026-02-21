@@ -12,6 +12,7 @@
 @inject IRepositoryStateStore RepositoryStateStore
 @inject ISettingsPanelService SettingsPanelService
 @inject IRepositorySyncHistoryStore RepositorySyncHistoryStore
+@inject ISaveLinkService SaveLinkService
 
 <PageTitle>GameLauncherWithGit</PageTitle>
 
@@ -170,6 +171,8 @@ else
                                     {
                                         <p class="meta-value">@game.RelatedRepositoryPath</p>
                                     }
+                                    <p class="meta-label">セーブリンク</p>
+                                    <p class="meta-value">@GetSaveLinkSummary(game)</p>
                                     <p class="meta-label">最終プレイ</p>
                                     <p class="meta-value">@FormatLastPlayed(game.LastPlayedAt)</p>
 
@@ -762,6 +765,78 @@ else
                 </div>
             </div>
 
+            <div class="editor-field">
+                <label>セーブリンク（ジャンクション・複数）</label>
+                <div class="save-link-editor">
+                    @if (_editorSaveLinks.Count == 0)
+                    {
+                        <p class="save-link-empty">未設定</p>
+                    }
+                    else
+                    {
+                        @for (var index = 0; index < _editorSaveLinks.Count; index++)
+                        {
+                            var currentIndex = index;
+                            var entry = _editorSaveLinks[index];
+                            <div class="save-link-item">
+                                <p class="save-link-item-title">リンク @(currentIndex + 1)</p>
+                                <p class="save-link-item-label">ローカルセーブフォルダ</p>
+                                <p class="save-link-item-value">@GetEditorSaveLinkPathLabel(entry.LocalPath)</p>
+                                <p class="save-link-item-label">同期先フォルダ（OneDrive など）</p>
+                                <p class="save-link-item-value">@GetEditorSaveLinkPathLabel(entry.TargetPath)</p>
+                                <label class="save-link-item-checkbox">
+                                    <input type="checkbox"
+                                           checked="@entry.EnsureOnLaunch"
+                                           @onchange="args => SetEditorSaveLinkEnsureOnLaunch(currentIndex, ParseCheckboxValue(args))"
+                                           disabled="@_isSaving" />
+                                    <span>起動前チェック対象</span>
+                                </label>
+                                <div class="single-repo-actions">
+                                    <button type="button"
+                                            class="secondary-button picker-button"
+                                            @onclick="() => PickEditorSaveLocalPathAsync(currentIndex)"
+                                            disabled="@_isSaving">
+                                        ローカル選択
+                                    </button>
+                                    <button type="button"
+                                            class="secondary-button picker-button"
+                                            @onclick="() => PickEditorSaveTargetPathAsync(currentIndex)"
+                                            disabled="@_isSaving">
+                                        同期先選択
+                                    </button>
+                                    <button type="button"
+                                            class="secondary-button picker-button"
+                                            @onclick="() => MoveEditorSaveLink(currentIndex, -1)"
+                                            disabled="@(_isSaving || currentIndex == 0)">
+                                        ↑
+                                    </button>
+                                    <button type="button"
+                                            class="secondary-button picker-button"
+                                            @onclick="() => MoveEditorSaveLink(currentIndex, 1)"
+                                            disabled="@(_isSaving || currentIndex >= _editorSaveLinks.Count - 1)">
+                                        ↓
+                                    </button>
+                                    <button type="button"
+                                            class="danger-button picker-button"
+                                            @onclick="() => RemoveEditorSaveLink(currentIndex)"
+                                            disabled="@_isSaving">
+                                        削除
+                                    </button>
+                                </div>
+                            </div>
+                        }
+                    }
+                </div>
+                <div class="single-repo-actions">
+                    <button type="button"
+                            class="secondary-button picker-button"
+                            @onclick="AddEditorSaveLink"
+                            disabled="@_isSaving">
+                        リンク追加
+                    </button>
+                </div>
+            </div>
+
             <div class="editor-actions">
                 <button type="button" class="launch-button" @onclick="SaveEditorAsync" disabled="@_isSaving">
                     @(_isSaving ? "保存中..." : "保存")
@@ -800,6 +875,7 @@ else
     private string _editorTitle = string.Empty;
     private string _editorExecutablePath = string.Empty;
     private string? _editorRepositoryPath;
+    private readonly List<EditorSaveLinkEntry> _editorSaveLinks = [];
     private string? _editorThumbnailSourcePath;
     private bool _editorHasThumbnail;
     private bool _editorClearThumbnail;
@@ -832,6 +908,8 @@ else
     private readonly HashSet<string> _registeredWatcherRepositoryIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _pinningGameIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _thumbnailDataUriCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, IReadOnlyList<GameSaveLinkItem>> _saveLinksByGame = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _saveLinkLoadFailedGameIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, IReadOnlyList<RepositorySyncHistoryItem>> _syncHistoryByRepository = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, GitRepositoryVisualState> _gitVisualStateByRepository = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<NotificationHistoryEntry> _notificationHistoryEntries = [];
@@ -1251,6 +1329,7 @@ else
         _editorTitle = string.Empty;
         _editorExecutablePath = string.Empty;
         _editorRepositoryPath = null;
+        _editorSaveLinks.Clear();
         _editorThumbnailSourcePath = null;
         _editorHasThumbnail = false;
         _editorClearThumbnail = false;
@@ -1289,11 +1368,33 @@ else
 
     private void OpenEditEditor(GameCardItem game)
     {
+        if (_saveLinkLoadFailedGameIds.Contains(game.Id))
+        {
+            SetNotification(
+                "セーブリンクの取得に失敗しているため編集を開始できません。再読み込みしてから再試行してください。",
+                false);
+            return;
+        }
+
         _isEditMode = true;
         _editingGameId = game.Id;
         _editorTitle = game.Title;
         _editorExecutablePath = game.ExecutablePath;
         _editorRepositoryPath = game.RelatedRepositoryPath;
+        _editorSaveLinks.Clear();
+        if (_saveLinksByGame.TryGetValue(game.Id, out var saveLinks))
+        {
+            _editorSaveLinks.AddRange(
+                saveLinks
+                    .OrderBy(static item => item.OrderNo)
+                    .Select(static item => new EditorSaveLinkEntry
+                    {
+                        Id = item.Id,
+                        LocalPath = item.LocalPath,
+                        TargetPath = item.TargetPath,
+                        EnsureOnLaunch = item.EnsureOnLaunch
+                    }));
+        }
         _editorThumbnailSourcePath = null;
         _editorHasThumbnail = HasThumbnail(game);
         _editorClearThumbnail = false;
@@ -1383,6 +1484,7 @@ else
         _isSaving = true;
         try
         {
+            var saveLinkInputs = BuildEditorSaveLinkInputs();
             if (_isEditMode)
             {
                 if (string.IsNullOrWhiteSpace(_editingGameId))
@@ -1391,7 +1493,15 @@ else
                     return;
                 }
 
-                var updated = await GameLibraryService.UpdateAsync(_editingGameId, input);
+                if (_saveLinkLoadFailedGameIds.Contains(_editingGameId))
+                {
+                    SetNotification(
+                        "セーブリンク取得に失敗しているため保存できません。再読み込みしてから再試行してください。",
+                        false);
+                    return;
+                }
+
+                var updated = await GameLibraryService.UpdateWithSaveLinksAsync(_editingGameId, input, saveLinkInputs);
                 if (updated is null)
                 {
                     SetNotification("編集対象のゲームが見つかりません。", false);
@@ -1403,6 +1513,7 @@ else
             else
             {
                 var created = await GameLibraryService.CreateAsync(input);
+                await SaveLinksForCreatedGameAsync(created.Id, saveLinkInputs);
                 SetNotification($"ゲームを登録しました: {created.Title}", true);
             }
 
@@ -1421,6 +1532,43 @@ else
             {
                 CloseEditor(force: true);
             }
+        }
+    }
+
+    private async Task SaveLinksForCreatedGameAsync(string gameId, IReadOnlyList<GameSaveLinkEditInput> saveLinkInputs)
+    {
+        try
+        {
+            await SaveLinkService.ReplaceForGameAsync(gameId, saveLinkInputs);
+        }
+        catch (Exception ex)
+        {
+            var rollbackError = await TryRollbackCreatedGameAsync(gameId);
+            if (string.IsNullOrWhiteSpace(rollbackError))
+            {
+                throw new InvalidOperationException(
+                    $"セーブリンク保存に失敗したため、作成済みゲームをロールバックしました。reason={ex.Message}",
+                    ex);
+            }
+
+            throw new InvalidOperationException(
+                $"セーブリンク保存に失敗し、作成済みゲームのロールバックにも失敗しました。gameId={gameId}, rollbackReason={rollbackError}, reason={ex.Message}",
+                ex);
+        }
+    }
+
+    private async Task<string?> TryRollbackCreatedGameAsync(string gameId)
+    {
+        try
+        {
+            var isDeleted = await GameLibraryService.DeleteAsync(gameId);
+            return isDeleted
+                ? null
+                : $"gameId={gameId} の削除結果が false でした。";
+        }
+        catch (Exception rollbackEx)
+        {
+            return rollbackEx.Message;
         }
     }
 
@@ -1514,12 +1662,215 @@ else
         _editorRepositoryPath = null;
     }
 
+    private void AddEditorSaveLink()
+    {
+        _editorSaveLinks.Add(new EditorSaveLinkEntry
+        {
+            Id = null,
+            LocalPath = null,
+            TargetPath = null,
+            EnsureOnLaunch = true
+        });
+    }
+
+    private void RemoveEditorSaveLink(int index)
+    {
+        if (!IsEditorSaveLinkIndexValid(index))
+        {
+            return;
+        }
+
+        _editorSaveLinks.RemoveAt(index);
+    }
+
+    private void MoveEditorSaveLink(int index, int direction)
+    {
+        if (!IsEditorSaveLinkIndexValid(index))
+        {
+            return;
+        }
+
+        var destinationIndex = index + direction;
+        if (destinationIndex < 0 || destinationIndex >= _editorSaveLinks.Count)
+        {
+            return;
+        }
+
+        (_editorSaveLinks[index], _editorSaveLinks[destinationIndex]) =
+            (_editorSaveLinks[destinationIndex], _editorSaveLinks[index]);
+    }
+
+    private void SetEditorSaveLinkEnsureOnLaunch(int index, bool ensureOnLaunch)
+    {
+        if (!TryGetEditorSaveLink(index, out var entry))
+        {
+            return;
+        }
+
+        entry.EnsureOnLaunch = ensureOnLaunch;
+    }
+
+    private async Task PickEditorSaveLocalPathAsync(int index)
+    {
+        await PickEditorSavePathAsync(
+            index,
+            "ローカルセーブフォルダを選択",
+            "ローカルセーブフォルダが選択されませんでした。",
+            static (entry, selectedPath) => entry.LocalPath = selectedPath);
+    }
+
+    private async Task PickEditorSaveTargetPathAsync(int index)
+    {
+        await PickEditorSavePathAsync(
+            index,
+            "同期先フォルダを選択",
+            "同期先フォルダが選択されませんでした。",
+            static (entry, selectedPath) => entry.TargetPath = selectedPath);
+    }
+
+    private async Task PickEditorSavePathAsync(
+        int index,
+        string pickerTitle,
+        string emptySelectionMessage,
+        Action<EditorSaveLinkEntry, string> applySelectedPath)
+    {
+        if (!TryGetEditorSaveLink(index, out var entry))
+        {
+            return;
+        }
+
+        try
+        {
+            var selectedPath = await PathPickerService.PickFolderPathAsync(pickerTitle);
+            if (!string.IsNullOrWhiteSpace(selectedPath))
+            {
+                applySelectedPath(entry, selectedPath);
+                return;
+            }
+
+            SetNotification(emptySelectionMessage, false);
+        }
+        catch (Exception ex)
+        {
+            SetNotification(ex.Message, false);
+        }
+    }
+
+    private bool IsEditorSaveLinkIndexValid(int index)
+    {
+        return index >= 0 && index < _editorSaveLinks.Count;
+    }
+
+    private bool TryGetEditorSaveLink(int index, out EditorSaveLinkEntry entry)
+    {
+        if (!IsEditorSaveLinkIndexValid(index))
+        {
+            entry = null!;
+            return false;
+        }
+
+        entry = _editorSaveLinks[index];
+        return true;
+    }
+
+    private static string GetEditorSaveLinkPathLabel(string? path)
+    {
+        return string.IsNullOrWhiteSpace(path) ? "未設定" : path;
+    }
+
+    private IReadOnlyList<GameSaveLinkEditInput> BuildEditorSaveLinkInputs()
+    {
+        if (_editorSaveLinks.Count == 0)
+        {
+            return Array.Empty<GameSaveLinkEditInput>();
+        }
+
+        var result = new List<GameSaveLinkEditInput>(_editorSaveLinks.Count);
+        for (var index = 0; index < _editorSaveLinks.Count; index++)
+        {
+            var entry = _editorSaveLinks[index];
+            var localPath = entry.LocalPath?.Trim();
+            var targetPath = entry.TargetPath?.Trim();
+            if (string.IsNullOrWhiteSpace(localPath) && string.IsNullOrWhiteSpace(targetPath))
+            {
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(localPath) || string.IsNullOrWhiteSpace(targetPath))
+            {
+                throw new InvalidOperationException($"セーブリンク {index + 1} はローカルと同期先の両方を設定してください。");
+            }
+
+            result.Add(
+                new GameSaveLinkEditInput(
+                    Id: entry.Id,
+                    DisplayName: string.Empty,
+                    LocalPath: localPath,
+                    TargetPath: targetPath,
+                    EnsureOnLaunch: entry.EnsureOnLaunch));
+        }
+
+        return result;
+    }
+
     private async Task ReloadGamesAsync()
     {
         _games = await GameLibraryService.GetGamesAsync();
+        await RefreshSaveLinksAsync();
         SyncThumbnailCache();
         await RefreshRepositorySyncHistoriesAsync();
         await RefreshGitStatusesAsync();
+    }
+
+    private async Task RefreshSaveLinksAsync()
+    {
+        _saveLinkLoadFailedGameIds.Clear();
+
+        if (_games is null || _games.Count == 0)
+        {
+            _saveLinksByGame.Clear();
+            return;
+        }
+
+        var activeGameIds = _games
+            .Select(static game => game.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var staleGameIds = _saveLinksByGame.Keys
+            .Where(gameId => !activeGameIds.Contains(gameId))
+            .ToArray();
+        foreach (var staleGameId in staleGameIds)
+        {
+            _saveLinksByGame.Remove(staleGameId);
+        }
+
+        foreach (var game in _games)
+        {
+            try
+            {
+                var saveLinks = await SaveLinkService.GetByGameIdAsync(game.Id);
+                _saveLinksByGame[game.Id] = saveLinks;
+            }
+            catch
+            {
+                _saveLinkLoadFailedGameIds.Add(game.Id);
+            }
+        }
+    }
+
+    private string GetSaveLinkSummary(GameCardItem game)
+    {
+        if (_saveLinkLoadFailedGameIds.Contains(game.Id))
+        {
+            return "取得失敗";
+        }
+
+        if (!_saveLinksByGame.TryGetValue(game.Id, out var saveLinks) || saveLinks.Count == 0)
+        {
+            return "未設定";
+        }
+
+        var ensureOnLaunchCount = saveLinks.Count(static link => link.EnsureOnLaunch);
+        return $"{saveLinks.Count}件（起動前チェック: {ensureOnLaunchCount}件）";
     }
 
     private IReadOnlyList<GameCardItem> GetFilteredGames()
@@ -1668,6 +2019,8 @@ else
         UnregisterAllWatchers();
         _pinningGameIds.Clear();
         _thumbnailDataUriCache.Clear();
+        _editorSaveLinks.Clear();
+        _saveLinksByGame.Clear();
         _syncHistoryByRepository.Clear();
         _gitVisualStateByRepository.Clear();
     }
@@ -2327,6 +2680,17 @@ else
         return value
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .FirstOrDefault(static line => !string.IsNullOrWhiteSpace(line));
+    }
+
+    private sealed class EditorSaveLinkEntry
+    {
+        public string? Id { get; set; }
+
+        public string? LocalPath { get; set; }
+
+        public string? TargetPath { get; set; }
+
+        public bool EnsureOnLaunch { get; set; } = true;
     }
 
     private sealed record NotificationHistoryEntry(
