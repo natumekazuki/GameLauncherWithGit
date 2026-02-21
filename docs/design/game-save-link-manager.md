@@ -152,6 +152,8 @@ sequenceDiagram
 - 入力パスは相対パスを許可せず、`LocalPath` / `TargetPath` ともに絶対パス（fully qualified）を必須とする。
 - 入力制約として、`LocalPath` と `TargetPath` は同一パスに加えて **親子関係（祖先/子孫）も禁止** する。
   - 例: `LocalPath=C:\\Games\\Foo\\Save` と `TargetPath=C:\\Games\\Foo\\Save\\OneDriveMirror` は不可。
+- 複数リンク間でも、他リンクの `LocalPath` / `TargetPath` との一致および親子関係を禁止する。
+  - 例: `A->B` と `B->A`、または他リンク `TargetPath` 配下を `LocalPath` にする構成は不可。
 
 ### 8.1 ゲーム新規作成時の保存整合性
 - 新規作成時は `Games` 登録後に `GameSaveLinks` 保存を実行する。

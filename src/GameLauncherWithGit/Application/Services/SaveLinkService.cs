@@ -157,7 +157,7 @@ public sealed class SaveLinkService : ISaveLinkService
 		}
 
 		var normalized = new List<GameSaveLinkItem>(links.Count);
-		var localPathSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		var endpointConstraints = new List<SaveLinkEndpointConstraint>(links.Count * 2);
 		for (var index = 0; index < links.Count; index++)
 		{
 			var entry = links[index];
@@ -185,10 +185,8 @@ public sealed class SaveLinkService : ISaveLinkService
 					$"セーブリンク {index + 1} のローカルパスとターゲットパスは親子関係にできません。別階層のパスを指定してください。");
 			}
 
-			if (!localPathSet.Add(localPath))
-			{
-				throw new InvalidOperationException($"セーブリンク {index + 1} のローカルパスが重複しています。path={localPath}");
-			}
+			EnsureNoCrossLinkPathConflict(index, "ローカルパス", localPath, endpointConstraints);
+			EnsureNoCrossLinkPathConflict(index, "ターゲットパス", targetPath, endpointConstraints);
 
 			var id = string.IsNullOrWhiteSpace(entry.Id)
 				? $"save-link-{Guid.NewGuid():N}"
@@ -205,9 +203,33 @@ public sealed class SaveLinkService : ISaveLinkService
 					TargetPath: targetPath,
 					OrderNo: index,
 					EnsureOnLaunch: entry.EnsureOnLaunch));
+
+			endpointConstraints.Add(new SaveLinkEndpointConstraint(index, "ローカルパス", localPath));
+			endpointConstraints.Add(new SaveLinkEndpointConstraint(index, "ターゲットパス", targetPath));
 		}
 
 		return normalized;
+	}
+
+	private static void EnsureNoCrossLinkPathConflict(
+		int linkIndex,
+		string endpointLabel,
+		string endpointPath,
+		IReadOnlyList<SaveLinkEndpointConstraint> existingEndpoints)
+	{
+		foreach (var existing in existingEndpoints)
+		{
+			if (!IsAncestorOrDescendantPath(endpointPath, existing.Path))
+			{
+				continue;
+			}
+
+			var relation = string.Equals(endpointPath, existing.Path, StringComparison.OrdinalIgnoreCase)
+				? "同一"
+				: "親子関係";
+			throw new InvalidOperationException(
+				$"セーブリンク {linkIndex + 1} の{endpointLabel}が、セーブリンク {existing.LinkIndex + 1} の{existing.Label}と{relation}です。リンク間で Local/Target の重複・相互参照は設定できません。path={endpointPath}, other={existing.Path}");
+		}
 	}
 
 	private static string BuildDefaultDisplayName(string localPath)
@@ -272,4 +294,9 @@ public sealed class SaveLinkService : ISaveLinkService
 			? path
 			: path + Path.DirectorySeparatorChar;
 	}
+
+	private sealed record SaveLinkEndpointConstraint(
+		int LinkIndex,
+		string Label,
+		string Path);
 }
