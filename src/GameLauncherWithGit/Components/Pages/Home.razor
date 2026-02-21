@@ -1470,11 +1470,11 @@ else
             RelatedRepositoryPath: _editorRepositoryPath,
             ThumbnailSourcePath: _editorThumbnailSourcePath,
             ClearThumbnail: _editorClearThumbnail);
-        var saveLinkInputs = BuildEditorSaveLinkInputs();
 
         _isSaving = true;
         try
         {
+            var saveLinkInputs = BuildEditorSaveLinkInputs();
             if (_isEditMode)
             {
                 if (string.IsNullOrWhiteSpace(_editingGameId))

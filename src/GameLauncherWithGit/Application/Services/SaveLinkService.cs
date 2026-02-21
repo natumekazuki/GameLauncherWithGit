@@ -165,6 +165,12 @@ public sealed class SaveLinkService : ISaveLinkService
 					$"セーブリンク {index + 1} のローカルパスとターゲットパスが同一です。別のパスを指定してください。");
 			}
 
+			if (IsAncestorOrDescendantPath(localPath, targetPath))
+			{
+				throw new InvalidOperationException(
+					$"セーブリンク {index + 1} のローカルパスとターゲットパスは親子関係にできません。別階層のパスを指定してください。");
+			}
+
 			if (!localPathSet.Add(localPath))
 			{
 				throw new InvalidOperationException($"セーブリンク {index + 1} のローカルパスが重複しています。path={localPath}");
@@ -212,5 +218,38 @@ public sealed class SaveLinkService : ISaveLinkService
 		{
 			return null;
 		}
+	}
+
+	private static bool IsAncestorOrDescendantPath(string pathA, string pathB)
+	{
+		if (string.IsNullOrWhiteSpace(pathA) || string.IsNullOrWhiteSpace(pathB))
+		{
+			return false;
+		}
+
+		return IsSameOrDescendant(pathA, pathB) || IsSameOrDescendant(pathB, pathA);
+	}
+
+	private static bool IsSameOrDescendant(string basePath, string candidatePath)
+	{
+		if (string.Equals(basePath, candidatePath, StringComparison.OrdinalIgnoreCase))
+		{
+			return true;
+		}
+
+		var normalizedBasePath = EnsureTrailingDirectorySeparator(basePath);
+		return candidatePath.StartsWith(normalizedBasePath, StringComparison.OrdinalIgnoreCase);
+	}
+
+	private static string EnsureTrailingDirectorySeparator(string path)
+	{
+		if (string.IsNullOrEmpty(path))
+		{
+			return path;
+		}
+
+		return path.EndsWith(Path.DirectorySeparatorChar)
+			? path
+			: path + Path.DirectorySeparatorChar;
 	}
 }

@@ -147,6 +147,8 @@ sequenceDiagram
 ```
 
 - 既存データ移行時に同名ファイル競合がある場合は **停止** し、既存ローカルフォルダへロールバックする。
+- 入力制約として、`LocalPath` と `TargetPath` は同一パスに加えて **親子関係（祖先/子孫）も禁止** する。
+  - 例: `LocalPath=C:\\Games\\Foo\\Save` と `TargetPath=C:\\Games\\Foo\\Save\\OneDriveMirror` は不可。
 
 ## 9. UI 設計（Home.razor 拡張）
 - ゲーム編集モーダルに `セーブリンク（複数）` セクションを追加。
