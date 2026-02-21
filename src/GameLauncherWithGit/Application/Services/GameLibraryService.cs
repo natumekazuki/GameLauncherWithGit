@@ -123,28 +123,16 @@ public sealed class GameLibraryService : IGameLibraryService
 
 	public async Task<GameCardItem?> UpdateAsync(string gameId, GameEditInput input, CancellationToken cancellationToken = default)
 	{
-		var game = await _store.FindByIdAsync(gameId, cancellationToken);
-		if (game is null)
+		var updateContext = await PrepareUpdateContextAsync(gameId, input, cancellationToken);
+		if (updateContext is null)
 		{
 			return null;
 		}
 
-		var normalizedInput = NormalizeInput(input);
-		await EnsureRepositoryPathIsGitAsync(normalizedInput.RelatedRepositoryPath, cancellationToken);
-		var thumbnailPath = normalizedInput.ClearThumbnail
-			? null
-			: await TryCreateThumbnailAsync(
-				sourceImagePath: normalizedInput.ThumbnailSourcePath,
-				fallbackPath: game.ThumbnailPath,
-				cancellationToken);
-
-		var updated = game with
-		{
-			Title = normalizedInput.Title,
-			ExecutablePath = normalizedInput.ExecutablePath,
-			RelatedRepositoryPath = normalizedInput.RelatedRepositoryPath,
-			ThumbnailPath = thumbnailPath
-		};
+		var updated = await BuildUpdatedGameAsync(
+			updateContext.Original,
+			updateContext.NormalizedInput,
+			cancellationToken);
 
 		await _store.UpsertAsync(updated, cancellationToken);
 		return updated;
@@ -156,32 +144,57 @@ public sealed class GameLibraryService : IGameLibraryService
 		IReadOnlyList<GameSaveLinkEditInput> saveLinks,
 		CancellationToken cancellationToken = default)
 	{
-		var game = await _store.FindByIdAsync(gameId, cancellationToken);
-		if (game is null)
+		var updateContext = await PrepareUpdateContextAsync(gameId, input, cancellationToken);
+		if (updateContext is null)
+		{
+			return null;
+		}
+
+		var normalizedSaveLinks = _saveLinkService.NormalizeForGame(gameId, saveLinks);
+		var updated = await BuildUpdatedGameAsync(
+			updateContext.Original,
+			updateContext.NormalizedInput,
+			cancellationToken);
+
+		await _store.UpsertWithSaveLinksAsync(updated, normalizedSaveLinks, cancellationToken);
+		return updated;
+	}
+
+	private async Task<PreparedUpdateContext?> PrepareUpdateContextAsync(
+		string gameId,
+		GameEditInput input,
+		CancellationToken cancellationToken)
+	{
+		var original = await _store.FindByIdAsync(gameId, cancellationToken);
+		if (original is null)
 		{
 			return null;
 		}
 
 		var normalizedInput = NormalizeInput(input);
 		await EnsureRepositoryPathIsGitAsync(normalizedInput.RelatedRepositoryPath, cancellationToken);
-		var normalizedSaveLinks = _saveLinkService.NormalizeForGame(gameId, saveLinks);
+		return new PreparedUpdateContext(original, normalizedInput);
+	}
+
+	private async Task<GameCardItem> BuildUpdatedGameAsync(
+		GameCardItem original,
+		GameEditInput normalizedInput,
+		CancellationToken cancellationToken)
+	{
 		var thumbnailPath = normalizedInput.ClearThumbnail
 			? null
 			: await TryCreateThumbnailAsync(
 				sourceImagePath: normalizedInput.ThumbnailSourcePath,
-				fallbackPath: game.ThumbnailPath,
+				fallbackPath: original.ThumbnailPath,
 				cancellationToken);
 
-		var updated = game with
+		return original with
 		{
 			Title = normalizedInput.Title,
 			ExecutablePath = normalizedInput.ExecutablePath,
 			RelatedRepositoryPath = normalizedInput.RelatedRepositoryPath,
 			ThumbnailPath = thumbnailPath
 		};
-
-		await _store.UpsertWithSaveLinksAsync(updated, normalizedSaveLinks, cancellationToken);
-		return updated;
 	}
 
 	private async Task<string> BuildUniqueGameIdAsync(string title, CancellationToken cancellationToken)
@@ -360,4 +373,8 @@ public sealed class GameLibraryService : IGameLibraryService
 			_logger.LogWarning(ex, "Failed to delete thumbnail file. path={ThumbnailPath}", normalizedPath);
 		}
 	}
+
+	private sealed record PreparedUpdateContext(
+		GameCardItem Original,
+		GameEditInput NormalizedInput);
 }

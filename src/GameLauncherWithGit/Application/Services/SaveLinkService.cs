@@ -156,59 +156,17 @@ public sealed class SaveLinkService : ISaveLinkService
 			return Array.Empty<GameSaveLinkItem>();
 		}
 
-		var normalized = new List<GameSaveLinkItem>(links.Count);
-		var endpointConstraints = new List<SaveLinkEndpointConstraint>(links.Count * 2);
+		var normalizedInputs = new List<NormalizedSaveLinkInput>(links.Count);
 		for (var index = 0; index < links.Count; index++)
 		{
 			var entry = links[index];
-			var localPath = NormalizeAbsolutePath(entry.LocalPath);
-			var targetPath = NormalizeAbsolutePath(entry.TargetPath);
-			if (string.IsNullOrWhiteSpace(localPath))
-			{
-				throw new InvalidOperationException($"セーブリンク {index + 1} のローカルパスが未設定です。");
-			}
-
-			if (string.IsNullOrWhiteSpace(targetPath))
-			{
-				throw new InvalidOperationException($"セーブリンク {index + 1} のターゲットパスが未設定です。");
-			}
-
-			if (string.Equals(localPath, targetPath, StringComparison.OrdinalIgnoreCase))
-			{
-				throw new InvalidOperationException(
-					$"セーブリンク {index + 1} のローカルパスとターゲットパスが同一です。別のパスを指定してください。");
-			}
-
-			if (IsAncestorOrDescendantPath(localPath, targetPath))
-			{
-				throw new InvalidOperationException(
-					$"セーブリンク {index + 1} のローカルパスとターゲットパスは親子関係にできません。別階層のパスを指定してください。");
-			}
-
-			EnsureNoCrossLinkPathConflict(index, "ローカルパス", localPath, endpointConstraints);
-			EnsureNoCrossLinkPathConflict(index, "ターゲットパス", targetPath, endpointConstraints);
-
-			var id = string.IsNullOrWhiteSpace(entry.Id)
-				? $"save-link-{Guid.NewGuid():N}"
-				: entry.Id.Trim();
-			var displayName = string.IsNullOrWhiteSpace(entry.DisplayName)
-				? BuildDefaultDisplayName(localPath)
-				: entry.DisplayName.Trim();
-			normalized.Add(
-				new GameSaveLinkItem(
-					Id: id,
-					GameId: gameId,
-					DisplayName: displayName,
-					LocalPath: localPath,
-					TargetPath: targetPath,
-					OrderNo: index,
-					EnsureOnLaunch: entry.EnsureOnLaunch));
-
-			endpointConstraints.Add(new SaveLinkEndpointConstraint(index, "ローカルパス", localPath));
-			endpointConstraints.Add(new SaveLinkEndpointConstraint(index, "ターゲットパス", targetPath));
+			normalizedInputs.Add(NormalizeSingleInput(index, entry));
 		}
 
-		return normalized;
+		ValidateCrossLinkEndpointConflicts(normalizedInputs);
+		return normalizedInputs
+			.Select(input => ToGameSaveLinkItem(gameId, input))
+			.ToArray();
 	}
 
 	private static void EnsureNoCrossLinkPathConflict(
@@ -230,6 +188,71 @@ public sealed class SaveLinkService : ISaveLinkService
 			throw new InvalidOperationException(
 				$"セーブリンク {linkIndex + 1} の{endpointLabel}が、セーブリンク {existing.LinkIndex + 1} の{existing.Label}と{relation}です。リンク間で Local/Target の重複・相互参照は設定できません。path={endpointPath}, other={existing.Path}");
 		}
+	}
+
+	private static NormalizedSaveLinkInput NormalizeSingleInput(int index, GameSaveLinkEditInput entry)
+	{
+		var localPath = NormalizeAbsolutePath(entry.LocalPath);
+		var targetPath = NormalizeAbsolutePath(entry.TargetPath);
+		if (string.IsNullOrWhiteSpace(localPath))
+		{
+			throw new InvalidOperationException($"セーブリンク {index + 1} のローカルパスが未設定です。");
+		}
+
+		if (string.IsNullOrWhiteSpace(targetPath))
+		{
+			throw new InvalidOperationException($"セーブリンク {index + 1} のターゲットパスが未設定です。");
+		}
+
+		if (string.Equals(localPath, targetPath, StringComparison.OrdinalIgnoreCase))
+		{
+			throw new InvalidOperationException(
+				$"セーブリンク {index + 1} のローカルパスとターゲットパスが同一です。別のパスを指定してください。");
+		}
+
+		if (IsAncestorOrDescendantPath(localPath, targetPath))
+		{
+			throw new InvalidOperationException(
+				$"セーブリンク {index + 1} のローカルパスとターゲットパスは親子関係にできません。別階層のパスを指定してください。");
+		}
+
+		var id = string.IsNullOrWhiteSpace(entry.Id)
+			? $"save-link-{Guid.NewGuid():N}"
+			: entry.Id.Trim();
+		var displayName = string.IsNullOrWhiteSpace(entry.DisplayName)
+			? BuildDefaultDisplayName(localPath)
+			: entry.DisplayName.Trim();
+		return new NormalizedSaveLinkInput(
+			Index: index,
+			Id: id,
+			DisplayName: displayName,
+			LocalPath: localPath,
+			TargetPath: targetPath,
+			EnsureOnLaunch: entry.EnsureOnLaunch);
+	}
+
+	private static void ValidateCrossLinkEndpointConflicts(IReadOnlyList<NormalizedSaveLinkInput> normalizedInputs)
+	{
+		var endpointConstraints = new List<SaveLinkEndpointConstraint>(normalizedInputs.Count * 2);
+		foreach (var input in normalizedInputs)
+		{
+			EnsureNoCrossLinkPathConflict(input.Index, "ローカルパス", input.LocalPath, endpointConstraints);
+			EnsureNoCrossLinkPathConflict(input.Index, "ターゲットパス", input.TargetPath, endpointConstraints);
+			endpointConstraints.Add(new SaveLinkEndpointConstraint(input.Index, "ローカルパス", input.LocalPath));
+			endpointConstraints.Add(new SaveLinkEndpointConstraint(input.Index, "ターゲットパス", input.TargetPath));
+		}
+	}
+
+	private static GameSaveLinkItem ToGameSaveLinkItem(string gameId, NormalizedSaveLinkInput input)
+	{
+		return new GameSaveLinkItem(
+			Id: input.Id,
+			GameId: gameId,
+			DisplayName: input.DisplayName,
+			LocalPath: input.LocalPath,
+			TargetPath: input.TargetPath,
+			OrderNo: input.Index,
+			EnsureOnLaunch: input.EnsureOnLaunch);
 	}
 
 	private static string BuildDefaultDisplayName(string localPath)
@@ -299,4 +322,12 @@ public sealed class SaveLinkService : ISaveLinkService
 		int LinkIndex,
 		string Label,
 		string Path);
+
+	private sealed record NormalizedSaveLinkInput(
+		int Index,
+		string Id,
+		string DisplayName,
+		string LocalPath,
+		string TargetPath,
+		bool EnsureOnLaunch);
 }
