@@ -19,21 +19,14 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 		string targetPath,
 		CancellationToken cancellationToken = default)
 	{
-		var normalizedLocalPath = NormalizeAbsolutePath(localPath);
-		if (string.IsNullOrWhiteSpace(normalizedLocalPath))
+		if (!TryNormalizeDistinctPaths(
+			localPath,
+			targetPath,
+			out var normalizedLocalPath,
+			out var normalizedTargetPath,
+			out var validationError))
 		{
-			return new JunctionEnsureResult(false, $"ローカルパスが不正です。path={localPath}");
-		}
-
-		var normalizedTargetPath = NormalizeAbsolutePath(targetPath);
-		if (string.IsNullOrWhiteSpace(normalizedTargetPath))
-		{
-			return new JunctionEnsureResult(false, $"ターゲットパスが不正です。path={targetPath}");
-		}
-
-		if (string.Equals(normalizedLocalPath, normalizedTargetPath, StringComparison.OrdinalIgnoreCase))
-		{
-			return new JunctionEnsureResult(false, "ローカルパスとターゲットパスが同一です。");
+			return new JunctionEnsureResult(false, validationError);
 		}
 
 #if !WINDOWS
@@ -108,21 +101,14 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 		string targetPath,
 		CancellationToken cancellationToken = default)
 	{
-		var normalizedLocalPath = NormalizeAbsolutePath(localPath);
-		if (string.IsNullOrWhiteSpace(normalizedLocalPath))
+		if (!TryNormalizeDistinctPaths(
+			localPath,
+			targetPath,
+			out var normalizedLocalPath,
+			out var normalizedTargetPath,
+			out var validationError))
 		{
-			return new JunctionRemoveResult(false, $"ローカルパスが不正です。path={localPath}");
-		}
-
-		var normalizedTargetPath = NormalizeAbsolutePath(targetPath);
-		if (string.IsNullOrWhiteSpace(normalizedTargetPath))
-		{
-			return new JunctionRemoveResult(false, $"ターゲットパスが不正です。path={targetPath}");
-		}
-
-		if (string.Equals(normalizedLocalPath, normalizedTargetPath, StringComparison.OrdinalIgnoreCase))
-		{
-			return new JunctionRemoveResult(false, "ローカルパスとターゲットパスが同一です。");
+			return new JunctionRemoveResult(false, validationError);
 		}
 
 #if !WINDOWS
@@ -278,21 +264,14 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 		string targetPath,
 		CancellationToken cancellationToken = default)
 	{
-		var normalizedLocalPath = NormalizeAbsolutePath(localPath);
-		if (string.IsNullOrWhiteSpace(normalizedLocalPath))
+		if (!TryNormalizeDistinctPaths(
+			localPath,
+			targetPath,
+			out var normalizedLocalPath,
+			out var normalizedTargetPath,
+			out var validationError))
 		{
-			return new JunctionEnsureResult(false, $"ローカルパスが不正です。path={localPath}");
-		}
-
-		var normalizedTargetPath = NormalizeAbsolutePath(targetPath);
-		if (string.IsNullOrWhiteSpace(normalizedTargetPath))
-		{
-			return new JunctionEnsureResult(false, $"ターゲットパスが不正です。path={targetPath}");
-		}
-
-		if (string.Equals(normalizedLocalPath, normalizedTargetPath, StringComparison.OrdinalIgnoreCase))
-		{
-			return new JunctionEnsureResult(false, "ローカルパスとターゲットパスが同一です。");
+			return new JunctionEnsureResult(false, validationError);
 		}
 
 #if !WINDOWS
@@ -866,6 +845,38 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 		IReadOnlyList<string> CreatedDirectories,
 		IReadOnlyList<string> CreatedFiles);
 #endif
+
+	private static bool TryNormalizeDistinctPaths(
+		string localPath,
+		string targetPath,
+		out string normalizedLocalPath,
+		out string normalizedTargetPath,
+		out string errorMessage)
+	{
+		normalizedLocalPath = NormalizeAbsolutePath(localPath) ?? string.Empty;
+		if (string.IsNullOrWhiteSpace(normalizedLocalPath))
+		{
+			normalizedTargetPath = string.Empty;
+			errorMessage = $"ローカルパスが不正です。path={localPath}";
+			return false;
+		}
+
+		normalizedTargetPath = NormalizeAbsolutePath(targetPath) ?? string.Empty;
+		if (string.IsNullOrWhiteSpace(normalizedTargetPath))
+		{
+			errorMessage = $"ターゲットパスが不正です。path={targetPath}";
+			return false;
+		}
+
+		if (string.Equals(normalizedLocalPath, normalizedTargetPath, StringComparison.OrdinalIgnoreCase))
+		{
+			errorMessage = "ローカルパスとターゲットパスが同一です。";
+			return false;
+		}
+
+		errorMessage = string.Empty;
+		return true;
+	}
 
 	private static string? NormalizeAbsolutePath(string path)
 	{

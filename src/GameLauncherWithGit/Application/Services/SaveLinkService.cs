@@ -79,26 +79,26 @@ public sealed class SaveLinkService : ISaveLinkService
 		}
 
 		var nextLinkKeys = BuildLinkEndpointKeySet(nextLinks);
+		var removedLinks = BuildRemovedLinks(existingLinks, nextLinkKeys);
+		if (removedLinks.Count == 0)
+		{
+			return Array.Empty<GameSaveLinkItem>();
+		}
+
 		var unlinkedLinks = new List<GameSaveLinkItem>();
-		foreach (var existingLink in existingLinks.OrderBy(static link => link.OrderNo))
+		foreach (var removedLink in removedLinks)
 		{
 			cancellationToken.ThrowIfCancellationRequested();
 
-			var existingKey = BuildLinkEndpointKey(existingLink.LocalPath, existingLink.TargetPath);
-			if (nextLinkKeys.Contains(existingKey))
-			{
-				continue;
-			}
-
 			var removeResult = await _localSaveLinkOperator.RemoveJunctionWithRestoreAsync(
-				existingLink.LocalPath,
-				existingLink.TargetPath,
+				removedLink.LocalPath,
+				removedLink.TargetPath,
 				cancellationToken);
 			if (removeResult.IsSuccess)
 			{
 				if (removeResult.DidChangeLocalPath)
 				{
-					unlinkedLinks.Add(existingLink);
+					unlinkedLinks.Add(removedLink);
 				}
 
 				continue;
@@ -107,25 +107,21 @@ public sealed class SaveLinkService : ISaveLinkService
 			_logger.LogWarning(
 				"Save-link unlink failed. gameId={GameId}, linkId={LinkId}, localPath={LocalPath}, targetPath={TargetPath}, reason={Reason}",
 				normalizedGameId,
-				existingLink.Id,
-				existingLink.LocalPath,
-				existingLink.TargetPath,
+				removedLink.Id,
+				removedLink.LocalPath,
+				removedLink.TargetPath,
 				removeResult.Message);
 
 			if (removeResult.DidChangeLocalPath)
 			{
-				unlinkedLinks.Add(existingLink);
+				unlinkedLinks.Add(removedLink);
 			}
 
-			var rollbackError = await RollbackUnlinkedLinksAsync(normalizedGameId, unlinkedLinks, cancellationToken);
-			if (string.IsNullOrWhiteSpace(rollbackError))
-			{
-				throw new InvalidOperationException(
-					$"セーブリンク解除に失敗したため、先行解除分をロールバックしました。local={existingLink.LocalPath}, target={existingLink.TargetPath}, reason={removeResult.Message}");
-			}
-
-			throw new InvalidOperationException(
-				$"セーブリンク解除に失敗し、先行解除分ロールバックにも失敗しました。local={existingLink.LocalPath}, target={existingLink.TargetPath}, reason={removeResult.Message}, rollbackReason={rollbackError}");
+			throw await BuildUnlinkFailureExceptionAsync(
+				normalizedGameId,
+				removedLink,
+				removeResult.Message,
+				unlinkedLinks);
 		}
 
 		return unlinkedLinks.ToArray();
@@ -426,6 +422,47 @@ public sealed class SaveLinkService : ISaveLinkService
 		return rollbackErrors.Count == 0
 			? null
 			: string.Join(" | ", rollbackErrors);
+	}
+
+	private async Task<InvalidOperationException> BuildUnlinkFailureExceptionAsync(
+		string gameId,
+		GameSaveLinkItem failedLink,
+		string failureReason,
+		IReadOnlyList<GameSaveLinkItem> unlinkedLinks)
+	{
+		var rollbackError = await RollbackUnlinkedLinksAsync(gameId, unlinkedLinks, CancellationToken.None);
+		if (string.IsNullOrWhiteSpace(rollbackError))
+		{
+			return new InvalidOperationException(
+				$"セーブリンク解除に失敗したため、先行解除分をロールバックしました。local={failedLink.LocalPath}, target={failedLink.TargetPath}, reason={failureReason}");
+		}
+
+		return new InvalidOperationException(
+			$"セーブリンク解除に失敗し、先行解除分ロールバックにも失敗しました。local={failedLink.LocalPath}, target={failedLink.TargetPath}, reason={failureReason}, rollbackReason={rollbackError}");
+	}
+
+	private static IReadOnlyList<GameSaveLinkItem> BuildRemovedLinks(
+		IReadOnlyList<GameSaveLinkItem> existingLinks,
+		IReadOnlySet<string> nextLinkKeys)
+	{
+		if (existingLinks.Count == 0)
+		{
+			return Array.Empty<GameSaveLinkItem>();
+		}
+
+		var removedLinks = new List<GameSaveLinkItem>(existingLinks.Count);
+		foreach (var existingLink in existingLinks.OrderBy(static link => link.OrderNo))
+		{
+			var existingKey = BuildLinkEndpointKey(existingLink.LocalPath, existingLink.TargetPath);
+			if (nextLinkKeys.Contains(existingKey))
+			{
+				continue;
+			}
+
+			removedLinks.Add(existingLink);
+		}
+
+		return removedLinks;
 	}
 
 	private static HashSet<string> BuildLinkEndpointKeySet(IReadOnlyList<GameSaveLinkItem>? links)
