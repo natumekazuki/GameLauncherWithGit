@@ -130,24 +130,28 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 #else
 		try
 		{
-			if (File.Exists(normalizedLocalPath) && !Directory.Exists(normalizedLocalPath))
+			if (!TryGetPathAttributes(normalizedLocalPath, out var localAttributes))
+			{
+				return new JunctionRemoveResult(true, "ローカルパスが存在しないため解除不要です。");
+			}
+
+			if (!localAttributes.HasFlag(FileAttributes.Directory))
 			{
 				return new JunctionRemoveResult(
 					false,
 					$"ローカルパスがディレクトリではありません。path={normalizedLocalPath}");
 			}
 
-			if (!Directory.Exists(normalizedLocalPath))
-			{
-				return new JunctionRemoveResult(true, "ローカルパスが存在しないため解除不要です。");
-			}
-
 			var resolvedLinkTarget = ResolveDirectoryLinkTarget(normalizedLocalPath);
 			if (string.IsNullOrWhiteSpace(resolvedLinkTarget))
 			{
-				var localInfo = new DirectoryInfo(normalizedLocalPath);
-				if (localInfo.Attributes.HasFlag(FileAttributes.ReparsePoint))
+				if (localAttributes.HasFlag(FileAttributes.ReparsePoint))
 				{
+					if (!Directory.Exists(normalizedTargetPath))
+					{
+						return await RemoveBrokenJunctionAsync(normalizedLocalPath, normalizedTargetPath);
+					}
+
 					return new JunctionRemoveResult(
 						false,
 						$"ローカルパスのリンク先を解決できません。手動確認してください。path={normalizedLocalPath}");
@@ -270,6 +274,7 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 		{
 			if (copyResult.IsCanceled)
 			{
+				TryDeleteDirectory(restorePath);
 				throw new OperationCanceledException(copyResult.Message, cancellationToken);
 			}
 
@@ -313,6 +318,25 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 			return new JunctionRemoveResult(
 				false,
 				$"ジャンクション解除に失敗しました。local={localPath}, target={targetPath}, reason={ex.Message}{restoreHint}");
+		}
+	}
+
+	private async Task<JunctionRemoveResult> RemoveBrokenJunctionAsync(string localPath, string targetPath)
+	{
+		try
+		{
+			Directory.Delete(localPath);
+			Directory.CreateDirectory(localPath);
+			return new JunctionRemoveResult(
+				true,
+				"リンク先が消失したジャンクションを解除し、空のローカルフォルダを復元しました。");
+		}
+		catch (Exception ex)
+		{
+			await TryRecreateJunctionAsync(localPath, targetPath);
+			return new JunctionRemoveResult(
+				false,
+				$"リンク先消失ジャンクションの解除に失敗しました。local={localPath}, target={targetPath}, reason={ex.Message}");
 		}
 	}
 
@@ -769,6 +793,20 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 		}
 
 		return trimmed.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+	}
+
+	private static bool TryGetPathAttributes(string path, out FileAttributes attributes)
+	{
+		try
+		{
+			attributes = File.GetAttributes(path);
+			return true;
+		}
+		catch
+		{
+			attributes = default;
+			return false;
+		}
 	}
 
 	private static string? FirstNonEmptyLine(string value)
