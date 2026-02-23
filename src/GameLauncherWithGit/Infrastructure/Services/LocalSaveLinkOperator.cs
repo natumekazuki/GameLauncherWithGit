@@ -273,6 +273,108 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 			totalBytes);
 	}
 
+	public async Task<JunctionEnsureResult> RestoreJunctionAsync(
+		string localPath,
+		string targetPath,
+		CancellationToken cancellationToken = default)
+	{
+		var normalizedLocalPath = NormalizeAbsolutePath(localPath);
+		if (string.IsNullOrWhiteSpace(normalizedLocalPath))
+		{
+			return new JunctionEnsureResult(false, $"ローカルパスが不正です。path={localPath}");
+		}
+
+		var normalizedTargetPath = NormalizeAbsolutePath(targetPath);
+		if (string.IsNullOrWhiteSpace(normalizedTargetPath))
+		{
+			return new JunctionEnsureResult(false, $"ターゲットパスが不正です。path={targetPath}");
+		}
+
+		if (string.Equals(normalizedLocalPath, normalizedTargetPath, StringComparison.OrdinalIgnoreCase))
+		{
+			return new JunctionEnsureResult(false, "ローカルパスとターゲットパスが同一です。");
+		}
+
+#if !WINDOWS
+		return new JunctionEnsureResult(false, "ジャンクション操作は Windows でのみ利用できます。");
+#else
+		try
+		{
+			if (!Directory.Exists(normalizedTargetPath))
+			{
+				return new JunctionEnsureResult(
+					false,
+					$"ターゲットディレクトリが存在しません。path={normalizedTargetPath}");
+			}
+
+			if (File.Exists(normalizedLocalPath) && !Directory.Exists(normalizedLocalPath))
+			{
+				return new JunctionEnsureResult(
+					false,
+					$"ローカルパスがディレクトリではありません。path={normalizedLocalPath}");
+			}
+
+			if (Directory.Exists(normalizedLocalPath))
+			{
+				var resolvedLinkTarget = ResolveDirectoryLinkTarget(normalizedLocalPath);
+				if (!string.IsNullOrWhiteSpace(resolvedLinkTarget))
+				{
+					if (AreEquivalentDirectoryPaths(resolvedLinkTarget, normalizedTargetPath))
+					{
+						return new JunctionEnsureResult(true, "既存ジャンクションを利用します。");
+					}
+
+					return new JunctionEnsureResult(
+						false,
+						$"ローカルパスは別のリンク先を指しています。path={normalizedLocalPath}, actual={resolvedLinkTarget}, expected={normalizedTargetPath}");
+				}
+
+				var localInfo = new DirectoryInfo(normalizedLocalPath);
+				if (localInfo.Attributes.HasFlag(FileAttributes.ReparsePoint))
+				{
+					return new JunctionEnsureResult(
+						false,
+						$"ローカルパスのリンク先を解決できません。手動確認してください。path={normalizedLocalPath}");
+				}
+
+				Directory.Delete(normalizedLocalPath, recursive: true);
+			}
+
+			var localParentPath = Path.GetDirectoryName(normalizedLocalPath);
+			if (!string.IsNullOrWhiteSpace(localParentPath))
+			{
+				Directory.CreateDirectory(localParentPath);
+			}
+
+			var createResult = await CreateJunctionAsync(
+				normalizedLocalPath,
+				normalizedTargetPath,
+				cancellationToken);
+			if (!createResult.IsSuccess)
+			{
+				return createResult;
+			}
+
+			return new JunctionEnsureResult(true, "ロールバックのためジャンクションを再作成しました。");
+		}
+		catch (OperationCanceledException)
+		{
+			throw;
+		}
+		catch (Exception ex)
+		{
+			_logger.LogWarning(
+				ex,
+				"Junction restore failed unexpectedly. localPath={LocalPath}, targetPath={TargetPath}",
+				normalizedLocalPath,
+				normalizedTargetPath);
+			return new JunctionEnsureResult(
+				false,
+				$"ジャンクション再作成に失敗しました。local={normalizedLocalPath}, target={normalizedTargetPath}, reason={ex.Message}");
+		}
+#endif
+	}
+
 #if WINDOWS
 	private async Task<JunctionRemoveResult> RemoveJunctionAndRestoreDirectoryAsync(
 		string localPath,

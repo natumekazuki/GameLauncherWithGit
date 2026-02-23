@@ -79,6 +79,7 @@ public sealed class SaveLinkService : ISaveLinkService
 		}
 
 		var nextLinkKeys = BuildLinkEndpointKeySet(nextLinks);
+		var unlinkedLinks = new List<GameSaveLinkItem>();
 		foreach (var existingLink in existingLinks.OrderBy(static link => link.OrderNo))
 		{
 			cancellationToken.ThrowIfCancellationRequested();
@@ -95,6 +96,7 @@ public sealed class SaveLinkService : ISaveLinkService
 				cancellationToken);
 			if (removeResult.IsSuccess)
 			{
+				unlinkedLinks.Add(existingLink);
 				continue;
 			}
 
@@ -105,8 +107,16 @@ public sealed class SaveLinkService : ISaveLinkService
 				existingLink.LocalPath,
 				existingLink.TargetPath,
 				removeResult.Message);
+
+			var rollbackError = await TryRollbackUnlinkedLinksAsync(normalizedGameId, unlinkedLinks);
+			if (string.IsNullOrWhiteSpace(rollbackError))
+			{
+				throw new InvalidOperationException(
+					$"セーブリンク解除に失敗したため、先行解除分をロールバックしました。local={existingLink.LocalPath}, target={existingLink.TargetPath}, reason={removeResult.Message}");
+			}
+
 			throw new InvalidOperationException(
-				$"セーブリンク解除に失敗しました。local={existingLink.LocalPath}, target={existingLink.TargetPath}, reason={removeResult.Message}");
+				$"セーブリンク解除に失敗し、先行解除分ロールバックにも失敗しました。local={existingLink.LocalPath}, target={existingLink.TargetPath}, reason={removeResult.Message}, rollbackReason={rollbackError}");
 		}
 	}
 
@@ -353,6 +363,57 @@ public sealed class SaveLinkService : ISaveLinkService
 
 		var normalizedBasePath = EnsureTrailingDirectorySeparator(basePath);
 		return candidatePath.StartsWith(normalizedBasePath, StringComparison.OrdinalIgnoreCase);
+	}
+
+	private async Task<string?> TryRollbackUnlinkedLinksAsync(
+		string gameId,
+		IReadOnlyList<GameSaveLinkItem> unlinkedLinks)
+	{
+		if (unlinkedLinks.Count == 0)
+		{
+			return null;
+		}
+
+		var rollbackErrors = new List<string>();
+		for (var index = unlinkedLinks.Count - 1; index >= 0; index--)
+		{
+			var link = unlinkedLinks[index];
+			try
+			{
+				var restoreResult = await _localSaveLinkOperator.RestoreJunctionAsync(
+					link.LocalPath,
+					link.TargetPath,
+					CancellationToken.None);
+				if (restoreResult.IsSuccess)
+				{
+					continue;
+				}
+
+				rollbackErrors.Add($"link={link.Id}, reason={restoreResult.Message}");
+				_logger.LogWarning(
+					"Save-link rollback failed. gameId={GameId}, linkId={LinkId}, localPath={LocalPath}, targetPath={TargetPath}, reason={Reason}",
+					gameId,
+					link.Id,
+					link.LocalPath,
+					link.TargetPath,
+					restoreResult.Message);
+			}
+			catch (Exception ex)
+			{
+				rollbackErrors.Add($"link={link.Id}, reason={ex.Message}");
+				_logger.LogWarning(
+					ex,
+					"Save-link rollback failed unexpectedly. gameId={GameId}, linkId={LinkId}, localPath={LocalPath}, targetPath={TargetPath}",
+					gameId,
+					link.Id,
+					link.LocalPath,
+					link.TargetPath);
+			}
+		}
+
+		return rollbackErrors.Count == 0
+			? null
+			: string.Join(" | ", rollbackErrors);
 	}
 
 	private static HashSet<string> BuildLinkEndpointKeySet(IReadOnlyList<GameSaveLinkItem>? links)
