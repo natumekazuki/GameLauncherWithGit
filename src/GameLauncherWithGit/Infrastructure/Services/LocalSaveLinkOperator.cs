@@ -55,7 +55,7 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 				var resolvedLinkTarget = ResolveDirectoryLinkTarget(normalizedLocalPath);
 				if (!string.IsNullOrWhiteSpace(resolvedLinkTarget))
 				{
-					if (string.Equals(resolvedLinkTarget, normalizedTargetPath, StringComparison.OrdinalIgnoreCase))
+					if (AreEquivalentDirectoryPaths(resolvedLinkTarget, normalizedTargetPath))
 					{
 						return new JunctionEnsureResult(true, "既存ジャンクションを利用します。");
 					}
@@ -156,7 +156,7 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 				return new JunctionRemoveResult(true, "ローカルパスは通常フォルダのため解除不要です。");
 			}
 
-			if (!string.Equals(resolvedLinkTarget, normalizedTargetPath, StringComparison.OrdinalIgnoreCase))
+			if (!AreEquivalentDirectoryPaths(resolvedLinkTarget, normalizedTargetPath))
 			{
 				return new JunctionRemoveResult(
 					false,
@@ -679,13 +679,15 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 	private static string BuildBackupPath(string localPath)
 	{
 		var timestamp = DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmss");
-		return $"{localPath}.backup-{timestamp}-{Guid.NewGuid():N}";
+		var normalizedLocalPath = NormalizeDirectoryPathForComparison(localPath);
+		return $"{normalizedLocalPath}.backup-{timestamp}-{Guid.NewGuid():N}";
 	}
 
 	private static string BuildRestorePath(string localPath)
 	{
 		var timestamp = DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmss");
-		return $"{localPath}.restore-{timestamp}-{Guid.NewGuid():N}";
+		var normalizedLocalPath = NormalizeDirectoryPathForComparison(localPath);
+		return $"{normalizedLocalPath}.restore-{timestamp}-{Guid.NewGuid():N}";
 	}
 
 	private static string? ResolveDirectoryLinkTarget(string localPath)
@@ -736,6 +738,37 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 		{
 			return null;
 		}
+	}
+
+	private static bool AreEquivalentDirectoryPaths(string pathA, string pathB)
+	{
+		var normalizedPathA = NormalizeDirectoryPathForComparison(pathA);
+		var normalizedPathB = NormalizeDirectoryPathForComparison(pathB);
+		return string.Equals(normalizedPathA, normalizedPathB, StringComparison.OrdinalIgnoreCase);
+	}
+
+	private static string NormalizeDirectoryPathForComparison(string path)
+	{
+		var normalizedPath = NormalizeAbsolutePath(path) ?? path.Trim();
+		return TrimTrailingDirectorySeparators(normalizedPath);
+	}
+
+	private static string TrimTrailingDirectorySeparators(string path)
+	{
+		var trimmed = path.Trim();
+		if (string.IsNullOrWhiteSpace(trimmed))
+		{
+			return string.Empty;
+		}
+
+		var root = Path.GetPathRoot(trimmed);
+		if (!string.IsNullOrWhiteSpace(root)
+			&& string.Equals(trimmed, root, StringComparison.OrdinalIgnoreCase))
+		{
+			return trimmed;
+		}
+
+		return trimmed.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 	}
 
 	private static string? FirstNonEmptyLine(string value)
