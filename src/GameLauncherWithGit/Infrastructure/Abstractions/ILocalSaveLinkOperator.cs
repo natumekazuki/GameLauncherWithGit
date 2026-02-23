@@ -9,6 +9,16 @@ public interface ILocalSaveLinkOperator
 		string targetPath,
 		CancellationToken cancellationToken = default);
 
+	Task<JunctionRemoveResult> RemoveJunctionWithRestoreAsync(
+		string localPath,
+		string targetPath,
+		CancellationToken cancellationToken = default);
+
+	Task<JunctionEnsureResult> RestoreJunctionAsync(
+		string localPath,
+		string targetPath,
+		CancellationToken cancellationToken = default);
+
 	Task<DirectoryHydrationResult> HydrateDirectoryAsync(
 		string targetPath,
 		CancellationToken cancellationToken = default);

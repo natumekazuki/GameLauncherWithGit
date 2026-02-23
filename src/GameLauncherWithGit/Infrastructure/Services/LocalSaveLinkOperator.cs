@@ -19,21 +19,14 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 		string targetPath,
 		CancellationToken cancellationToken = default)
 	{
-		var normalizedLocalPath = NormalizeAbsolutePath(localPath);
-		if (string.IsNullOrWhiteSpace(normalizedLocalPath))
+		if (!TryNormalizeDistinctPaths(
+			localPath,
+			targetPath,
+			out var normalizedLocalPath,
+			out var normalizedTargetPath,
+			out var validationError))
 		{
-			return new JunctionEnsureResult(false, $"ローカルパスが不正です。path={localPath}");
-		}
-
-		var normalizedTargetPath = NormalizeAbsolutePath(targetPath);
-		if (string.IsNullOrWhiteSpace(normalizedTargetPath))
-		{
-			return new JunctionEnsureResult(false, $"ターゲットパスが不正です。path={targetPath}");
-		}
-
-		if (string.Equals(normalizedLocalPath, normalizedTargetPath, StringComparison.OrdinalIgnoreCase))
-		{
-			return new JunctionEnsureResult(false, "ローカルパスとターゲットパスが同一です。");
+			return new JunctionEnsureResult(false, validationError);
 		}
 
 #if !WINDOWS
@@ -55,7 +48,7 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 				var resolvedLinkTarget = ResolveDirectoryLinkTarget(normalizedLocalPath);
 				if (!string.IsNullOrWhiteSpace(resolvedLinkTarget))
 				{
-					if (string.Equals(resolvedLinkTarget, normalizedTargetPath, StringComparison.OrdinalIgnoreCase))
+					if (AreEquivalentDirectoryPaths(resolvedLinkTarget, normalizedTargetPath))
 					{
 						return new JunctionEnsureResult(true, "既存ジャンクションを利用します。");
 					}
@@ -99,6 +92,102 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 				normalizedLocalPath,
 				normalizedTargetPath);
 			return new JunctionEnsureResult(false, $"ジャンクション作成に失敗しました。reason={ex.Message}");
+		}
+#endif
+	}
+
+	public async Task<JunctionRemoveResult> RemoveJunctionWithRestoreAsync(
+		string localPath,
+		string targetPath,
+		CancellationToken cancellationToken = default)
+	{
+		if (!TryNormalizeDistinctPaths(
+			localPath,
+			targetPath,
+			out var normalizedLocalPath,
+			out var normalizedTargetPath,
+			out var validationError))
+		{
+			return new JunctionRemoveResult(false, validationError);
+		}
+
+#if !WINDOWS
+		return new JunctionRemoveResult(false, "ジャンクション操作は Windows でのみ利用できます。");
+#else
+		try
+		{
+			if (!TryGetPathAttributes(
+				normalizedLocalPath,
+				out var localAttributes,
+				out var isLocalPathMissing,
+				out var attributeErrorDetail))
+			{
+				if (isLocalPathMissing)
+				{
+					return new JunctionRemoveResult(true, "ローカルパスが存在しないため解除不要です。");
+				}
+
+				return new JunctionRemoveResult(
+					false,
+					$"ローカルパス属性の取得に失敗しました。path={normalizedLocalPath}, reason={attributeErrorDetail}");
+			}
+
+			if (!localAttributes.HasFlag(FileAttributes.Directory))
+			{
+				return new JunctionRemoveResult(
+					false,
+					$"ローカルパスがディレクトリではありません。path={normalizedLocalPath}");
+			}
+
+			var resolvedLinkTarget = ResolveDirectoryLinkTarget(normalizedLocalPath);
+			if (string.IsNullOrWhiteSpace(resolvedLinkTarget))
+			{
+				if (localAttributes.HasFlag(FileAttributes.ReparsePoint))
+				{
+					if (!Directory.Exists(normalizedTargetPath))
+					{
+						return await RemoveBrokenJunctionAsync(normalizedLocalPath, normalizedTargetPath);
+					}
+
+					return new JunctionRemoveResult(
+						false,
+						$"ローカルパスのリンク先を解決できません。手動確認してください。path={normalizedLocalPath}");
+				}
+
+				return new JunctionRemoveResult(true, "ローカルパスは通常フォルダのため解除不要です。");
+			}
+
+			if (!AreEquivalentDirectoryPaths(resolvedLinkTarget, normalizedTargetPath))
+			{
+				return new JunctionRemoveResult(
+					false,
+					$"ローカルパスは別のリンク先を指しています。path={normalizedLocalPath}, actual={resolvedLinkTarget}, expected={normalizedTargetPath}");
+			}
+
+			if (!Directory.Exists(normalizedTargetPath))
+			{
+				return new JunctionRemoveResult(
+					false,
+					$"ターゲットディレクトリが存在しません。path={normalizedTargetPath}");
+			}
+
+			return await RemoveJunctionAndRestoreDirectoryAsync(
+				normalizedLocalPath,
+				normalizedTargetPath,
+				cancellationToken);
+		}
+		catch (OperationCanceledException)
+		{
+			throw;
+		}
+		catch (Exception ex)
+		{
+			_logger.LogError(
+				ex,
+				"Junction removal failed unexpectedly. localPath={LocalPath}, targetPath={TargetPath}",
+				normalizedLocalPath,
+				normalizedTargetPath);
+			return new JunctionRemoveResult(false, $"ジャンクション解除に失敗しました。reason={ex.Message}");
 		}
 #endif
 	}
@@ -170,7 +259,237 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 			totalBytes);
 	}
 
+	public async Task<JunctionEnsureResult> RestoreJunctionAsync(
+		string localPath,
+		string targetPath,
+		CancellationToken cancellationToken = default)
+	{
+		if (!TryNormalizeDistinctPaths(
+			localPath,
+			targetPath,
+			out var normalizedLocalPath,
+			out var normalizedTargetPath,
+			out var validationError))
+		{
+			return new JunctionEnsureResult(false, validationError);
+		}
+
+#if !WINDOWS
+		return new JunctionEnsureResult(false, "ジャンクション操作は Windows でのみ利用できます。");
+#else
+		try
+		{
+			if (!Directory.Exists(normalizedTargetPath))
+			{
+				return new JunctionEnsureResult(
+					false,
+					$"ターゲットディレクトリが存在しません。path={normalizedTargetPath}");
+			}
+
+			if (File.Exists(normalizedLocalPath) && !Directory.Exists(normalizedLocalPath))
+			{
+				return new JunctionEnsureResult(
+					false,
+					$"ローカルパスがディレクトリではありません。path={normalizedLocalPath}");
+			}
+
+			if (Directory.Exists(normalizedLocalPath))
+			{
+				var resolvedLinkTarget = ResolveDirectoryLinkTarget(normalizedLocalPath);
+				if (!string.IsNullOrWhiteSpace(resolvedLinkTarget))
+				{
+					if (AreEquivalentDirectoryPaths(resolvedLinkTarget, normalizedTargetPath))
+					{
+						return new JunctionEnsureResult(true, "既存ジャンクションを利用します。");
+					}
+
+					return new JunctionEnsureResult(
+						false,
+						$"ローカルパスは別のリンク先を指しています。path={normalizedLocalPath}, actual={resolvedLinkTarget}, expected={normalizedTargetPath}");
+				}
+
+				var localInfo = new DirectoryInfo(normalizedLocalPath);
+				if (localInfo.Attributes.HasFlag(FileAttributes.ReparsePoint))
+				{
+					return new JunctionEnsureResult(
+						false,
+						$"ローカルパスのリンク先を解決できません。手動確認してください。path={normalizedLocalPath}");
+				}
+
+				Directory.Delete(normalizedLocalPath, recursive: true);
+			}
+
+			var localParentPath = Path.GetDirectoryName(normalizedLocalPath);
+			if (!string.IsNullOrWhiteSpace(localParentPath))
+			{
+				Directory.CreateDirectory(localParentPath);
+			}
+
+			var createResult = await CreateJunctionAsync(
+				normalizedLocalPath,
+				normalizedTargetPath,
+				cancellationToken);
+			if (!createResult.IsSuccess)
+			{
+				return createResult;
+			}
+
+			return new JunctionEnsureResult(true, "ロールバックのためジャンクションを再作成しました。");
+		}
+		catch (OperationCanceledException)
+		{
+			throw;
+		}
+		catch (Exception ex)
+		{
+			_logger.LogWarning(
+				ex,
+				"Junction restore failed unexpectedly. localPath={LocalPath}, targetPath={TargetPath}",
+				normalizedLocalPath,
+				normalizedTargetPath);
+			return new JunctionEnsureResult(
+				false,
+				$"ジャンクション再作成に失敗しました。local={normalizedLocalPath}, target={normalizedTargetPath}, reason={ex.Message}");
+		}
+#endif
+	}
+
 #if WINDOWS
+	private async Task<JunctionRemoveResult> RemoveJunctionAndRestoreDirectoryAsync(
+		string localPath,
+		string targetPath,
+		CancellationToken cancellationToken)
+	{
+		var restorePath = BuildRestorePath(localPath);
+		var copyResult = CopyDirectoryStrict(targetPath, restorePath, cancellationToken);
+		if (!copyResult.IsSuccess)
+		{
+			if (copyResult.IsCanceled)
+			{
+				TryDeleteDirectory(restorePath);
+				throw new OperationCanceledException(copyResult.Message, cancellationToken);
+			}
+
+			TryDeleteDirectory(restorePath);
+			return new JunctionRemoveResult(
+				false,
+				$"リンク解除前の復元コピーに失敗しました。local={localPath}, target={targetPath}, reason={copyResult.Message}");
+		}
+
+		var isJunctionDeleted = false;
+		try
+		{
+			Directory.Delete(localPath);
+			isJunctionDeleted = true;
+			Directory.Move(restorePath, localPath);
+			return new JunctionRemoveResult(
+				true,
+				"ジャンクションを解除し、ローカル通常フォルダへ復元しました。",
+				DidChangeLocalPath: true);
+		}
+		catch (OperationCanceledException)
+		{
+			if (isJunctionDeleted)
+			{
+				await TryRecreateJunctionAsync(localPath, targetPath);
+			}
+
+			throw;
+		}
+		catch (Exception ex)
+		{
+			if (isJunctionDeleted)
+			{
+				await TryRecreateJunctionAsync(localPath, targetPath);
+			}
+			else
+			{
+				TryDeleteDirectory(restorePath);
+			}
+
+			var restoreHint = isJunctionDeleted
+				? $", restore={restorePath}"
+				: string.Empty;
+			return new JunctionRemoveResult(
+				false,
+				$"ジャンクション解除に失敗しました。local={localPath}, target={targetPath}, reason={ex.Message}{restoreHint}",
+				DidChangeLocalPath: isJunctionDeleted);
+		}
+	}
+
+	private async Task<JunctionRemoveResult> RemoveBrokenJunctionAsync(string localPath, string targetPath)
+	{
+		var didDeleteJunction = false;
+		try
+		{
+			Directory.Delete(localPath);
+			didDeleteJunction = true;
+			Directory.CreateDirectory(localPath);
+			return new JunctionRemoveResult(
+				true,
+				"リンク先が消失したジャンクションを解除し、空のローカルフォルダを復元しました。",
+				DidChangeLocalPath: true);
+		}
+		catch (Exception ex)
+		{
+			await TryRecreateJunctionAsync(localPath, targetPath);
+			return new JunctionRemoveResult(
+				false,
+				$"リンク先消失ジャンクションの解除に失敗しました。local={localPath}, target={targetPath}, reason={ex.Message}",
+				DidChangeLocalPath: didDeleteJunction);
+		}
+	}
+
+	private async Task TryRecreateJunctionAsync(string localPath, string targetPath)
+	{
+		try
+		{
+			if (Directory.Exists(localPath))
+			{
+				return;
+			}
+
+			var localParentPath = Path.GetDirectoryName(localPath);
+			if (!string.IsNullOrWhiteSpace(localParentPath))
+			{
+				Directory.CreateDirectory(localParentPath);
+			}
+
+			var recreateResult = await CreateJunctionAsync(localPath, targetPath, CancellationToken.None);
+			if (!recreateResult.IsSuccess)
+			{
+				_logger.LogWarning(
+					"Junction recovery failed. localPath={LocalPath}, targetPath={TargetPath}, reason={Reason}",
+					localPath,
+					targetPath,
+					recreateResult.Message);
+			}
+		}
+		catch (Exception ex)
+		{
+			_logger.LogWarning(
+				ex,
+				"Junction recovery failed unexpectedly. localPath={LocalPath}, targetPath={TargetPath}",
+				localPath,
+				targetPath);
+		}
+	}
+
+	private static void TryDeleteDirectory(string path)
+	{
+		try
+		{
+			if (Directory.Exists(path))
+			{
+				Directory.Delete(path, recursive: true);
+			}
+		}
+		catch
+		{
+			// クリーンアップ失敗は処理結果に影響させない。
+		}
+	}
+
 	private async Task<JunctionEnsureResult> ConvertDirectoryToJunctionAsync(
 		string localPath,
 		string targetPath,
@@ -484,7 +803,15 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 	private static string BuildBackupPath(string localPath)
 	{
 		var timestamp = DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmss");
-		return $"{localPath}.backup-{timestamp}-{Guid.NewGuid():N}";
+		var normalizedLocalPath = NormalizeDirectoryPathForComparison(localPath);
+		return $"{normalizedLocalPath}.backup-{timestamp}-{Guid.NewGuid():N}";
+	}
+
+	private static string BuildRestorePath(string localPath)
+	{
+		var timestamp = DateTimeOffset.UtcNow.ToString("yyyyMMddHHmmss");
+		var normalizedLocalPath = NormalizeDirectoryPathForComparison(localPath);
+		return $"{normalizedLocalPath}.restore-{timestamp}-{Guid.NewGuid():N}";
 	}
 
 	private static string? ResolveDirectoryLinkTarget(string localPath)
@@ -519,6 +846,38 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 		IReadOnlyList<string> CreatedFiles);
 #endif
 
+	private static bool TryNormalizeDistinctPaths(
+		string localPath,
+		string targetPath,
+		out string normalizedLocalPath,
+		out string normalizedTargetPath,
+		out string errorMessage)
+	{
+		normalizedLocalPath = NormalizeAbsolutePath(localPath) ?? string.Empty;
+		if (string.IsNullOrWhiteSpace(normalizedLocalPath))
+		{
+			normalizedTargetPath = string.Empty;
+			errorMessage = $"ローカルパスが不正です。path={localPath}";
+			return false;
+		}
+
+		normalizedTargetPath = NormalizeAbsolutePath(targetPath) ?? string.Empty;
+		if (string.IsNullOrWhiteSpace(normalizedTargetPath))
+		{
+			errorMessage = $"ターゲットパスが不正です。path={targetPath}";
+			return false;
+		}
+
+		if (string.Equals(normalizedLocalPath, normalizedTargetPath, StringComparison.OrdinalIgnoreCase))
+		{
+			errorMessage = "ローカルパスとターゲットパスが同一です。";
+			return false;
+		}
+
+		errorMessage = string.Empty;
+		return true;
+	}
+
 	private static string? NormalizeAbsolutePath(string path)
 	{
 		if (string.IsNullOrWhiteSpace(path))
@@ -534,6 +893,80 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 		catch
 		{
 			return null;
+		}
+	}
+
+	private static bool AreEquivalentDirectoryPaths(string pathA, string pathB)
+	{
+		var normalizedPathA = NormalizeDirectoryPathForComparison(pathA);
+		var normalizedPathB = NormalizeDirectoryPathForComparison(pathB);
+		return string.Equals(normalizedPathA, normalizedPathB, StringComparison.OrdinalIgnoreCase);
+	}
+
+	private static string NormalizeDirectoryPathForComparison(string path)
+	{
+		var normalizedPath = NormalizeAbsolutePath(path) ?? path.Trim();
+		return TrimTrailingDirectorySeparators(normalizedPath);
+	}
+
+	private static string TrimTrailingDirectorySeparators(string path)
+	{
+		var trimmed = path.Trim();
+		if (string.IsNullOrWhiteSpace(trimmed))
+		{
+			return string.Empty;
+		}
+
+		var root = Path.GetPathRoot(trimmed);
+		if (!string.IsNullOrWhiteSpace(root)
+			&& string.Equals(trimmed, root, StringComparison.OrdinalIgnoreCase))
+		{
+			return trimmed;
+		}
+
+		return trimmed.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+	}
+
+	private static bool TryGetPathAttributes(
+		string path,
+		out FileAttributes attributes,
+		out bool isMissing,
+		out string? errorDetail)
+	{
+		try
+		{
+			attributes = File.GetAttributes(path);
+			isMissing = false;
+			errorDetail = null;
+			return true;
+		}
+		catch (FileNotFoundException)
+		{
+			attributes = default;
+			isMissing = true;
+			errorDetail = "not found";
+			return false;
+		}
+		catch (DirectoryNotFoundException)
+		{
+			attributes = default;
+			isMissing = true;
+			errorDetail = "not found";
+			return false;
+		}
+		catch (UnauthorizedAccessException ex)
+		{
+			attributes = default;
+			isMissing = false;
+			errorDetail = ex.Message;
+			return false;
+		}
+		catch
+		{
+			attributes = default;
+			isMissing = false;
+			errorDetail = "unknown error";
+			return false;
 		}
 	}
 

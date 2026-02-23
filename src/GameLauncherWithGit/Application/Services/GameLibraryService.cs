@@ -151,12 +151,31 @@ public sealed class GameLibraryService : IGameLibraryService
 		}
 
 		var normalizedSaveLinks = _saveLinkService.NormalizeForGame(gameId, saveLinks);
+		var unlinkedLinks = await _saveLinkService.UnlinkRemovedLinksAsync(gameId, normalizedSaveLinks, cancellationToken);
 		var updated = await BuildUpdatedGameAsync(
 			updateContext.Original,
 			updateContext.NormalizedInput,
 			cancellationToken);
 
-		await _store.UpsertWithSaveLinksAsync(updated, normalizedSaveLinks, cancellationToken);
+		try
+		{
+			await _store.UpsertWithSaveLinksAsync(updated, normalizedSaveLinks, cancellationToken);
+		}
+		catch (Exception ex)
+		{
+			var rollbackError = await _saveLinkService.RollbackUnlinkedLinksAsync(gameId, unlinkedLinks, cancellationToken);
+			if (string.IsNullOrWhiteSpace(rollbackError))
+			{
+				throw new InvalidOperationException(
+					$"ゲーム保存に失敗したため、リンク解除をロールバックしました。gameId={gameId}, reason={ex.Message}",
+					ex);
+			}
+
+			throw new InvalidOperationException(
+				$"ゲーム保存に失敗し、リンク解除ロールバックにも失敗しました。gameId={gameId}, rollbackReason={rollbackError}, reason={ex.Message}",
+				ex);
+		}
+
 		return updated;
 	}
 

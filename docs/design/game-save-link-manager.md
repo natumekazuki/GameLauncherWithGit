@@ -1,6 +1,6 @@
 # ゲーム別セーブリンク管理設計
 
-更新日: 2026-02-21
+更新日: 2026-02-23
 対象: `src/GameLauncherWithGit`（Windows 11 / .NET 9 / MAUI Blazor Hybrid）
 状態: Draft（実装前）
 
@@ -19,6 +19,7 @@
 ### 3.1 In Scope（MVP）
 - ゲームごとの「セーブリンク定義（複数）」の CRUD。
 - 各リンク定義に対する手動適用（リンク作成）と状態検証。
+- リンク定義削除時のリンク解除（通常フォルダ復元）。
 - 既存ローカルフォルダを OneDrive へ移行してリンク化する安全フロー。
 - 起動前チェックでリンク不整合を検知し、必要に応じて起動をブロックする導線。
 
@@ -107,6 +108,7 @@ flowchart LR
   - `CreateDirectoryJunction(localPath, targetPath)`
   - `DeleteLink(localPath)`
   - `ResolveLinkTarget(localPath)`
+  - `RemoveJunctionWithRestore(localPath, targetPath)`
 
 ## 7. リンク作成方針（Windows）
 - 本機能は `DirectoryJunction` のみを扱う。
@@ -163,6 +165,36 @@ sequenceDiagram
 - 編集保存時は `Games` 更新と `GameSaveLinks` 置換を同一トランザクションで実行し、部分適用を防止する。
 - 編集保存時はセーブリンク検証をサムネイル生成より先に実施し、検証失敗時の不要サムネイル生成を防止する。
 
+### 8.2 リンク解除フロー（ローカル通常フォルダ復元）
+
+```mermaid
+sequenceDiagram
+    participant UI as Home UI
+    participant S as SaveLinkService
+    participant F as FileLinkOperator
+    participant D as Disk
+
+    UI->>S: 編集保存（リンク定義削除）
+    S->>S: 旧定義と新定義の差分抽出
+    S->>F: RemoveJunctionWithRestore(localPath, targetPath)
+    F->>D: targetPath を一時復元先へコピー
+    F->>D: localPath のジャンクションを削除
+    F->>D: 一時復元先を localPath へ移動
+    F-->>S: 成功 / 失敗
+    alt 失敗
+        F->>F: ジャンクション再作成をベストエフォート実行
+        S-->>UI: 保存失敗（解除失敗理由を表示）
+    else 成功
+        S->>STORE: 新しいリンク定義を保存
+        S-->>UI: 保存成功
+    end
+```
+
+- 解除時は `TargetPath` 側データを削除せず保持する（コピー復元）。
+- `LocalPath` が通常フォルダの場合は「解除済み」として成功扱いにする。
+- `LocalPath` が別ターゲットへのリンクを指している場合は安全のため失敗扱いにする。
+- 解除対象のいずれかが失敗した場合は編集保存を中断し、リンク定義を更新しない。
+
 ## 9. UI 設計（Home.razor 拡張）
 - ゲーム編集モーダルに `セーブリンク（複数）` セクションを追加。
 - 一覧行ごとに表示:
@@ -211,4 +243,5 @@ sequenceDiagram
   - 既存Git同期と起動前同期。
 
 ## 13. 未確定事項（実装判断待ち）
-1. 解除機能（リンク解除して通常フォルダへ戻す）を MVP に含めるか。
+1. 解除機能は MVP に含める。
+   - 方針: リンク定義削除時に `TargetPath` のデータを `LocalPath` へコピー復元して通常フォルダ化する。

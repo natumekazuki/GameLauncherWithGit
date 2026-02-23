@@ -61,6 +61,72 @@ public sealed class SaveLinkService : ISaveLinkService
 		_ = NormalizeForGame(gameId, links);
 	}
 
+	public async Task<IReadOnlyList<GameSaveLinkItem>> UnlinkRemovedLinksAsync(
+		string gameId,
+		IReadOnlyList<GameSaveLinkItem> nextLinks,
+		CancellationToken cancellationToken = default)
+	{
+		if (string.IsNullOrWhiteSpace(gameId))
+		{
+			throw new InvalidOperationException("セーブリンク解除に失敗しました。ゲームIDが不正です。");
+		}
+
+		var normalizedGameId = gameId.Trim();
+		var existingLinks = await _saveLinkStore.GetByGameIdAsync(normalizedGameId, cancellationToken);
+		if (existingLinks.Count == 0)
+		{
+			return Array.Empty<GameSaveLinkItem>();
+		}
+
+		var nextLinkKeys = BuildLinkEndpointKeySet(nextLinks);
+		var removedLinks = BuildRemovedLinks(existingLinks, nextLinkKeys);
+		if (removedLinks.Count == 0)
+		{
+			return Array.Empty<GameSaveLinkItem>();
+		}
+
+		var unlinkedLinks = new List<GameSaveLinkItem>();
+		foreach (var removedLink in removedLinks)
+		{
+			cancellationToken.ThrowIfCancellationRequested();
+
+			var removeResult = await _localSaveLinkOperator.RemoveJunctionWithRestoreAsync(
+				removedLink.LocalPath,
+				removedLink.TargetPath,
+				cancellationToken);
+			if (removeResult.IsSuccess)
+			{
+				if (removeResult.DidChangeLocalPath)
+				{
+					unlinkedLinks.Add(removedLink);
+				}
+
+				continue;
+			}
+
+			_logger.LogWarning(
+				"Save-link unlink failed. gameId={GameId}, linkId={LinkId}, localPath={LocalPath}, targetPath={TargetPath}, reason={Reason}",
+				normalizedGameId,
+				removedLink.Id,
+				removedLink.LocalPath,
+				removedLink.TargetPath,
+				removeResult.Message);
+
+			if (removeResult.DidChangeLocalPath)
+			{
+				unlinkedLinks.Add(removedLink);
+			}
+
+			throw await BuildUnlinkFailureExceptionAsync(
+				normalizedGameId,
+				removedLink,
+				removeResult.Message,
+				unlinkedLinks);
+		}
+
+		return unlinkedLinks.ToArray();
+	}
+
 	public async Task<SaveLinkPrepareResult> EnsureReadyForLaunchAsync(
 		string gameId,
 		CancellationToken cancellationToken = default)
@@ -304,6 +370,146 @@ public sealed class SaveLinkService : ISaveLinkService
 
 		var normalizedBasePath = EnsureTrailingDirectorySeparator(basePath);
 		return candidatePath.StartsWith(normalizedBasePath, StringComparison.OrdinalIgnoreCase);
+	}
+
+	public async Task<string?> RollbackUnlinkedLinksAsync(
+		string gameId,
+		IReadOnlyList<GameSaveLinkItem> unlinkedLinks,
+		CancellationToken cancellationToken = default)
+	{
+		if (unlinkedLinks.Count == 0)
+		{
+			return null;
+		}
+
+		var rollbackErrors = new List<string>();
+		for (var index = unlinkedLinks.Count - 1; index >= 0; index--)
+		{
+			var link = unlinkedLinks[index];
+			try
+			{
+				var restoreResult = await _localSaveLinkOperator.RestoreJunctionAsync(
+					link.LocalPath,
+					link.TargetPath,
+					CancellationToken.None);
+				if (restoreResult.IsSuccess)
+				{
+					continue;
+				}
+
+				rollbackErrors.Add($"link={link.Id}, reason={restoreResult.Message}");
+				_logger.LogWarning(
+					"Save-link rollback failed. gameId={GameId}, linkId={LinkId}, localPath={LocalPath}, targetPath={TargetPath}, reason={Reason}",
+					gameId,
+					link.Id,
+					link.LocalPath,
+					link.TargetPath,
+					restoreResult.Message);
+			}
+			catch (Exception ex)
+			{
+				rollbackErrors.Add($"link={link.Id}, reason={ex.Message}");
+				_logger.LogWarning(
+					ex,
+					"Save-link rollback failed unexpectedly. gameId={GameId}, linkId={LinkId}, localPath={LocalPath}, targetPath={TargetPath}",
+					gameId,
+					link.Id,
+					link.LocalPath,
+					link.TargetPath);
+			}
+		}
+
+		return rollbackErrors.Count == 0
+			? null
+			: string.Join(" | ", rollbackErrors);
+	}
+
+	private async Task<InvalidOperationException> BuildUnlinkFailureExceptionAsync(
+		string gameId,
+		GameSaveLinkItem failedLink,
+		string failureReason,
+		IReadOnlyList<GameSaveLinkItem> unlinkedLinks)
+	{
+		var rollbackError = await RollbackUnlinkedLinksAsync(gameId, unlinkedLinks, CancellationToken.None);
+		if (string.IsNullOrWhiteSpace(rollbackError))
+		{
+			return new InvalidOperationException(
+				$"セーブリンク解除に失敗したため、先行解除分をロールバックしました。local={failedLink.LocalPath}, target={failedLink.TargetPath}, reason={failureReason}");
+		}
+
+		return new InvalidOperationException(
+			$"セーブリンク解除に失敗し、先行解除分ロールバックにも失敗しました。local={failedLink.LocalPath}, target={failedLink.TargetPath}, reason={failureReason}, rollbackReason={rollbackError}");
+	}
+
+	private static IReadOnlyList<GameSaveLinkItem> BuildRemovedLinks(
+		IReadOnlyList<GameSaveLinkItem> existingLinks,
+		IReadOnlySet<string> nextLinkKeys)
+	{
+		if (existingLinks.Count == 0)
+		{
+			return Array.Empty<GameSaveLinkItem>();
+		}
+
+		var removedLinks = new List<GameSaveLinkItem>(existingLinks.Count);
+		foreach (var existingLink in existingLinks.OrderBy(static link => link.OrderNo))
+		{
+			var existingKey = BuildLinkEndpointKey(existingLink.LocalPath, existingLink.TargetPath);
+			if (nextLinkKeys.Contains(existingKey))
+			{
+				continue;
+			}
+
+			removedLinks.Add(existingLink);
+		}
+
+		return removedLinks;
+	}
+
+	private static HashSet<string> BuildLinkEndpointKeySet(IReadOnlyList<GameSaveLinkItem>? links)
+	{
+		var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		if (links is null || links.Count == 0)
+		{
+			return result;
+		}
+
+		foreach (var link in links)
+		{
+			result.Add(BuildLinkEndpointKey(link.LocalPath, link.TargetPath));
+		}
+
+		return result;
+	}
+
+	private static string BuildLinkEndpointKey(string localPath, string targetPath)
+	{
+		var normalizedLocalPath = NormalizePathForComparison(localPath);
+		var normalizedTargetPath = NormalizePathForComparison(targetPath);
+		return $"{normalizedLocalPath}|{normalizedTargetPath}";
+	}
+
+	private static string NormalizePathForComparison(string path)
+	{
+		var normalized = NormalizeAbsolutePath(path) ?? path.Trim();
+		return TrimTrailingDirectorySeparators(normalized);
+	}
+
+	private static string TrimTrailingDirectorySeparators(string path)
+	{
+		var trimmed = path.Trim();
+		if (string.IsNullOrWhiteSpace(trimmed))
+		{
+			return string.Empty;
+		}
+
+		var root = Path.GetPathRoot(trimmed);
+		if (!string.IsNullOrWhiteSpace(root)
+			&& string.Equals(trimmed, root, StringComparison.OrdinalIgnoreCase))
+		{
+			return trimmed;
+		}
+
+		return trimmed.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 	}
 
 	private static string EnsureTrailingDirectorySeparator(string path)
