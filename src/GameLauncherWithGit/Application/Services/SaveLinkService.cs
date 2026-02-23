@@ -61,7 +61,7 @@ public sealed class SaveLinkService : ISaveLinkService
 		_ = NormalizeForGame(gameId, links);
 	}
 
-	public async Task UnlinkRemovedLinksAsync(
+	public async Task<IReadOnlyList<GameSaveLinkItem>> UnlinkRemovedLinksAsync(
 		string gameId,
 		IReadOnlyList<GameSaveLinkItem> nextLinks,
 		CancellationToken cancellationToken = default)
@@ -75,7 +75,7 @@ public sealed class SaveLinkService : ISaveLinkService
 		var existingLinks = await _saveLinkStore.GetByGameIdAsync(normalizedGameId, cancellationToken);
 		if (existingLinks.Count == 0)
 		{
-			return;
+			return Array.Empty<GameSaveLinkItem>();
 		}
 
 		var nextLinkKeys = BuildLinkEndpointKeySet(nextLinks);
@@ -112,7 +112,12 @@ public sealed class SaveLinkService : ISaveLinkService
 				existingLink.TargetPath,
 				removeResult.Message);
 
-			var rollbackError = await TryRollbackUnlinkedLinksAsync(normalizedGameId, unlinkedLinks);
+			if (removeResult.DidChangeLocalPath)
+			{
+				unlinkedLinks.Add(existingLink);
+			}
+
+			var rollbackError = await RollbackUnlinkedLinksAsync(normalizedGameId, unlinkedLinks, cancellationToken);
 			if (string.IsNullOrWhiteSpace(rollbackError))
 			{
 				throw new InvalidOperationException(
@@ -122,6 +127,8 @@ public sealed class SaveLinkService : ISaveLinkService
 			throw new InvalidOperationException(
 				$"セーブリンク解除に失敗し、先行解除分ロールバックにも失敗しました。local={existingLink.LocalPath}, target={existingLink.TargetPath}, reason={removeResult.Message}, rollbackReason={rollbackError}");
 		}
+
+		return unlinkedLinks.ToArray();
 	}
 
 	public async Task<SaveLinkPrepareResult> EnsureReadyForLaunchAsync(
@@ -369,9 +376,10 @@ public sealed class SaveLinkService : ISaveLinkService
 		return candidatePath.StartsWith(normalizedBasePath, StringComparison.OrdinalIgnoreCase);
 	}
 
-	private async Task<string?> TryRollbackUnlinkedLinksAsync(
+	public async Task<string?> RollbackUnlinkedLinksAsync(
 		string gameId,
-		IReadOnlyList<GameSaveLinkItem> unlinkedLinks)
+		IReadOnlyList<GameSaveLinkItem> unlinkedLinks,
+		CancellationToken cancellationToken = default)
 	{
 		if (unlinkedLinks.Count == 0)
 		{
