@@ -403,7 +403,10 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 			Directory.Delete(localPath);
 			isJunctionDeleted = true;
 			Directory.Move(restorePath, localPath);
-			return new JunctionRemoveResult(true, "ジャンクションを解除し、ローカル通常フォルダへ復元しました。");
+			return new JunctionRemoveResult(
+				true,
+				"ジャンクションを解除し、ローカル通常フォルダへ復元しました。",
+				DidChangeLocalPath: true);
 		}
 		catch (OperationCanceledException)
 		{
@@ -442,7 +445,8 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 			Directory.CreateDirectory(localPath);
 			return new JunctionRemoveResult(
 				true,
-				"リンク先が消失したジャンクションを解除し、空のローカルフォルダを復元しました。");
+				"リンク先が消失したジャンクションを解除し、空のローカルフォルダを復元しました。",
+				DidChangeLocalPath: true);
 		}
 		catch (Exception ex)
 		{

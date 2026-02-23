@@ -96,7 +96,11 @@ public sealed class SaveLinkService : ISaveLinkService
 				cancellationToken);
 			if (removeResult.IsSuccess)
 			{
-				unlinkedLinks.Add(existingLink);
+				if (removeResult.DidChangeLocalPath)
+				{
+					unlinkedLinks.Add(existingLink);
+				}
+
 				continue;
 			}
 
