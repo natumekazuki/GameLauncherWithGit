@@ -433,15 +433,18 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 				: string.Empty;
 			return new JunctionRemoveResult(
 				false,
-				$"ジャンクション解除に失敗しました。local={localPath}, target={targetPath}, reason={ex.Message}{restoreHint}");
+				$"ジャンクション解除に失敗しました。local={localPath}, target={targetPath}, reason={ex.Message}{restoreHint}",
+				DidChangeLocalPath: isJunctionDeleted);
 		}
 	}
 
 	private async Task<JunctionRemoveResult> RemoveBrokenJunctionAsync(string localPath, string targetPath)
 	{
+		var didDeleteJunction = false;
 		try
 		{
 			Directory.Delete(localPath);
+			didDeleteJunction = true;
 			Directory.CreateDirectory(localPath);
 			return new JunctionRemoveResult(
 				true,
@@ -453,7 +456,8 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 			await TryRecreateJunctionAsync(localPath, targetPath);
 			return new JunctionRemoveResult(
 				false,
-				$"リンク先消失ジャンクションの解除に失敗しました。local={localPath}, target={targetPath}, reason={ex.Message}");
+				$"リンク先消失ジャンクションの解除に失敗しました。local={localPath}, target={targetPath}, reason={ex.Message}",
+				DidChangeLocalPath: didDeleteJunction);
 		}
 	}
 
