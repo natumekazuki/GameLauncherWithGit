@@ -130,9 +130,20 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 #else
 		try
 		{
-			if (!TryGetPathAttributes(normalizedLocalPath, out var localAttributes))
+			if (!TryGetPathAttributes(
+				normalizedLocalPath,
+				out var localAttributes,
+				out var isLocalPathMissing,
+				out var attributeErrorDetail))
 			{
-				return new JunctionRemoveResult(true, "ローカルパスが存在しないため解除不要です。");
+				if (isLocalPathMissing)
+				{
+					return new JunctionRemoveResult(true, "ローカルパスが存在しないため解除不要です。");
+				}
+
+				return new JunctionRemoveResult(
+					false,
+					$"ローカルパス属性の取得に失敗しました。path={normalizedLocalPath}, reason={attributeErrorDetail}");
 			}
 
 			if (!localAttributes.HasFlag(FileAttributes.Directory))
@@ -795,16 +806,45 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 		return trimmed.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 	}
 
-	private static bool TryGetPathAttributes(string path, out FileAttributes attributes)
+	private static bool TryGetPathAttributes(
+		string path,
+		out FileAttributes attributes,
+		out bool isMissing,
+		out string? errorDetail)
 	{
 		try
 		{
 			attributes = File.GetAttributes(path);
+			isMissing = false;
+			errorDetail = null;
 			return true;
+		}
+		catch (FileNotFoundException)
+		{
+			attributes = default;
+			isMissing = true;
+			errorDetail = "not found";
+			return false;
+		}
+		catch (DirectoryNotFoundException)
+		{
+			attributes = default;
+			isMissing = true;
+			errorDetail = "not found";
+			return false;
+		}
+		catch (UnauthorizedAccessException ex)
+		{
+			attributes = default;
+			isMissing = false;
+			errorDetail = ex.Message;
+			return false;
 		}
 		catch
 		{
 			attributes = default;
+			isMissing = false;
+			errorDetail = "unknown error";
 			return false;
 		}
 	}
