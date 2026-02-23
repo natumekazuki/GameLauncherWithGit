@@ -16,6 +16,11 @@ public interface ISaveLinkService
 		string gameId,
 		IReadOnlyList<GameSaveLinkEditInput> links);
 
+	Task UnlinkRemovedLinksAsync(
+		string gameId,
+		IReadOnlyList<GameSaveLinkItem> nextLinks,
+		CancellationToken cancellationToken = default);
+
 	Task ReplaceForGameAsync(
 		string gameId,
 		IReadOnlyList<GameSaveLinkEditInput> links,

@@ -151,6 +151,7 @@ public sealed class GameLibraryService : IGameLibraryService
 		}
 
 		var normalizedSaveLinks = _saveLinkService.NormalizeForGame(gameId, saveLinks);
+		await _saveLinkService.UnlinkRemovedLinksAsync(gameId, normalizedSaveLinks, cancellationToken);
 		var updated = await BuildUpdatedGameAsync(
 			updateContext.Original,
 			updateContext.NormalizedInput,
