@@ -240,10 +240,6 @@ public sealed class GameLibraryService : IGameLibraryService
 		}
 
 		var executablePath = input.ExecutablePath.Trim();
-		if (string.IsNullOrWhiteSpace(executablePath))
-		{
-			throw new InvalidOperationException("実行ファイルパスは必須です。");
-		}
 
 		var repositoryPath = input.RelatedRepositoryPath?.Trim();
 		if (string.IsNullOrWhiteSpace(repositoryPath))

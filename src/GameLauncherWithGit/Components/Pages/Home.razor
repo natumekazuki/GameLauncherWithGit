@@ -161,7 +161,14 @@ else
 
                                 <div class="game-card-body @(hasCardHeader ? string.Empty : "game-card-body-no-header")">
                                     <p class="meta-label">実行ファイル</p>
-                                    <p class="meta-value">@game.ExecutablePath</p>
+                                    @if (string.IsNullOrWhiteSpace(game.ExecutablePath))
+                                    {
+                                        <p class="meta-value">未設定</p>
+                                    }
+                                    else
+                                    {
+                                        <p class="meta-value">@game.ExecutablePath</p>
+                                    }
                                     <p class="meta-label">関連リポジトリ</p>
                                     @if (string.IsNullOrWhiteSpace(game.RelatedRepositoryPath))
                                     {
@@ -211,8 +218,9 @@ else
                                 <button type="button"
                                         class="launch-button action-icon-button"
                                         @onclick="() => LaunchAsync(game.Id)"
-                                        title="起動"
-                                        aria-label="起動">
+                                        title="@GetLaunchButtonTitle(game)"
+                                        aria-label="@GetLaunchButtonTitle(game)"
+                                        disabled="@IsLaunchDisabled(game)">
                                     <span class="launch-icon" aria-hidden="true"></span>
                                 </button>
                                 <button type="button"
@@ -254,6 +262,16 @@ else
         <p class="notification-message @GetMessageClass()">@_message</p>
     }
 </div>
+
+@if (IsUserOperationLoading)
+{
+    <div class="operation-loading-overlay" aria-live="polite" aria-busy="true">
+        <div class="operation-loading-modal">
+            <div class="operation-loading-spinner" aria-hidden="true"></div>
+            <p class="operation-loading-message">@GetUserOperationLoadingMessage()</p>
+        </div>
+    </div>
+}
 
 @if (_isHelpOpen)
 {
@@ -919,6 +937,7 @@ else
     private bool _isGitStatusRefreshing;
     private readonly CancellationTokenSource _stateRefreshCts = new();
     private Task? _stateRefreshTask;
+    private readonly Stack<string> _userOperationLoadingMessages = new();
 
     protected override void OnInitialized()
     {
@@ -957,18 +976,21 @@ else
 
     private async Task LaunchAsync(string gameId)
     {
-        SetNotification("起動前同期を実行中です...", null);
-        StateHasChanged();
-
-        var result = await LauncherService.LaunchAsync(gameId);
-        await ReloadGamesAsync();
-        SetNotification(result.Message, result.IsSuccess);
+        await RunWithUserOperationLoadingAsync(
+            "起動前同期を実行しています...",
+            async () =>
+            {
+                SetNotification("起動前同期を実行中です...", null);
+                var result = await LauncherService.LaunchAsync(gameId);
+                await ReloadGamesAsync();
+                SetNotification(result.Message, result.IsSuccess);
+            });
     }
 
     private async Task OpenSettingsAsync()
     {
         _isSettingsOpen = true;
-        await LoadSettingsAsync();
+        await RunWithUserOperationLoadingAsync("設定を読み込んでいます...", LoadSettingsAsync);
     }
 
     private void OpenHelp()
@@ -991,6 +1013,51 @@ else
         _isSettingsOpen = false;
     }
 
+    private async Task RunWithUserOperationLoadingAsync(string message, Func<Task> action)
+    {
+        BeginUserOperationLoading(message);
+        try
+        {
+            await action();
+        }
+        finally
+        {
+            EndUserOperationLoading();
+        }
+    }
+
+    private void BeginUserOperationLoading(string message)
+    {
+        var normalizedMessage = string.IsNullOrWhiteSpace(message) ? "処理中..." : message.Trim();
+        _userOperationLoadingMessages.Push(normalizedMessage);
+        if (!_stateRefreshCts.IsCancellationRequested)
+        {
+            StateHasChanged();
+        }
+    }
+
+    private void EndUserOperationLoading()
+    {
+        if (_userOperationLoadingMessages.Count > 0)
+        {
+            _userOperationLoadingMessages.Pop();
+        }
+
+        if (!_stateRefreshCts.IsCancellationRequested)
+        {
+            StateHasChanged();
+        }
+    }
+
+    private bool IsUserOperationLoading => _userOperationLoadingMessages.Count > 0;
+
+    private string GetUserOperationLoadingMessage()
+    {
+        return _userOperationLoadingMessages.Count == 0
+            ? "処理中..."
+            : _userOperationLoadingMessages.Peek();
+    }
+
     private async Task LoadSettingsAsync()
     {
         _isSettingsLoading = true;
@@ -998,7 +1065,7 @@ else
         {
             _autoStartEnabled = await AutoStartService.IsEnabledAsync();
             ApplyAppSettings(AppSettingsService.Get());
-            await LoadLogEntriesAsync();
+            await LoadLogEntriesCoreAsync();
         }
         catch (Exception ex)
         {
@@ -1013,48 +1080,58 @@ else
     private async Task OnAutoStartChangedAsync(ChangeEventArgs args)
     {
         var enabled = ParseCheckboxValue(args);
-        _isAutoStartSaving = true;
+        await RunWithUserOperationLoadingAsync(
+            "自動起動設定を更新しています...",
+            async () =>
+            {
+                _isAutoStartSaving = true;
 
-        try
-        {
-            await AutoStartService.SetEnabledAsync(enabled);
-            _autoStartEnabled = enabled;
-            SetNotification(enabled ? "自動起動を有効化しました。" : "自動起動を無効化しました。", true);
-        }
-        catch (Exception ex)
-        {
-            SetNotification($"自動起動設定の更新に失敗しました: {ex.Message}", false);
-            try
-            {
-                _autoStartEnabled = await AutoStartService.IsEnabledAsync();
-            }
-            catch
-            {
-                _autoStartEnabled = false;
-            }
-        }
-        finally
-        {
-            _isAutoStartSaving = false;
-        }
+                try
+                {
+                    await AutoStartService.SetEnabledAsync(enabled);
+                    _autoStartEnabled = enabled;
+                    SetNotification(enabled ? "自動起動を有効化しました。" : "自動起動を無効化しました。", true);
+                }
+                catch (Exception ex)
+                {
+                    SetNotification($"自動起動設定の更新に失敗しました: {ex.Message}", false);
+                    try
+                    {
+                        _autoStartEnabled = await AutoStartService.IsEnabledAsync();
+                    }
+                    catch
+                    {
+                        _autoStartEnabled = false;
+                    }
+                }
+                finally
+                {
+                    _isAutoStartSaving = false;
+                }
+            });
     }
 
     private async Task SaveAppSettingsAsync()
     {
-        _isAppSettingsSaving = true;
-        try
-        {
-            await SaveCurrentAppSettingsAsync();
-            SetNotification("設定を保存しました。", true);
-        }
-        catch (Exception ex)
-        {
-            SetNotification($"アプリ設定の保存に失敗しました: {ex.Message}", false);
-        }
-        finally
-        {
-            _isAppSettingsSaving = false;
-        }
+        await RunWithUserOperationLoadingAsync(
+            "設定を保存しています...",
+            async () =>
+            {
+                _isAppSettingsSaving = true;
+                try
+                {
+                    await SaveCurrentAppSettingsAsync();
+                    SetNotification("設定を保存しました。", true);
+                }
+                catch (Exception ex)
+                {
+                    SetNotification($"アプリ設定の保存に失敗しました: {ex.Message}", false);
+                }
+                finally
+                {
+                    _isAppSettingsSaving = false;
+                }
+            });
     }
 
     private void ApplyAppSettings(AppSettings settings)
@@ -1091,19 +1168,24 @@ else
 
     private async Task RefreshGitStatusesManuallyAsync()
     {
-        try
-        {
-            var isSuccess = await RefreshGitStatusesAsync();
-            SetNotification(
-                isSuccess
-                    ? "Gitステータスを更新しました。"
-                    : "一部のGitステータス更新に失敗しました。ログを確認してください。",
-                isSuccess);
-        }
-        catch (OperationCanceledException)
-        {
-            // 画面終了時のキャンセルは通知しない。
-        }
+        await RunWithUserOperationLoadingAsync(
+            "Gitステータスを更新しています...",
+            async () =>
+            {
+                try
+                {
+                    var isSuccess = await RefreshGitStatusesAsync();
+                    SetNotification(
+                        isSuccess
+                            ? "Gitステータスを更新しました。"
+                            : "一部のGitステータス更新に失敗しました。ログを確認してください。",
+                        isSuccess);
+                }
+                catch (OperationCanceledException)
+                {
+                    // 画面終了時のキャンセルは通知しない。
+                }
+            });
     }
 
     private Task DecreaseGameCardSizeAsync()
@@ -1134,21 +1216,26 @@ else
 
         var previous = _gameCardSizePercent;
         _gameCardSizePercent = next;
-        _isCardSizeSaving = true;
+        await RunWithUserOperationLoadingAsync(
+            "カードサイズを保存しています...",
+            async () =>
+            {
+                _isCardSizeSaving = true;
 
-        try
-        {
-            await SaveCurrentAppSettingsAsync();
-        }
-        catch (Exception ex)
-        {
-            _gameCardSizePercent = previous;
-            SetNotification($"カードサイズ設定の保存に失敗しました: {ex.Message}", false);
-        }
-        finally
-        {
-            _isCardSizeSaving = false;
-        }
+                try
+                {
+                    await SaveCurrentAppSettingsAsync();
+                }
+                catch (Exception ex)
+                {
+                    _gameCardSizePercent = previous;
+                    SetNotification($"カードサイズ設定の保存に失敗しました: {ex.Message}", false);
+                }
+                finally
+                {
+                    _isCardSizeSaving = false;
+                }
+            });
     }
 
     private string GetGameGridStyle()
@@ -1182,28 +1269,38 @@ else
 
     private async Task OpenLatestErrorLogAsync()
     {
-        try
-        {
-            await LogAccessService.OpenLatestErrorLogAsync();
-            SetNotification("最新エラーログを開きました。", true);
-        }
-        catch (Exception ex)
-        {
-            SetNotification(ex.Message, false);
-        }
+        await RunWithUserOperationLoadingAsync(
+            "最新エラーログを開いています...",
+            async () =>
+            {
+                try
+                {
+                    await LogAccessService.OpenLatestErrorLogAsync();
+                    SetNotification("最新エラーログを開きました。", true);
+                }
+                catch (Exception ex)
+                {
+                    SetNotification(ex.Message, false);
+                }
+            });
     }
 
     private async Task OpenLogDirectoryAsync()
     {
-        try
-        {
-            await LogAccessService.OpenLogDirectoryAsync();
-            SetNotification("ログフォルダを開きました。", true);
-        }
-        catch (Exception ex)
-        {
-            SetNotification(ex.Message, false);
-        }
+        await RunWithUserOperationLoadingAsync(
+            "ログフォルダを開いています...",
+            async () =>
+            {
+                try
+                {
+                    await LogAccessService.OpenLogDirectoryAsync();
+                    SetNotification("ログフォルダを開きました。", true);
+                }
+                catch (Exception ex)
+                {
+                    SetNotification(ex.Message, false);
+                }
+            });
     }
 
     private async Task RunStartupLogMaintenanceAsync()
@@ -1219,6 +1316,11 @@ else
     }
 
     private async Task LoadLogEntriesAsync()
+    {
+        await RunWithUserOperationLoadingAsync("ログを読み込んでいます...", LoadLogEntriesCoreAsync);
+    }
+
+    private async Task LoadLogEntriesCoreAsync()
     {
         if (_isLogLoading)
         {
@@ -1256,39 +1358,44 @@ else
             return;
         }
 
-        var lines = new List<string>(_logViewerEntries.Count * 3);
-        foreach (var entry in _logViewerEntries)
-        {
-            lines.Add($"{FormatLogTimestamp(entry.Timestamp)} [{entry.Severity}] {entry.Message}");
-            lines.Add(
-                $"name={entry.Name}, traceId={entry.TraceId ?? "n/a"}, repo={entry.RepositoryId ?? "n/a"}, command={entry.Command ?? "n/a"}, exitCode={(entry.ExitCode?.ToString() ?? "n/a")}");
-            if (!string.IsNullOrWhiteSpace(entry.Detail))
+        await RunWithUserOperationLoadingAsync(
+            "ログをコピーしています...",
+            async () =>
             {
-                lines.Add($"detail: {entry.Detail}");
-            }
+                var lines = new List<string>(_logViewerEntries.Count * 3);
+                foreach (var entry in _logViewerEntries)
+                {
+                    lines.Add($"{FormatLogTimestamp(entry.Timestamp)} [{entry.Severity}] {entry.Message}");
+                    lines.Add(
+                        $"name={entry.Name}, traceId={entry.TraceId ?? "n/a"}, repo={entry.RepositoryId ?? "n/a"}, command={entry.Command ?? "n/a"}, exitCode={(entry.ExitCode?.ToString() ?? "n/a")}");
+                    if (!string.IsNullOrWhiteSpace(entry.Detail))
+                    {
+                        lines.Add($"detail: {entry.Detail}");
+                    }
 
-            if (!string.IsNullOrWhiteSpace(entry.StandardOutput))
-            {
-                lines.Add($"stdout: {entry.StandardOutput}");
-            }
+                    if (!string.IsNullOrWhiteSpace(entry.StandardOutput))
+                    {
+                        lines.Add($"stdout: {entry.StandardOutput}");
+                    }
 
-            if (!string.IsNullOrWhiteSpace(entry.StandardError))
-            {
-                lines.Add($"stderr: {entry.StandardError}");
-            }
+                    if (!string.IsNullOrWhiteSpace(entry.StandardError))
+                    {
+                        lines.Add($"stderr: {entry.StandardError}");
+                    }
 
-            lines.Add(string.Empty);
-        }
+                    lines.Add(string.Empty);
+                }
 
-        try
-        {
-            await Clipboard.Default.SetTextAsync(string.Join(Environment.NewLine, lines));
-            SetNotification("ログをクリップボードにコピーしました。", true);
-        }
-        catch (Exception ex)
-        {
-            SetNotification($"ログコピーに失敗しました: {ex.Message}", false);
-        }
+                try
+                {
+                    await Clipboard.Default.SetTextAsync(string.Join(Environment.NewLine, lines));
+                    SetNotification("ログをクリップボードにコピーしました。", true);
+                }
+                catch (Exception ex)
+                {
+                    SetNotification($"ログコピーに失敗しました: {ex.Message}", false);
+                }
+            });
     }
 
     private static Microsoft.Extensions.Logging.LogLevel? ParseLogSeverityFilter(string? filter)
@@ -1415,38 +1522,43 @@ else
             return;
         }
 
-        _isDeleting = true;
-        var targetGameId = _deleteTargetGameId;
-        var targetTitle = _deleteTargetGameTitle;
-        try
-        {
-            var deleted = await GameLibraryService.DeleteAsync(targetGameId);
-            if (!deleted)
+        await RunWithUserOperationLoadingAsync(
+            "ゲームを削除しています...",
+            async () =>
             {
-                SetNotification("削除対象のゲームが見つかりません。", false);
-                return;
-            }
+                _isDeleting = true;
+                var targetGameId = _deleteTargetGameId;
+                var targetTitle = _deleteTargetGameTitle;
+                try
+                {
+                    var deleted = await GameLibraryService.DeleteAsync(targetGameId);
+                    if (!deleted)
+                    {
+                        SetNotification("削除対象のゲームが見つかりません。", false);
+                        return;
+                    }
 
-            if (_isEditorOpen
-                && !string.IsNullOrWhiteSpace(_editingGameId)
-                && string.Equals(_editingGameId, targetGameId, StringComparison.OrdinalIgnoreCase))
-            {
-                CloseEditor(force: true);
-            }
+                    if (_isEditorOpen
+                        && !string.IsNullOrWhiteSpace(_editingGameId)
+                        && string.Equals(_editingGameId, targetGameId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        CloseEditor(force: true);
+                    }
 
-            await ReloadGamesAsync();
-            await RefreshRepositoryWatchersAsync();
-            SetNotification($"ゲームを削除しました: {targetTitle}", true);
-            CloseDeleteConfirm(force: true);
-        }
-        catch (Exception ex)
-        {
-            SetNotification($"ゲーム削除に失敗しました: {ex.Message}", false);
-        }
-        finally
-        {
-            _isDeleting = false;
-        }
+                    await ReloadGamesAsync();
+                    await RefreshRepositoryWatchersAsync();
+                    SetNotification($"ゲームを削除しました: {targetTitle}", true);
+                    CloseDeleteConfirm(force: true);
+                }
+                catch (Exception ex)
+                {
+                    SetNotification($"ゲーム削除に失敗しました: {ex.Message}", false);
+                }
+                finally
+                {
+                    _isDeleting = false;
+                }
+            });
     }
 
     private void CloseEditor(bool force = false)
@@ -1469,12 +1581,6 @@ else
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(_editorExecutablePath))
-        {
-            SetNotification("実行ファイルパスは必須です。", false);
-            return;
-        }
-
         var input = new GameEditInput(
             Title: _editorTitle,
             ExecutablePath: _editorExecutablePath,
@@ -1482,58 +1588,63 @@ else
             ThumbnailSourcePath: _editorThumbnailSourcePath,
             ClearThumbnail: _editorClearThumbnail);
 
-        _isSaving = true;
-        try
-        {
-            var saveLinkInputs = BuildEditorSaveLinkInputs();
-            if (_isEditMode)
+        await RunWithUserOperationLoadingAsync(
+            "ゲーム設定を保存しています...",
+            async () =>
             {
-                if (string.IsNullOrWhiteSpace(_editingGameId))
+                _isSaving = true;
+                try
                 {
-                    SetNotification("編集対象が不正です。", false);
-                    return;
-                }
+                    var saveLinkInputs = BuildEditorSaveLinkInputs();
+                    if (_isEditMode)
+                    {
+                        if (string.IsNullOrWhiteSpace(_editingGameId))
+                        {
+                            SetNotification("編集対象が不正です。", false);
+                            return;
+                        }
 
-                if (_saveLinkLoadFailedGameIds.Contains(_editingGameId))
+                        if (_saveLinkLoadFailedGameIds.Contains(_editingGameId))
+                        {
+                            SetNotification(
+                                "セーブリンク取得に失敗しているため保存できません。再読み込みしてから再試行してください。",
+                                false);
+                            return;
+                        }
+
+                        var updated = await GameLibraryService.UpdateWithSaveLinksAsync(_editingGameId, input, saveLinkInputs);
+                        if (updated is null)
+                        {
+                            SetNotification("編集対象のゲームが見つかりません。", false);
+                            return;
+                        }
+
+                        SetNotification($"ゲーム設定を更新しました: {updated.Title}", true);
+                    }
+                    else
+                    {
+                        var created = await GameLibraryService.CreateAsync(input);
+                        await SaveLinksForCreatedGameAsync(created.Id, saveLinkInputs);
+                        SetNotification($"ゲームを登録しました: {created.Title}", true);
+                    }
+
+                    await ReloadGamesAsync();
+                    await RefreshRepositoryWatchersAsync();
+                    shouldCloseEditor = true;
+                }
+                catch (Exception ex)
                 {
-                    SetNotification(
-                        "セーブリンク取得に失敗しているため保存できません。再読み込みしてから再試行してください。",
-                        false);
-                    return;
+                    SetNotification($"保存に失敗しました: {ex.Message}", false);
                 }
-
-                var updated = await GameLibraryService.UpdateWithSaveLinksAsync(_editingGameId, input, saveLinkInputs);
-                if (updated is null)
+                finally
                 {
-                    SetNotification("編集対象のゲームが見つかりません。", false);
-                    return;
+                    _isSaving = false;
+                    if (shouldCloseEditor)
+                    {
+                        CloseEditor(force: true);
+                    }
                 }
-
-                SetNotification($"ゲーム設定を更新しました: {updated.Title}", true);
-            }
-            else
-            {
-                var created = await GameLibraryService.CreateAsync(input);
-                await SaveLinksForCreatedGameAsync(created.Id, saveLinkInputs);
-                SetNotification($"ゲームを登録しました: {created.Title}", true);
-            }
-
-            await ReloadGamesAsync();
-            await RefreshRepositoryWatchersAsync();
-            shouldCloseEditor = true;
-        }
-        catch (Exception ex)
-        {
-            SetNotification($"保存に失敗しました: {ex.Message}", false);
-        }
-        finally
-        {
-            _isSaving = false;
-            if (shouldCloseEditor)
-            {
-                CloseEditor(force: true);
-            }
-        }
+            });
     }
 
     private async Task SaveLinksForCreatedGameAsync(string gameId, IReadOnlyList<GameSaveLinkEditInput> saveLinkInputs)
@@ -1575,41 +1686,51 @@ else
 
     private async Task PickExecutablePathAsync()
     {
-        try
-        {
-            var selectedPath = await PathPickerService.PickExecutablePathAsync();
-            if (!string.IsNullOrWhiteSpace(selectedPath))
+        await RunWithUserOperationLoadingAsync(
+            "実行ファイルを選択しています...",
+            async () =>
             {
-                _editorExecutablePath = selectedPath;
-                return;
-            }
+                try
+                {
+                    var selectedPath = await PathPickerService.PickExecutablePathAsync();
+                    if (!string.IsNullOrWhiteSpace(selectedPath))
+                    {
+                        _editorExecutablePath = selectedPath;
+                        return;
+                    }
 
-            SetNotification("実行ファイルが選択されませんでした。", false);
-        }
-        catch (Exception ex)
-        {
-            SetNotification(ex.Message, false);
-        }
+                    SetNotification("実行ファイルが選択されませんでした。", false);
+                }
+                catch (Exception ex)
+                {
+                    SetNotification(ex.Message, false);
+                }
+            });
     }
 
     private async Task PickThumbnailPathAsync()
     {
-        try
-        {
-            var selectedPath = await PathPickerService.PickThumbnailPathAsync();
-            if (!string.IsNullOrWhiteSpace(selectedPath))
+        await RunWithUserOperationLoadingAsync(
+            "サムネイル画像を選択しています...",
+            async () =>
             {
-                _editorThumbnailSourcePath = selectedPath;
-                _editorClearThumbnail = false;
-                return;
-            }
+                try
+                {
+                    var selectedPath = await PathPickerService.PickThumbnailPathAsync();
+                    if (!string.IsNullOrWhiteSpace(selectedPath))
+                    {
+                        _editorThumbnailSourcePath = selectedPath;
+                        _editorClearThumbnail = false;
+                        return;
+                    }
 
-            SetNotification("サムネイル画像が選択されませんでした。", false);
-        }
-        catch (Exception ex)
-        {
-            SetNotification(ex.Message, false);
-        }
+                    SetNotification("サムネイル画像が選択されませんでした。", false);
+                }
+                catch (Exception ex)
+                {
+                    SetNotification(ex.Message, false);
+                }
+            });
     }
 
     private void ClearThumbnailSelection()
@@ -1641,21 +1762,26 @@ else
 
     private async Task PickRepositoryDirectoryPathAsync()
     {
-        try
-        {
-            var selectedPath = await PathPickerService.PickRepositoryDirectoryPathAsync();
-            if (!string.IsNullOrWhiteSpace(selectedPath))
+        await RunWithUserOperationLoadingAsync(
+            "関連リポジトリを選択しています...",
+            async () =>
             {
-                _editorRepositoryPath = selectedPath;
-                return;
-            }
+                try
+                {
+                    var selectedPath = await PathPickerService.PickRepositoryDirectoryPathAsync();
+                    if (!string.IsNullOrWhiteSpace(selectedPath))
+                    {
+                        _editorRepositoryPath = selectedPath;
+                        return;
+                    }
 
-            SetNotification("リポジトリフォルダが選択されませんでした。", false);
-        }
-        catch (Exception ex)
-        {
-            SetNotification(ex.Message, false);
-        }
+                    SetNotification("リポジトリフォルダが選択されませんでした。", false);
+                }
+                catch (Exception ex)
+                {
+                    SetNotification(ex.Message, false);
+                }
+            });
     }
 
     private void ClearRepositoryPath()
@@ -1740,21 +1866,26 @@ else
             return;
         }
 
-        try
-        {
-            var selectedPath = await PathPickerService.PickFolderPathAsync(pickerTitle);
-            if (!string.IsNullOrWhiteSpace(selectedPath))
+        await RunWithUserOperationLoadingAsync(
+            "セーブリンクのフォルダを選択しています...",
+            async () =>
             {
-                applySelectedPath(entry, selectedPath);
-                return;
-            }
+                try
+                {
+                    var selectedPath = await PathPickerService.PickFolderPathAsync(pickerTitle);
+                    if (!string.IsNullOrWhiteSpace(selectedPath))
+                    {
+                        applySelectedPath(entry, selectedPath);
+                        return;
+                    }
 
-            SetNotification(emptySelectionMessage, false);
-        }
-        catch (Exception ex)
-        {
-            SetNotification(ex.Message, false);
-        }
+                    SetNotification(emptySelectionMessage, false);
+                }
+                catch (Exception ex)
+                {
+                    SetNotification(ex.Message, false);
+                }
+            });
     }
 
     private bool IsEditorSaveLinkIndexValid(int index)
@@ -1949,6 +2080,18 @@ else
         return _pinningGameIds.Contains(game.Id);
     }
 
+    private static bool IsLaunchDisabled(GameCardItem game)
+    {
+        return string.IsNullOrWhiteSpace(game.ExecutablePath);
+    }
+
+    private static string GetLaunchButtonTitle(GameCardItem game)
+    {
+        return IsLaunchDisabled(game)
+            ? "実行ファイル未設定のため起動できません"
+            : "起動";
+    }
+
     private async Task TogglePinnedAsync(GameCardItem game)
     {
         if (string.IsNullOrWhiteSpace(game.Id) || !_pinningGameIds.Add(game.Id))
@@ -1957,24 +2100,29 @@ else
         }
 
         var nextPinned = !game.IsPinned;
-        try
-        {
-            await GameLibraryService.SetPinnedAsync(game.Id, nextPinned);
-            await ReloadGamesAsync();
-            SetNotification(
-                nextPinned
-                    ? $"ピン留めしました: {game.Title}"
-                    : $"ピン留めを解除しました: {game.Title}",
-                true);
-        }
-        catch (Exception ex)
-        {
-            SetNotification($"ピン留め更新に失敗しました: {ex.Message}", false);
-        }
-        finally
-        {
-            _pinningGameIds.Remove(game.Id);
-        }
+        await RunWithUserOperationLoadingAsync(
+            nextPinned ? "ピン留めを更新しています..." : "ピン留め解除を更新しています...",
+            async () =>
+            {
+                try
+                {
+                    await GameLibraryService.SetPinnedAsync(game.Id, nextPinned);
+                    await ReloadGamesAsync();
+                    SetNotification(
+                        nextPinned
+                            ? $"ピン留めしました: {game.Title}"
+                            : $"ピン留めを解除しました: {game.Title}",
+                        true);
+                }
+                catch (Exception ex)
+                {
+                    SetNotification($"ピン留め更新に失敗しました: {ex.Message}", false);
+                }
+                finally
+                {
+                    _pinningGameIds.Remove(game.Id);
+                }
+            });
     }
 
     private static string? NormalizeRepositoryKey(string? repositoryPath)
@@ -2437,15 +2585,20 @@ else
             return;
         }
 
-        try
-        {
-            await SyncOrchestrator.ResumeRepositorySyncAsync(repositoryKey);
-            SetNotification($"同期を再開しました: {game.Title}", true);
-        }
-        catch (Exception ex)
-        {
-            SetNotification($"同期再開に失敗しました: {ex.Message}", false);
-        }
+        await RunWithUserOperationLoadingAsync(
+            "同期を再開しています...",
+            async () =>
+            {
+                try
+                {
+                    await SyncOrchestrator.ResumeRepositorySyncAsync(repositoryKey);
+                    SetNotification($"同期を再開しました: {game.Title}", true);
+                }
+                catch (Exception ex)
+                {
+                    SetNotification($"同期再開に失敗しました: {ex.Message}", false);
+                }
+            });
     }
 
     private static string FormatLastPlayed(DateTimeOffset? value)
@@ -2529,20 +2682,25 @@ else
             return;
         }
 
-        var lines = _notificationHistoryEntries
-            .Select(entry =>
-                $"{FormatNotificationHistoryTimestamp(entry.Timestamp)} [{GetNotificationHistoryTypeLabel(entry.IsSuccess)}] {entry.Message}")
-            .ToArray();
+        await RunWithUserOperationLoadingAsync(
+            "通知履歴をコピーしています...",
+            async () =>
+            {
+                var lines = _notificationHistoryEntries
+                    .Select(entry =>
+                        $"{FormatNotificationHistoryTimestamp(entry.Timestamp)} [{GetNotificationHistoryTypeLabel(entry.IsSuccess)}] {entry.Message}")
+                    .ToArray();
 
-        try
-        {
-            await Clipboard.Default.SetTextAsync(string.Join(Environment.NewLine, lines));
-            SetNotification("通知履歴をコピーしました。", true, addToHistory: false);
-        }
-        catch (Exception ex)
-        {
-            SetNotification($"通知履歴のコピーに失敗しました: {ex.Message}", false, addToHistory: false);
-        }
+                try
+                {
+                    await Clipboard.Default.SetTextAsync(string.Join(Environment.NewLine, lines));
+                    SetNotification("通知履歴をコピーしました。", true, addToHistory: false);
+                }
+                catch (Exception ex)
+                {
+                    SetNotification($"通知履歴のコピーに失敗しました: {ex.Message}", false, addToHistory: false);
+                }
+            });
     }
 
     private void ClearNotificationHistory()
