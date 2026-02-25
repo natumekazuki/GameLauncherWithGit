@@ -789,6 +789,7 @@ else
                     <p class="branch-current-value">現在: @GetEditorCurrentBranchLabel()</p>
                     <div class="branch-switch-row">
                         <select @bind="_editorSelectedBranch"
+                                @bind:event="oninput"
                                 disabled="@IsBranchSelectionDisabled()">
                             @if (_editorBranches.Count == 0)
                             {
@@ -1900,6 +1901,17 @@ else
                     }
 
                     await LoadEditorBranchesAsync(showNotificationOnFailure: false, preserveSelection: false);
+                    var currentBranchResult = await GitService.RunAsync(repositoryPath, "branch --show-current");
+                    if (currentBranchResult.IsSuccess)
+                    {
+                        var actualBranch = NormalizeBranchName(FirstNonEmptyLine(currentBranchResult.StandardOutput));
+                        if (!string.IsNullOrWhiteSpace(actualBranch))
+                        {
+                            _editorCurrentBranch = actualBranch;
+                            _editorSelectedBranch = actualBranch;
+                        }
+                    }
+
                     await RefreshGitStatusesAsync();
                     SetNotification($"ブランチを切り替えました: {targetBranch}", true);
                 }
