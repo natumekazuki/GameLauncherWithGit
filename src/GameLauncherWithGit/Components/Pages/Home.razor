@@ -784,6 +784,54 @@ else
             </div>
 
             <div class="editor-field">
+                <label>ブランチ操作</label>
+                <div class="branch-picker">
+                    <p class="branch-current-value">現在: @GetEditorCurrentBranchLabel()</p>
+                    <div class="branch-switch-row">
+                        <select @bind="_editorSelectedBranch"
+                                disabled="@IsBranchSelectionDisabled()">
+                            @if (_editorBranches.Count == 0)
+                            {
+                                <option value="">ブランチなし</option>
+                            }
+                            else
+                            {
+                                @foreach (var branch in _editorBranches)
+                                {
+                                    <option value="@branch">@branch</option>
+                                }
+                            }
+                        </select>
+                        <button type="button"
+                                class="secondary-button picker-button"
+                                @onclick="ReloadEditorBranchesAsync"
+                                disabled="@IsBranchReloadDisabled()">
+                            @(_isBranchLoading ? "取得中..." : "再読込")
+                        </button>
+                        <button type="button"
+                                class="secondary-button picker-button"
+                                @onclick="SwitchEditorBranchAsync"
+                                disabled="@IsBranchSwitchDisabled()">
+                            切り替え
+                        </button>
+                    </div>
+                    <div class="branch-create-row">
+                        <input placeholder="新規ブランチ名"
+                               @bind="_editorNewBranchName"
+                               @bind:event="oninput"
+                               disabled="@IsBranchCreateInputDisabled()" />
+                        <button type="button"
+                                class="secondary-button picker-button"
+                                @onclick="CreateEditorBranchAsync"
+                                disabled="@IsBranchCreateDisabled()">
+                            作成して切り替え
+                        </button>
+                    </div>
+                    <p class="settings-note">関連リポジトリ未設定時は操作できません。</p>
+                </div>
+            </div>
+
+            <div class="editor-field">
                 <label>セーブリンク（ジャンクション・複数）</label>
                 <p class="settings-note">リンクを削除して保存すると、同期先データをローカル通常フォルダへ復元してリンク解除します。</p>
                 <div class="save-link-editor">
@@ -894,10 +942,17 @@ else
     private string _editorTitle = string.Empty;
     private string _editorExecutablePath = string.Empty;
     private string? _editorRepositoryPath;
+    private string? _editorCurrentBranch;
+    private string? _editorSelectedBranch;
+    private string _editorNewBranchName = string.Empty;
+    private readonly List<string> _editorBranches = [];
     private readonly List<EditorSaveLinkEntry> _editorSaveLinks = [];
     private string? _editorThumbnailSourcePath;
     private bool _editorHasThumbnail;
     private bool _editorClearThumbnail;
+    private bool _isBranchLoading;
+    private bool _isBranchSwitching;
+    private bool _isBranchCreating;
     private bool _isHelpOpen;
     private bool _isSettingsOpen;
     private bool _isSettingsLoading;
@@ -1437,6 +1492,7 @@ else
         _editorTitle = string.Empty;
         _editorExecutablePath = string.Empty;
         _editorRepositoryPath = null;
+        ResetEditorBranchState(clearNewBranchName: true);
         _editorSaveLinks.Clear();
         _editorThumbnailSourcePath = null;
         _editorHasThumbnail = false;
@@ -1489,6 +1545,7 @@ else
         _editorTitle = game.Title;
         _editorExecutablePath = game.ExecutablePath;
         _editorRepositoryPath = game.RelatedRepositoryPath;
+        ResetEditorBranchState(clearNewBranchName: true);
         _editorSaveLinks.Clear();
         if (_saveLinksByGame.TryGetValue(game.Id, out var saveLinks))
         {
@@ -1507,6 +1564,7 @@ else
         _editorHasThumbnail = HasThumbnail(game);
         _editorClearThumbnail = false;
         _isEditorOpen = true;
+        _ = LoadEditorBranchesAsync(showNotificationOnFailure: false, preserveSelection: false);
     }
 
     private async Task DeleteGameAsync()
@@ -1772,6 +1830,7 @@ else
                     if (!string.IsNullOrWhiteSpace(selectedPath))
                     {
                         _editorRepositoryPath = selectedPath;
+                        await LoadEditorBranchesAsync(showNotificationOnFailure: true, preserveSelection: false);
                         return;
                     }
 
@@ -1787,6 +1846,367 @@ else
     private void ClearRepositoryPath()
     {
         _editorRepositoryPath = null;
+        ResetEditorBranchState(clearNewBranchName: true);
+    }
+
+    private async Task ReloadEditorBranchesAsync()
+    {
+        await RunWithUserOperationLoadingAsync(
+            "ブランチ一覧を取得しています...",
+            async () =>
+            {
+                await LoadEditorBranchesAsync(showNotificationOnFailure: true, preserveSelection: true);
+            });
+    }
+
+    private async Task SwitchEditorBranchAsync()
+    {
+        var repositoryPath = NormalizeRepositoryPath(_editorRepositoryPath);
+        if (repositoryPath is null)
+        {
+            SetNotification("関連リポジトリが未設定または不正です。", false);
+            return;
+        }
+
+        var targetBranch = NormalizeBranchName(_editorSelectedBranch);
+        if (string.IsNullOrWhiteSpace(targetBranch))
+        {
+            SetNotification("切り替え先ブランチを選択してください。", false);
+            return;
+        }
+
+        if (string.Equals(targetBranch, _editorCurrentBranch, StringComparison.OrdinalIgnoreCase))
+        {
+            SetNotification($"既に選択ブランチです: {targetBranch}", true);
+            return;
+        }
+
+        await RunWithUserOperationLoadingAsync(
+            "ブランチを切り替えています...",
+            async () =>
+            {
+                _isBranchSwitching = true;
+                try
+                {
+                    var result = await GitService.RunAsync(
+                        repositoryPath,
+                        $"checkout {EscapeGitArgument(targetBranch)}");
+                    if (!result.IsSuccess)
+                    {
+                        SetNotification(
+                            $"ブランチ切り替えに失敗しました: {BuildGitFailureReason(result)}",
+                            false);
+                        return;
+                    }
+
+                    await LoadEditorBranchesAsync(showNotificationOnFailure: false, preserveSelection: true);
+                    await RefreshGitStatusesAsync();
+                    SetNotification($"ブランチを切り替えました: {targetBranch}", true);
+                }
+                catch (Exception ex)
+                {
+                    SetNotification($"ブランチ切り替えに失敗しました: {ex.Message}", false);
+                }
+                finally
+                {
+                    _isBranchSwitching = false;
+                }
+            });
+    }
+
+    private async Task CreateEditorBranchAsync()
+    {
+        var repositoryPath = NormalizeRepositoryPath(_editorRepositoryPath);
+        if (repositoryPath is null)
+        {
+            SetNotification("関連リポジトリが未設定または不正です。", false);
+            return;
+        }
+
+        var newBranchName = NormalizeBranchName(_editorNewBranchName);
+        if (string.IsNullOrWhiteSpace(newBranchName))
+        {
+            SetNotification("新規ブランチ名を入力してください。", false);
+            return;
+        }
+
+        if (_editorBranches.Any(existing => string.Equals(existing, newBranchName, StringComparison.OrdinalIgnoreCase)))
+        {
+            SetNotification($"既に存在するブランチ名です: {newBranchName}", false);
+            return;
+        }
+
+        await RunWithUserOperationLoadingAsync(
+            "新規ブランチを作成しています...",
+            async () =>
+            {
+                _isBranchCreating = true;
+                try
+                {
+                    var validateResult = await GitService.RunAsync(
+                        repositoryPath,
+                        $"check-ref-format --branch {EscapeGitArgument(newBranchName)}");
+                    if (!validateResult.IsSuccess)
+                    {
+                        SetNotification(
+                            $"ブランチ名が不正です: {BuildGitFailureReason(validateResult)}",
+                            false);
+                        return;
+                    }
+
+                    var createResult = await GitService.RunAsync(
+                        repositoryPath,
+                        $"checkout -b {EscapeGitArgument(newBranchName)}");
+                    if (!createResult.IsSuccess)
+                    {
+                        SetNotification(
+                            $"ブランチ作成に失敗しました: {BuildGitFailureReason(createResult)}",
+                            false);
+                        return;
+                    }
+
+                    _editorNewBranchName = string.Empty;
+                    await LoadEditorBranchesAsync(showNotificationOnFailure: false, preserveSelection: true);
+                    await RefreshGitStatusesAsync();
+                    SetNotification($"ブランチを作成して切り替えました: {newBranchName}", true);
+                }
+                catch (Exception ex)
+                {
+                    SetNotification($"ブランチ作成に失敗しました: {ex.Message}", false);
+                }
+                finally
+                {
+                    _isBranchCreating = false;
+                }
+            });
+    }
+
+    private async Task<bool> LoadEditorBranchesAsync(bool showNotificationOnFailure, bool preserveSelection)
+    {
+        var repositoryPath = NormalizeRepositoryPath(_editorRepositoryPath);
+        if (repositoryPath is null)
+        {
+            ResetEditorBranchState(clearNewBranchName: false);
+            return false;
+        }
+
+        _isBranchLoading = true;
+        try
+        {
+            var gitCheck = await GitService.RunAsync(repositoryPath, "rev-parse --is-inside-work-tree");
+            if (!gitCheck.IsSuccess)
+            {
+                if (showNotificationOnFailure)
+                {
+                    SetNotification(
+                        $"ブランチ一覧取得に失敗しました: {BuildGitFailureReason(gitCheck)}",
+                        false);
+                }
+
+                ResetEditorBranchState(clearNewBranchName: false);
+                return false;
+            }
+
+            var currentBranchResult = await GitService.RunAsync(repositoryPath, "branch --show-current");
+            if (!currentBranchResult.IsSuccess)
+            {
+                if (showNotificationOnFailure)
+                {
+                    SetNotification(
+                        $"現在ブランチ取得に失敗しました: {BuildGitFailureReason(currentBranchResult)}",
+                        false);
+                }
+
+                ResetEditorBranchState(clearNewBranchName: false);
+                return false;
+            }
+
+            var localBranchesResult = await GitService.RunAsync(
+                repositoryPath,
+                "for-each-ref --format=\"%(refname:short)\" refs/heads");
+            if (!localBranchesResult.IsSuccess)
+            {
+                if (showNotificationOnFailure)
+                {
+                    SetNotification(
+                        $"ブランチ一覧取得に失敗しました: {BuildGitFailureReason(localBranchesResult)}",
+                        false);
+                }
+
+                ResetEditorBranchState(clearNewBranchName: false);
+                return false;
+            }
+
+            if (!string.Equals(repositoryPath, NormalizeRepositoryPath(_editorRepositoryPath), StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            var currentBranch = NormalizeBranchName(FirstNonEmptyLine(currentBranchResult.StandardOutput));
+            var previousSelectedBranch = NormalizeBranchName(_editorSelectedBranch);
+            var branchNames = localBranchesResult.StandardOutput
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(static name => !string.IsNullOrWhiteSpace(name))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(static name => name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (!string.IsNullOrWhiteSpace(currentBranch)
+                && branchNames.All(name => !string.Equals(name, currentBranch, StringComparison.OrdinalIgnoreCase)))
+            {
+                branchNames.Insert(0, currentBranch);
+            }
+            else if (!string.IsNullOrWhiteSpace(currentBranch))
+            {
+                branchNames = branchNames
+                    .OrderBy(name => string.Equals(name, currentBranch, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+                    .ThenBy(static name => name, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            }
+
+            _editorBranches.Clear();
+            _editorBranches.AddRange(branchNames);
+            _editorCurrentBranch = currentBranch;
+
+            if (preserveSelection
+                && !string.IsNullOrWhiteSpace(previousSelectedBranch)
+                && _editorBranches.Any(name => string.Equals(name, previousSelectedBranch, StringComparison.OrdinalIgnoreCase)))
+            {
+                _editorSelectedBranch = previousSelectedBranch;
+            }
+            else if (!string.IsNullOrWhiteSpace(currentBranch))
+            {
+                _editorSelectedBranch = currentBranch;
+            }
+            else
+            {
+                _editorSelectedBranch = _editorBranches.FirstOrDefault();
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            if (showNotificationOnFailure)
+            {
+                SetNotification($"ブランチ一覧取得に失敗しました: {ex.Message}", false);
+            }
+
+            ResetEditorBranchState(clearNewBranchName: false);
+            return false;
+        }
+        finally
+        {
+            _isBranchLoading = false;
+        }
+    }
+
+    private static string? NormalizeBranchName(string? branchName)
+    {
+        return string.IsNullOrWhiteSpace(branchName)
+            ? null
+            : branchName.Trim();
+    }
+
+    private static string BuildGitFailureReason(GitCommandResult result)
+    {
+        return FirstNonEmptyLine(result.StandardError)
+            ?? FirstNonEmptyLine(result.StandardOutput)
+            ?? $"exit code: {result.ExitCode}";
+    }
+
+    private static string EscapeGitArgument(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return "\"\"";
+        }
+
+        var escaped = value
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal);
+        return $"\"{escaped}\"";
+    }
+
+    private void ResetEditorBranchState(bool clearNewBranchName)
+    {
+        _isBranchLoading = false;
+        _isBranchSwitching = false;
+        _isBranchCreating = false;
+        _editorCurrentBranch = null;
+        _editorSelectedBranch = null;
+        _editorBranches.Clear();
+
+        if (clearNewBranchName)
+        {
+            _editorNewBranchName = string.Empty;
+        }
+    }
+
+    private string GetEditorCurrentBranchLabel()
+    {
+        if (NormalizeRepositoryPath(_editorRepositoryPath) is null)
+        {
+            return "関連リポジトリ未設定";
+        }
+
+        if (_isBranchLoading)
+        {
+            return "取得中...";
+        }
+
+        return string.IsNullOrWhiteSpace(_editorCurrentBranch)
+            ? "detached HEAD / 不明"
+            : _editorCurrentBranch;
+    }
+
+    private bool IsBranchSelectionDisabled()
+    {
+        return NormalizeRepositoryPath(_editorRepositoryPath) is null
+            || _isSaving
+            || _isBranchLoading
+            || _isBranchSwitching
+            || _isBranchCreating
+            || _editorBranches.Count == 0;
+    }
+
+    private bool IsBranchReloadDisabled()
+    {
+        return NormalizeRepositoryPath(_editorRepositoryPath) is null
+            || _isSaving
+            || _isBranchLoading
+            || _isBranchSwitching
+            || _isBranchCreating;
+    }
+
+    private bool IsBranchSwitchDisabled()
+    {
+        if (IsBranchSelectionDisabled())
+        {
+            return true;
+        }
+
+        var selectedBranch = NormalizeBranchName(_editorSelectedBranch);
+        if (string.IsNullOrWhiteSpace(selectedBranch))
+        {
+            return true;
+        }
+
+        return string.Equals(selectedBranch, _editorCurrentBranch, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool IsBranchCreateInputDisabled()
+    {
+        return NormalizeRepositoryPath(_editorRepositoryPath) is null
+            || _isSaving
+            || _isBranchLoading
+            || _isBranchSwitching
+            || _isBranchCreating;
+    }
+
+    private bool IsBranchCreateDisabled()
+    {
+        return IsBranchCreateInputDisabled()
+            || string.IsNullOrWhiteSpace(NormalizeBranchName(_editorNewBranchName));
     }
 
     private void AddEditorSaveLink()
