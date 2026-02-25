@@ -1,6 +1,6 @@
 # MAUI Blazor アーキテクチャ設計（MVP）
 
-更新日: 2026-02-24
+更新日: 2026-02-25
 対象: Windows 11 / .NET 9 / .NET MAUI Blazor Hybrid
 関連: `docs/design/resume-roadmap.md`（中断後の再開用メモ）
 
@@ -101,6 +101,11 @@ flowchart LR
   - `FileSystem.AppDataDirectory/settings.json` を読込/保存し、同期/通知/ログ運用/カード表示設定を管理
 - `SettingsPanelService`
   - トレイメニューなどUI外部から設定モーダルを開くためのイベントブリッジ
+- `AutoStartService`
+  - Windowsの自動起動設定を `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` で管理する
+  - Windows の `StartupApproved` 状態を参照し、UI表示と実際の起動可否を一致させる
+  - 有効化時は `StartupApproved` の既存無効フラグをクリアし、再起動後に起動できる状態へ復帰させる
+  - MSIX環境は `explorer.exe shell:AppsFolder\<PackageFamilyName>!App`、Unpackaged環境は実行ファイル（必要時は `dotnet.exe <AppDllPath>`）を登録する
 - `GameLibraryStore (SQLite)`
   - ゲーム設定（タイトル/実行ファイル/関連リポジトリ/サムネイルパス/状態/ピン留め）をSQLiteへ保存・読込
   - `GameSaveLinks` テーブルでセーブリンク定義（`LocalPath`、`TargetPath`、`EnsureOnLaunch`、`OrderNo`）を保存・読込
