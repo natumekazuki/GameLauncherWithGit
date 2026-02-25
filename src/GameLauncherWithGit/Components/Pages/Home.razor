@@ -1899,7 +1899,7 @@ else
                         return;
                     }
 
-                    await LoadEditorBranchesAsync(showNotificationOnFailure: false, preserveSelection: true);
+                    await LoadEditorBranchesAsync(showNotificationOnFailure: false, preserveSelection: false);
                     await RefreshGitStatusesAsync();
                     SetNotification($"ブランチを切り替えました: {targetBranch}", true);
                 }
@@ -1966,7 +1966,7 @@ else
                     }
 
                     _editorNewBranchName = string.Empty;
-                    await LoadEditorBranchesAsync(showNotificationOnFailure: false, preserveSelection: true);
+                    await LoadEditorBranchesAsync(showNotificationOnFailure: false, preserveSelection: false);
                     await RefreshGitStatusesAsync();
                     SetNotification($"ブランチを作成して切り替えました: {newBranchName}", true);
                 }
