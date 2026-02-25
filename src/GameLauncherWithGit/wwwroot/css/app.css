@@ -568,6 +568,7 @@ h1:focus {
 }
 
 .editor-field input,
+.editor-field select,
 .editor-field textarea {
     border: 1px solid #becae0;
     border-radius: 8px;
@@ -577,6 +578,7 @@ h1:focus {
 }
 
 .editor-field input:focus,
+.editor-field select:focus,
 .editor-field textarea:focus {
     outline: 2px solid #4c7de0;
     border-color: #4c7de0;
@@ -615,6 +617,33 @@ h1:focus {
     display: flex;
     gap: 0.45rem;
     flex-wrap: wrap;
+}
+
+.branch-picker {
+    border: 1px solid #d0d9e8;
+    border-radius: 8px;
+    padding: 0.55rem;
+    background: #f9fbff;
+}
+
+.branch-current-value {
+    margin: 0;
+    font-size: 0.83rem;
+    color: #1e2c41;
+}
+
+.branch-switch-row,
+.branch-create-row {
+    margin-top: 0.55rem;
+    display: flex;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+}
+
+.branch-switch-row select,
+.branch-create-row input {
+    flex: 1;
+    min-width: 0;
 }
 
 .save-link-editor {
@@ -885,6 +914,7 @@ a,
 }
 
 .editor-field input,
+.editor-field select,
 .editor-field textarea {
     border: 1px solid #385077;
     background: #0d1524;
@@ -892,6 +922,7 @@ a,
 }
 
 .editor-field input:focus,
+.editor-field select:focus,
 .editor-field textarea:focus {
     outline: 2px solid #4d7ce0;
     border-color: #4d7ce0;
@@ -903,6 +934,15 @@ a,
 }
 
 .single-repo-value {
+    color: #d7e3f8;
+}
+
+.branch-picker {
+    border: 1px solid #314666;
+    background: #0f1829;
+}
+
+.branch-current-value {
     color: #d7e3f8;
 }
 
