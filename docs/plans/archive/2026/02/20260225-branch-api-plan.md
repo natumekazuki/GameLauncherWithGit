@@ -35,3 +35,5 @@
 - 2026-02-25: `wwwroot/css/app.css` にブランチ操作UI（select/行レイアウト/ダークテーマ）スタイルを追加。
 - 2026-02-25: `docs/design/maui-blazor-architecture.md` にブランチ操作UI仕様とテスト観点を追記。
 - 2026-02-25: `dotnet build src/GameLauncherWithGit/GameLauncherWithGit.csproj -f net9.0-windows10.0.19041.0` は成功（0 warning / 0 error）。
+- 2026-02-25: 編集モーダル起動時にブランチ一覧を即時反映するため、`OpenEditEditor` を `async` 化して一覧取得を待機するよう調整。
+- 2026-02-25: 上記調整後に再ビルドし、`dotnet build src/GameLauncherWithGit/GameLauncherWithGit.csproj -f net9.0-windows10.0.19041.0` は成功（0 warning / 0 error）。
