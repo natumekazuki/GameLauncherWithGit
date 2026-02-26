@@ -15,6 +15,7 @@
 - [ ] 4. UI/状態遷移確認: 再読込・切り替え・作成後の選択状態と通知文言の整合性を確認する。
 - [x] 5. ドキュメント同期: `docs/design/maui-blazor-architecture.md` を更新する。
 - [x] 6. 検証: `dotnet build src/GameLauncherWithGit/GameLauncherWithGit.csproj -f net9.0-windows10.0.19041.0` を実行してビルド確認する。
+- [x] 7. レビュー修正: リモート名に `/` を含む構成でのリモート追跡ブランチ名解決を修正する。
 
 ## Affected Files
 - `docs/plans/20260226-issue16-remote-repository-selection.md`
@@ -35,3 +36,4 @@
 - 2026-02-26: `Home.razor` を更新し、ブランチ再読込時に `fetch --all --prune` + `refs/remotes` 読み込みを追加。`*/HEAD` 除外、remote-only 表示、remote選択時の `checkout -b --track` を実装。
 - 2026-02-26: `docs/design/maui-blazor-architecture.md` を更新し、ローカル+リモート追跡ブランチ仕様へ同期。
 - 2026-02-26: `dotnet build src/GameLauncherWithGit/GameLauncherWithGit.csproj -f net9.0-windows10.0.19041.0` を実行し、0 warning / 0 error で成功。
+- 2026-02-26: レビュー指摘（P2）に対応。`foo/bar` のように `/` を含むリモート名で `foo/bar/main` から `main` を正しく解決できるよう、`git remote` 結果を使った最長一致解決へ変更。

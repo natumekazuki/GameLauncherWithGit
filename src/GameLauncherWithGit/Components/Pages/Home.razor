@@ -949,6 +949,7 @@ else
     private readonly List<string> _editorBranches = [];
     private readonly HashSet<string> _editorLocalBranches = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _editorRemoteBranches = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _editorRemoteBranchLocalNames = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<EditorSaveLinkEntry> _editorSaveLinks = [];
     private string? _editorThumbnailSourcePath;
     private bool _editorHasThumbnail;
@@ -1894,8 +1895,8 @@ else
         }
         else if (_editorRemoteBranches.Contains(selectedBranch))
         {
-            var localBranchName = ExtractLocalBranchNameFromRemote(selectedBranch);
-            if (string.IsNullOrWhiteSpace(localBranchName))
+            if (!_editorRemoteBranchLocalNames.TryGetValue(selectedBranch, out var localBranchName)
+                || string.IsNullOrWhiteSpace(localBranchName))
             {
                 SetNotification($"リモートブランチ名の形式が不正です: {selectedBranch}", false);
                 return;
@@ -2113,6 +2114,20 @@ else
                 return false;
             }
 
+            var remoteNamesResult = await GitService.RunAsync(repositoryPath, "remote");
+            if (!remoteNamesResult.IsSuccess)
+            {
+                if (showNotificationOnFailure)
+                {
+                    SetNotification(
+                        $"リモート名一覧取得に失敗しました: {BuildGitFailureReason(remoteNamesResult)}",
+                        false);
+                }
+
+                ResetEditorBranchState(clearNewBranchName: false);
+                return false;
+            }
+
             if (!string.Equals(repositoryPath, NormalizeRepositoryPath(_editorRepositoryPath), StringComparison.OrdinalIgnoreCase))
             {
                 return false;
@@ -2148,11 +2163,28 @@ else
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(static name => name, StringComparer.OrdinalIgnoreCase)
                 .ToList();
+            var remoteNames = remoteNamesResult.StandardOutput
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(static name => !string.IsNullOrWhiteSpace(name))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(static name => name.Length)
+                .ThenBy(static name => name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var remoteBranchLocalNames = remoteBranchNames
+                .Select(remoteBranch => new
+                {
+                    RemoteBranch = remoteBranch,
+                    LocalBranch = ExtractLocalBranchNameFromRemote(remoteBranch, remoteNames)
+                })
+                .Where(static x => !string.IsNullOrWhiteSpace(x.LocalBranch))
+                .ToDictionary(
+                    static x => x.RemoteBranch,
+                    static x => x.LocalBranch!,
+                    StringComparer.OrdinalIgnoreCase);
             var remoteOnlyBranchNames = remoteBranchNames
                 .Where(remoteBranch =>
                 {
-                    var localBranchName = ExtractLocalBranchNameFromRemote(remoteBranch);
-                    return !string.IsNullOrWhiteSpace(localBranchName)
+                    return remoteBranchLocalNames.TryGetValue(remoteBranch, out var localBranchName)
                         && localBranchNames.All(local => !string.Equals(local, localBranchName, StringComparison.OrdinalIgnoreCase));
                 })
                 .ToList();
@@ -2172,9 +2204,11 @@ else
             }
 
             _editorRemoteBranches.Clear();
+            _editorRemoteBranchLocalNames.Clear();
             foreach (var remoteBranchName in remoteOnlyBranchNames)
             {
                 _editorRemoteBranches.Add(remoteBranchName);
+                _editorRemoteBranchLocalNames[remoteBranchName] = remoteBranchLocalNames[remoteBranchName];
             }
 
             _editorCurrentBranch = currentBranch;
@@ -2226,21 +2260,39 @@ else
             : branchName;
     }
 
-    private static string? ExtractLocalBranchNameFromRemote(string remoteBranchName)
+    private static string? ExtractLocalBranchNameFromRemote(string remoteBranchName, IReadOnlyList<string> remoteNames)
     {
         var normalized = NormalizeBranchName(remoteBranchName);
-        if (string.IsNullOrWhiteSpace(normalized))
+        if (string.IsNullOrWhiteSpace(normalized)
+            || remoteNames is null
+            || remoteNames.Count == 0)
         {
             return null;
         }
 
-        var separatorIndex = normalized.IndexOf('/');
-        if (separatorIndex <= 0 || separatorIndex >= normalized.Length - 1)
+        foreach (var remoteName in remoteNames)
         {
-            return null;
+            var normalizedRemoteName = NormalizeBranchName(remoteName);
+            if (string.IsNullOrWhiteSpace(normalizedRemoteName))
+            {
+                continue;
+            }
+
+            var prefix = $"{normalizedRemoteName}/";
+            if (!normalized.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (normalized.Length <= prefix.Length)
+            {
+                return null;
+            }
+
+            return normalized[prefix.Length..];
         }
 
-        return normalized[(separatorIndex + 1)..];
+        return null;
     }
 
     private static string BuildGitFailureReason(GitCommandResult result)
@@ -2273,6 +2325,7 @@ else
         _editorBranches.Clear();
         _editorLocalBranches.Clear();
         _editorRemoteBranches.Clear();
+        _editorRemoteBranchLocalNames.Clear();
 
         if (clearNewBranchName)
         {
@@ -2336,8 +2389,8 @@ else
 
         if (_editorRemoteBranches.Contains(selectedBranch))
         {
-            var localBranchName = ExtractLocalBranchNameFromRemote(selectedBranch);
-            if (string.IsNullOrWhiteSpace(localBranchName))
+            if (!_editorRemoteBranchLocalNames.TryGetValue(selectedBranch, out var localBranchName)
+                || string.IsNullOrWhiteSpace(localBranchName))
             {
                 return true;
             }
