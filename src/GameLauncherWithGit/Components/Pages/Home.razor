@@ -799,7 +799,7 @@ else
                             {
                                 @foreach (var branch in _editorBranches)
                                 {
-                                    <option value="@branch">@branch</option>
+                                    <option value="@branch">@GetEditorBranchOptionLabel(branch)</option>
                                 }
                             }
                         </select>
@@ -947,6 +947,9 @@ else
     private string? _editorSelectedBranch;
     private string _editorNewBranchName = string.Empty;
     private readonly List<string> _editorBranches = [];
+    private readonly HashSet<string> _editorLocalBranches = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _editorRemoteBranches = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _editorRemoteBranchLocalNames = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<EditorSaveLinkEntry> _editorSaveLinks = [];
     private string? _editorThumbnailSourcePath;
     private bool _editorHasThumbnail;
@@ -1869,16 +1872,50 @@ else
             return;
         }
 
-        var targetBranch = NormalizeBranchName(_editorSelectedBranch);
-        if (string.IsNullOrWhiteSpace(targetBranch))
+        var selectedBranch = NormalizeBranchName(_editorSelectedBranch);
+        if (string.IsNullOrWhiteSpace(selectedBranch))
         {
             SetNotification("切り替え先ブランチを選択してください。", false);
             return;
         }
 
-        if (string.Equals(targetBranch, _editorCurrentBranch, StringComparison.OrdinalIgnoreCase))
+        string switchCommand;
+        string switchTargetLabel;
+        var switchedFromRemote = false;
+        if (_editorLocalBranches.Contains(selectedBranch))
         {
-            SetNotification($"既に選択ブランチです: {targetBranch}", true);
+            if (string.Equals(selectedBranch, _editorCurrentBranch, StringComparison.OrdinalIgnoreCase))
+            {
+                SetNotification($"既に選択ブランチです: {selectedBranch}", true);
+                return;
+            }
+
+            switchCommand = $"checkout {EscapeGitArgument(selectedBranch)}";
+            switchTargetLabel = selectedBranch;
+        }
+        else if (_editorRemoteBranches.Contains(selectedBranch))
+        {
+            if (!_editorRemoteBranchLocalNames.TryGetValue(selectedBranch, out var localBranchName)
+                || string.IsNullOrWhiteSpace(localBranchName))
+            {
+                SetNotification($"リモートブランチ名の形式が不正です: {selectedBranch}", false);
+                return;
+            }
+
+            if (string.Equals(localBranchName, _editorCurrentBranch, StringComparison.OrdinalIgnoreCase))
+            {
+                SetNotification($"既に選択ブランチです: {localBranchName}", true);
+                return;
+            }
+
+            switchCommand =
+                $"checkout -b {EscapeGitArgument(localBranchName)} --track {EscapeGitArgument(selectedBranch)}";
+            switchTargetLabel = $"{localBranchName} <- {selectedBranch}";
+            switchedFromRemote = true;
+        }
+        else
+        {
+            SetNotification($"切り替え対象ブランチが見つかりません: {selectedBranch}", false);
             return;
         }
 
@@ -1891,7 +1928,7 @@ else
                 {
                     var result = await GitService.RunAsync(
                         repositoryPath,
-                        $"checkout {EscapeGitArgument(targetBranch)}");
+                        switchCommand);
                     if (!result.IsSuccess)
                     {
                         SetNotification(
@@ -1913,7 +1950,11 @@ else
                     }
 
                     await RefreshGitStatusesAsync();
-                    SetNotification($"ブランチを切り替えました: {targetBranch}", true);
+                    SetNotification(
+                        switchedFromRemote
+                            ? $"リモート追跡ブランチを作成して切り替えました: {switchTargetLabel}"
+                            : $"ブランチを切り替えました: {switchTargetLabel}",
+                        true);
                 }
                 catch (Exception ex)
                 {
@@ -1942,7 +1983,7 @@ else
             return;
         }
 
-        if (_editorBranches.Any(existing => string.Equals(existing, newBranchName, StringComparison.OrdinalIgnoreCase)))
+        if (_editorLocalBranches.Contains(newBranchName))
         {
             SetNotification($"既に存在するブランチ名です: {newBranchName}", false);
             return;
@@ -2019,6 +2060,14 @@ else
                 return false;
             }
 
+            var fetchResult = await GitService.RunAsync(repositoryPath, "fetch --all --prune");
+            if (!fetchResult.IsSuccess && showNotificationOnFailure)
+            {
+                SetNotification(
+                    $"リモートブランチ取得前の更新に失敗しました: {BuildGitFailureReason(fetchResult)}",
+                    false);
+            }
+
             var currentBranchResult = await GitService.RunAsync(repositoryPath, "branch --show-current");
             if (!currentBranchResult.IsSuccess)
             {
@@ -2049,6 +2098,36 @@ else
                 return false;
             }
 
+            var remoteBranchesResult = await GitService.RunAsync(
+                repositoryPath,
+                "for-each-ref --format=\"%(refname:short)\" refs/remotes");
+            if (!remoteBranchesResult.IsSuccess)
+            {
+                if (showNotificationOnFailure)
+                {
+                    SetNotification(
+                        $"リモートブランチ一覧取得に失敗しました: {BuildGitFailureReason(remoteBranchesResult)}",
+                        false);
+                }
+
+                ResetEditorBranchState(clearNewBranchName: false);
+                return false;
+            }
+
+            var remoteNamesResult = await GitService.RunAsync(repositoryPath, "remote");
+            if (!remoteNamesResult.IsSuccess)
+            {
+                if (showNotificationOnFailure)
+                {
+                    SetNotification(
+                        $"リモート名一覧取得に失敗しました: {BuildGitFailureReason(remoteNamesResult)}",
+                        false);
+                }
+
+                ResetEditorBranchState(clearNewBranchName: false);
+                return false;
+            }
+
             if (!string.Equals(repositoryPath, NormalizeRepositoryPath(_editorRepositoryPath), StringComparison.OrdinalIgnoreCase))
             {
                 return false;
@@ -2056,12 +2135,13 @@ else
 
             var currentBranch = NormalizeBranchName(FirstNonEmptyLine(currentBranchResult.StandardOutput));
             var previousSelectedBranch = NormalizeBranchName(_editorSelectedBranch);
-            var branchNames = localBranchesResult.StandardOutput
+            var localBranchNames = localBranchesResult.StandardOutput
                 .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Where(static name => !string.IsNullOrWhiteSpace(name))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(static name => name, StringComparer.OrdinalIgnoreCase)
                 .ToList();
+            var branchNames = localBranchNames.ToList();
             if (!string.IsNullOrWhiteSpace(currentBranch)
                 && branchNames.All(name => !string.Equals(name, currentBranch, StringComparison.OrdinalIgnoreCase)))
             {
@@ -2075,8 +2155,63 @@ else
                     .ToList();
             }
 
+            var remoteNames = remoteNamesResult.StandardOutput
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(static name => !string.IsNullOrWhiteSpace(name))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(static name => name.Length)
+                .ThenBy(static name => name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var remoteBranchNames = remoteBranchesResult.StandardOutput
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(static name => !string.IsNullOrWhiteSpace(name))
+                .Where(name => !IsRemoteHeadSymbolicRef(name, remoteNames))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(static name => name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var remoteBranchLocalNames = remoteBranchNames
+                .Select(remoteBranch => new
+                {
+                    RemoteBranch = remoteBranch,
+                    LocalBranch = ExtractLocalBranchNameFromRemote(remoteBranch, remoteNames)
+                })
+                .Where(static x => !string.IsNullOrWhiteSpace(x.LocalBranch))
+                .ToDictionary(
+                    static x => x.RemoteBranch,
+                    static x => x.LocalBranch!,
+                    StringComparer.OrdinalIgnoreCase);
+            var displayedLocalBranchNames = new HashSet<string>(branchNames, StringComparer.OrdinalIgnoreCase);
+            var remoteOnlyBranchNames = remoteBranchNames
+                .Where(remoteBranch =>
+                {
+                    return remoteBranchLocalNames.TryGetValue(remoteBranch, out var localBranchName)
+                        && !displayedLocalBranchNames.Contains(remoteBranch)
+                        && !displayedLocalBranchNames.Contains(localBranchName);
+                })
+                .ToList();
+
             _editorBranches.Clear();
             _editorBranches.AddRange(branchNames);
+            _editorBranches.AddRange(remoteOnlyBranchNames);
+            _editorLocalBranches.Clear();
+            foreach (var branchName in localBranchNames)
+            {
+                _editorLocalBranches.Add(branchName);
+            }
+
+            if (!string.IsNullOrWhiteSpace(currentBranch))
+            {
+                _editorLocalBranches.Add(currentBranch);
+            }
+
+            _editorRemoteBranches.Clear();
+            _editorRemoteBranchLocalNames.Clear();
+            foreach (var remoteBranchName in remoteOnlyBranchNames)
+            {
+                _editorRemoteBranches.Add(remoteBranchName);
+                _editorRemoteBranchLocalNames[remoteBranchName] = remoteBranchLocalNames[remoteBranchName];
+            }
+
             _editorCurrentBranch = currentBranch;
 
             if (preserveSelection
@@ -2119,6 +2254,75 @@ else
             : branchName.Trim();
     }
 
+    private string GetEditorBranchOptionLabel(string branchName)
+    {
+        return _editorRemoteBranches.Contains(branchName)
+            ? $"{branchName} (remote)"
+            : branchName;
+    }
+
+    private static string? ExtractLocalBranchNameFromRemote(string remoteBranchName, IReadOnlyList<string> remoteNames)
+    {
+        var normalized = NormalizeBranchName(remoteBranchName);
+        if (string.IsNullOrWhiteSpace(normalized)
+            || remoteNames is null
+            || remoteNames.Count == 0)
+        {
+            return null;
+        }
+
+        foreach (var remoteName in remoteNames)
+        {
+            var normalizedRemoteName = NormalizeBranchName(remoteName);
+            if (string.IsNullOrWhiteSpace(normalizedRemoteName))
+            {
+                continue;
+            }
+
+            var prefix = $"{normalizedRemoteName}/";
+            if (!normalized.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (normalized.Length <= prefix.Length)
+            {
+                return null;
+            }
+
+            return normalized[prefix.Length..];
+        }
+
+        return null;
+    }
+
+    private static bool IsRemoteHeadSymbolicRef(string remoteBranchName, IReadOnlyList<string> remoteNames)
+    {
+        var normalizedBranch = NormalizeBranchName(remoteBranchName);
+        if (string.IsNullOrWhiteSpace(normalizedBranch)
+            || remoteNames is null
+            || remoteNames.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var remoteName in remoteNames)
+        {
+            var normalizedRemoteName = NormalizeBranchName(remoteName);
+            if (string.IsNullOrWhiteSpace(normalizedRemoteName))
+            {
+                continue;
+            }
+
+            if (string.Equals(normalizedBranch, $"{normalizedRemoteName}/HEAD", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static string BuildGitFailureReason(GitCommandResult result)
     {
         return FirstNonEmptyLine(result.StandardError)
@@ -2147,6 +2351,9 @@ else
         _editorCurrentBranch = null;
         _editorSelectedBranch = null;
         _editorBranches.Clear();
+        _editorLocalBranches.Clear();
+        _editorRemoteBranches.Clear();
+        _editorRemoteBranchLocalNames.Clear();
 
         if (clearNewBranchName)
         {
@@ -2203,7 +2410,23 @@ else
             return true;
         }
 
-        return string.Equals(selectedBranch, _editorCurrentBranch, StringComparison.OrdinalIgnoreCase);
+        if (_editorLocalBranches.Contains(selectedBranch))
+        {
+            return string.Equals(selectedBranch, _editorCurrentBranch, StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (_editorRemoteBranches.Contains(selectedBranch))
+        {
+            if (!_editorRemoteBranchLocalNames.TryGetValue(selectedBranch, out var localBranchName)
+                || string.IsNullOrWhiteSpace(localBranchName))
+            {
+                return true;
+            }
+
+            return string.Equals(localBranchName, _editorCurrentBranch, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return true;
     }
 
     private bool IsBranchCreateInputDisabled()
