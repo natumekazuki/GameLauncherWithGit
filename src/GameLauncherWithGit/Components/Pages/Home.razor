@@ -2181,11 +2181,13 @@ else
                     static x => x.RemoteBranch,
                     static x => x.LocalBranch!,
                     StringComparer.OrdinalIgnoreCase);
+            var displayedLocalBranchNames = new HashSet<string>(branchNames, StringComparer.OrdinalIgnoreCase);
             var remoteOnlyBranchNames = remoteBranchNames
                 .Where(remoteBranch =>
                 {
                     return remoteBranchLocalNames.TryGetValue(remoteBranch, out var localBranchName)
-                        && localBranchNames.All(local => !string.Equals(local, localBranchName, StringComparison.OrdinalIgnoreCase));
+                        && !displayedLocalBranchNames.Contains(remoteBranch)
+                        && !displayedLocalBranchNames.Contains(localBranchName);
                 })
                 .ToList();
 
