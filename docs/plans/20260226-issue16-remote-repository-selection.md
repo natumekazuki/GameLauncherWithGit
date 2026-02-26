@@ -17,6 +17,7 @@
 - [x] 6. 検証: `dotnet build src/GameLauncherWithGit/GameLauncherWithGit.csproj -f net9.0-windows10.0.19041.0` を実行してビルド確認する。
 - [x] 7. レビュー修正: リモート名に `/` を含む構成でのリモート追跡ブランチ名解決を修正する。
 - [x] 8. レビュー修正: `origin/*` 形式のローカルブランチがある場合の候補重複を除外する。
+- [x] 9. レビュー修正: 妥当なブランチ名（`feature/HEAD`, `foo->bar`）を誤除外しないようリモート候補フィルタを修正する。
 
 ## Affected Files
 - `docs/plans/20260226-issue16-remote-repository-selection.md`
@@ -39,3 +40,4 @@
 - 2026-02-26: `dotnet build src/GameLauncherWithGit/GameLauncherWithGit.csproj -f net9.0-windows10.0.19041.0` を実行し、0 warning / 0 error で成功。
 - 2026-02-26: レビュー指摘（P2）に対応。`foo/bar` のように `/` を含むリモート名で `foo/bar/main` から `main` を正しく解決できるよう、`git remote` 結果を使った最長一致解決へ変更。
 - 2026-02-26: レビュー指摘（P3）に対応。表示済みローカル候補（`branchNames`）と同名のリモート候補を除外し、`origin/main` などの値衝突で切替経路が誤る問題を修正。
+- 2026-02-26: レビュー指摘（P2）に追加対応。`/HEAD`・`->` の文字列判定による誤除外を廃止し、`<remote>/HEAD` のシンボリック参照だけを除外する方式へ変更。

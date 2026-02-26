@@ -2155,20 +2155,19 @@ else
                     .ToList();
             }
 
-            var remoteBranchNames = remoteBranchesResult.StandardOutput
-                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Where(static name => !string.IsNullOrWhiteSpace(name))
-                .Where(static name => !name.EndsWith("/HEAD", StringComparison.OrdinalIgnoreCase))
-                .Where(static name => !name.Contains("->", StringComparison.Ordinal))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(static name => name, StringComparer.OrdinalIgnoreCase)
-                .ToList();
             var remoteNames = remoteNamesResult.StandardOutput
                 .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Where(static name => !string.IsNullOrWhiteSpace(name))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderByDescending(static name => name.Length)
                 .ThenBy(static name => name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var remoteBranchNames = remoteBranchesResult.StandardOutput
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(static name => !string.IsNullOrWhiteSpace(name))
+                .Where(name => !IsRemoteHeadSymbolicRef(name, remoteNames))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(static name => name, StringComparer.OrdinalIgnoreCase)
                 .ToList();
             var remoteBranchLocalNames = remoteBranchNames
                 .Select(remoteBranch => new
@@ -2295,6 +2294,33 @@ else
         }
 
         return null;
+    }
+
+    private static bool IsRemoteHeadSymbolicRef(string remoteBranchName, IReadOnlyList<string> remoteNames)
+    {
+        var normalizedBranch = NormalizeBranchName(remoteBranchName);
+        if (string.IsNullOrWhiteSpace(normalizedBranch)
+            || remoteNames is null
+            || remoteNames.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var remoteName in remoteNames)
+        {
+            var normalizedRemoteName = NormalizeBranchName(remoteName);
+            if (string.IsNullOrWhiteSpace(normalizedRemoteName))
+            {
+                continue;
+            }
+
+            if (string.Equals(normalizedBranch, $"{normalizedRemoteName}/HEAD", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string BuildGitFailureReason(GitCommandResult result)
