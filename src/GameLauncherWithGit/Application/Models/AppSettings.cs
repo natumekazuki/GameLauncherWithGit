@@ -9,10 +9,18 @@ public sealed record AppSettings(
 	int LogMaxFileSizeMb,
 	int GameCardSizePercent = 100,
 	bool ShowCardTitle = true,
-	bool ShowCardSyncStatus = true)
+	bool ShowCardSyncStatus = true,
+	int WindowWidth = AppSettings.DefaultWindowWidth,
+	int WindowHeight = AppSettings.DefaultWindowHeight)
 {
 	public const int GameCardSizePercentMin = 10;
 	public const int GameCardSizePercentMax = 500;
+	public const int DefaultWindowWidth = 1280;
+	public const int DefaultWindowHeight = 820;
+	public const int WindowWidthMin = 900;
+	public const int WindowWidthMax = 3840;
+	public const int WindowHeightMin = 600;
+	public const int WindowHeightMax = 2160;
 
 	public static AppSettings Default { get; } = new(
 		SyncDebounceSeconds: 10,
@@ -23,7 +31,9 @@ public sealed record AppSettings(
 		LogMaxFileSizeMb: 20,
 		GameCardSizePercent: 100,
 		ShowCardTitle: true,
-		ShowCardSyncStatus: true);
+		ShowCardSyncStatus: true,
+		WindowWidth: DefaultWindowWidth,
+		WindowHeight: DefaultWindowHeight);
 
 	public AppSettings Normalize()
 	{
@@ -42,6 +52,12 @@ public sealed record AppSettings(
 			: Clamp(GameCardSizePercent, min: GameCardSizePercentMin, max: GameCardSizePercentMax);
 		var showCardTitle = ShowCardTitle;
 		var showCardSyncStatus = ShowCardSyncStatus;
+		var windowWidth = WindowWidth <= 0
+			? Default.WindowWidth
+			: Clamp(WindowWidth, min: WindowWidthMin, max: WindowWidthMax);
+		var windowHeight = WindowHeight <= 0
+			? Default.WindowHeight
+			: Clamp(WindowHeight, min: WindowHeightMin, max: WindowHeightMax);
 
 		return this with
 		{
@@ -53,7 +69,9 @@ public sealed record AppSettings(
 			LogMaxFileSizeMb = maxFileSizeMb,
 			GameCardSizePercent = gameCardSizePercent,
 			ShowCardTitle = showCardTitle,
-			ShowCardSyncStatus = showCardSyncStatus
+			ShowCardSyncStatus = showCardSyncStatus,
+			WindowWidth = windowWidth,
+			WindowHeight = windowHeight
 		};
 	}
 

@@ -101,7 +101,7 @@ flowchart LR
   - `record.data` / `record.data.keyValues` から `repositoryId` / `command` / `exitCode` / `stdout` / `stderr` を抽出し、未設定時は `repo=` / `command=` / `exitCode=` のテキストをフォールバック解析する
   - 起動時にログメンテナンス（保持日数超過の削除、サイズ超過時ローテーション）を実行
 - `AppSettingsService`
-  - `FileSystem.AppDataDirectory/settings.json` を読込/保存し、同期/通知/ログ運用/カード表示設定を管理
+  - `FileSystem.AppDataDirectory/settings.json` を読込/保存し、同期/通知/ログ運用/カード表示設定/ウインドウサイズを管理
 - `SettingsPanelService`
   - トレイメニューなどUI外部から設定モーダルを開くためのイベントブリッジ
 - `AutoStartService`
@@ -221,7 +221,7 @@ sequenceDiagram
   - `game-library.db`: ゲーム設定（タイトル、実行ファイル、関連リポジトリ、サムネイルパス、状態、最終プレイ日時）
     - `GameSaveLinks` テーブル: ゲームごとのセーブリンク定義（`LocalPath`、`TargetPath`、`EnsureOnLaunch`、`OrderNo`）
     - `RepositorySyncHistory` テーブル: リポジトリ単位の同期履歴（最新50件/リポジトリ）
-  - `settings.json`: 同期/通知/ログ/表示設定（デバウンス秒、再試行初期秒、再試行最大秒、通知抑制秒、ログ保持日数、ログ最大サイズMB、カードサイズ%、カードタイトル表示、カード同期ステータス表示）
+  - `settings.json`: 同期/通知/ログ/表示設定（デバウンス秒、再試行初期秒、再試行最大秒、通知抑制秒、ログ保持日数、ログ最大サイズMB、カードサイズ%、カードタイトル表示、カード同期ステータス表示、ウインドウ幅、ウインドウ高さ）
   - `logs/app-events.jsonl`: 構造化エラーログ（MonochromeMemory.Log）
   - `logs/app-events-*.jsonl`: ローテーション済みログ
   - `thumbnails/*.png`: 変換済みサムネイル
@@ -259,6 +259,7 @@ sequenceDiagram
 - ログ運用: 保持日数削除、サイズ超過ローテーション
 - 表示設定: カードサイズ変更の即時反映と再起動後復元
 - 表示設定: タイトル/同期ステータス表示切替の即時反映と再起動後復元、サムネイルカード高さ追従
+- ウインドウ設定: 初回起動時は既定サイズで開き、サイズ変更後は最後に使った幅/高さを再起動後に復元
 - 同期履歴: 成功/失敗/停止の記録、カードへの最新履歴表示、所要時間表示
 - 削除操作: 確認モーダル、SQLite削除、サムネイル削除、監視再構成
 - ゲーム編集: 実行ファイル未設定で保存可能、未設定カードで起動ボタンが無効化されること
