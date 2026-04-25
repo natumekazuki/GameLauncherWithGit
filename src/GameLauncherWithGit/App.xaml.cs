@@ -1,23 +1,92 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
+using GameLauncherWithGit.Application.Abstractions;
+using GameLauncherWithGit.Application.Models;
 
 namespace GameLauncherWithGit;
 
 public partial class App : Microsoft.Maui.Controls.Application
 {
 	private const string SingleInstanceMutexName = "GameLauncherWithGit.SingleInstance";
+	private const int WindowSizeSaveDelayMilliseconds = 500;
 	private static Mutex? singleInstanceMutex;
 
-	public App()
+	private readonly IAppSettingsService _appSettings;
+	private CancellationTokenSource? _windowSizeSaveCancellation;
+
+	public App(IAppSettingsService appSettings)
 	{
+		_appSettings = appSettings;
 		InitializeComponent();
 		EnsureSingleInstance();
 	}
 
 	protected override Window CreateWindow(IActivationState? activationState)
 	{
-		return new Window(new MainPage()) { Title = "GameLauncherWithGit" };
+		var settings = _appSettings.Get();
+		var window = new Window(new MainPage())
+		{
+			Title = "GameLauncherWithGit",
+			Width = settings.WindowWidth,
+			Height = settings.WindowHeight,
+			MinimumWidth = AppSettings.WindowWidthMin,
+			MinimumHeight = AppSettings.WindowHeightMin
+		};
+
+		window.PropertyChanged += (_, args) =>
+		{
+			if (args.PropertyName is nameof(Window.Width) or nameof(Window.Height))
+			{
+				QueueWindowSizeSave(window);
+			}
+		};
+
+		return window;
+	}
+
+	private void QueueWindowSizeSave(Window window)
+	{
+		if (window.Width <= 0 || window.Height <= 0)
+		{
+			return;
+		}
+
+		_windowSizeSaveCancellation?.Cancel();
+		_windowSizeSaveCancellation?.Dispose();
+		_windowSizeSaveCancellation = new CancellationTokenSource();
+		var cancellationToken = _windowSizeSaveCancellation.Token;
+
+		_ = SaveWindowSizeAfterDelayAsync(window, cancellationToken);
+	}
+
+	private async Task SaveWindowSizeAfterDelayAsync(Window window, CancellationToken cancellationToken)
+	{
+		try
+		{
+			await Task.Delay(WindowSizeSaveDelayMilliseconds, cancellationToken);
+
+			var width = (int)Math.Round(window.Width);
+			var height = (int)Math.Round(window.Height);
+			if (width <= 0 || height <= 0)
+			{
+				return;
+			}
+
+			var settings = _appSettings.Get() with
+			{
+				WindowWidth = width,
+				WindowHeight = height
+			};
+			await _appSettings.SaveAsync(settings, cancellationToken);
+		}
+		catch (OperationCanceledException)
+		{
+		}
+		catch (Exception ex)
+		{
+			Trace.WriteLine($"Window size save failed: {ex}");
+		}
 	}
 
 	private static void EnsureSingleInstance()

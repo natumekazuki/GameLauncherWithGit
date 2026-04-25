@@ -1209,16 +1209,18 @@ else
 
     private async Task SaveCurrentAppSettingsAsync()
     {
-        var requested = new AppSettings(
-            SyncDebounceSeconds: _syncDebounceSeconds,
-            SyncRetryInitialSeconds: _syncRetryInitialSeconds,
-            SyncRetryMaxSeconds: _syncRetryMaxSeconds,
-            NotificationSuppressSeconds: _notificationSuppressSeconds,
-            LogRetentionDays: _logRetentionDays,
-            LogMaxFileSizeMb: _logMaxFileSizeMb,
-            GameCardSizePercent: _gameCardSizePercent,
-            ShowCardTitle: _showCardTitle,
-            ShowCardSyncStatus: _showCardSyncStatus);
+        var requested = AppSettingsService.Get().Normalize() with
+        {
+            SyncDebounceSeconds = _syncDebounceSeconds,
+            SyncRetryInitialSeconds = _syncRetryInitialSeconds,
+            SyncRetryMaxSeconds = _syncRetryMaxSeconds,
+            NotificationSuppressSeconds = _notificationSuppressSeconds,
+            LogRetentionDays = _logRetentionDays,
+            LogMaxFileSizeMb = _logMaxFileSizeMb,
+            GameCardSizePercent = _gameCardSizePercent,
+            ShowCardTitle = _showCardTitle,
+            ShowCardSyncStatus = _showCardSyncStatus
+        };
         var normalized = requested.Normalize();
 
         await AppSettingsService.SaveAsync(normalized);
