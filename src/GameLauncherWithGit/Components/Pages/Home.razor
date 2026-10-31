@@ -13,8 +13,16 @@
 @inject ISettingsPanelService SettingsPanelService
 @inject IRepositorySyncHistoryStore RepositorySyncHistoryStore
 @inject ISaveLinkService SaveLinkService
+@inject IJSRuntime JS
 
 <PageTitle>GameLauncherWithGit</PageTitle>
+
+@{
+    RenderFragment notificationContent = @<div class="notification-message @GetMessageClass()">
+        <span>@_message</span>
+        <button type="button" class="notification-dismiss" @onclick="DismissNotification" aria-label="通知を閉じる">×</button>
+    </div>;
+}
 
 @if (!_isStartupChecking)
 {
@@ -58,7 +66,8 @@
         </button>
         <button type="button"
                 class="secondary-button utility-button"
-                @onclick="OpenSettingsAsync">
+                @onclick="OpenSettingsAsync"
+                disabled="@_isCardSizeSaving">
             環境設定
         </button>
         <button type="button"
@@ -79,7 +88,7 @@ else if (!_isGitReady)
 {
     <section class="startup-error-panel">
         <h1>Git が利用できません</h1>
-        <p>Git のインストールまたは PATH 設定を確認してから、アプリを再起動してください。</p>
+        <p>下記の内容を確認してから、アプリを再起動してください。</p>
         @if (!string.IsNullOrWhiteSpace(_startupError))
         {
             <p class="startup-error-detail">@_startupError</p>
@@ -99,7 +108,9 @@ else
                 var filteredGames = GetFilteredGames();
                 if (filteredGames.Count == 0)
                 {
-                    <div class="game-card loading-card">検索条件に一致するゲームがありません。</div>
+                    <div class="game-card loading-card">
+                        @(_games.Count == 0 ? "まだゲームがありません。『新規追加』から登録できます。" : "検索条件に一致するゲームがありません。")
+                    </div>
                 }
                 else
                 {
@@ -113,10 +124,10 @@ else
                         var showCardTitle = _showCardTitle;
                         var showCardSyncStatus = _showCardSyncStatus;
                         var hasCardHeader = showCardTitle || showCardSyncStatus;
-                        <article class="@GetGameCardClass(hasThumbnail, gitVisualState)">
+                        <article class="@GetGameCardClass(hasThumbnail, gitVisualState)" aria-label="@($"{game.Title}、Git状態: {GetGitVisualStateLabel(gitVisualState)}")" title="@($"Git状態: {GetGitVisualStateLabel(gitVisualState)}")">
                             @if (hasThumbnail)
                             {
-                                <div class="game-thumbnail-panel">
+                                <div class="game-thumbnail-panel @(IsLaunchDisabled(game) ? string.Empty : "game-thumbnail-launchable")" @ondblclick="() => LaunchFromThumbnailAsync(game)" title="@(IsLaunchDisabled(game) ? GetLaunchButtonTitle(game) : "ダブルクリックで起動")">
                                     @if (string.IsNullOrWhiteSpace(thumbnailDataUri))
                                     {
                                         <div class="game-thumbnail-missing" title="@game.Title"></div>
@@ -183,36 +194,39 @@ else
                                     <p class="meta-label">最終プレイ</p>
                                     <p class="meta-value">@FormatLastPlayed(game.LastPlayedAt)</p>
 
-                                    <p class="meta-label">同期履歴</p>
-                                    @if (syncHistory.Count == 0)
-                                    {
-                                        <p class="meta-value">履歴なし</p>
-                                    }
-                                    else
-                                    {
-                                        <ul class="sync-timeline-list">
-                                            @foreach (var history in syncHistory)
-                                            {
-                                                <li class="sync-timeline-item @GetSyncHistoryStatusClass(history.Status)">
-                                                    <div class="sync-timeline-head">
-                                                        <span>@GetSyncHistoryStatusLabel(history.Status)</span>
-                                                        <span>@FormatSyncHistoryTimestamp(history.FinishedAt)</span>
-                                                    </div>
-                                                    <p class="sync-timeline-meta">所要時間: @FormatSyncHistoryDuration(history.DurationMs)</p>
-                                                    @if (!string.IsNullOrWhiteSpace(history.Command))
-                                                    {
-                                                        <p class="sync-timeline-meta">command: @history.Command</p>
-                                                    }
-                                                    @if (!string.IsNullOrWhiteSpace(history.Reason))
-                                                    {
-                                                        <p class="sync-timeline-reason">@history.Reason</p>
-                                                    }
-                                                </li>
-                                            }
-                                        </ul>
-                                    }
                                 </div>
                             }
+
+                            <details class="game-sync-history" open="@(!hasThumbnail)">
+                                <summary class="meta-label">同期履歴</summary>
+                                @if (syncHistory.Count == 0)
+                                {
+                                    <p class="meta-value">履歴なし</p>
+                                }
+                                else
+                                {
+                                    <ul class="sync-timeline-list">
+                                        @foreach (var history in syncHistory)
+                                        {
+                                            <li class="sync-timeline-item @GetSyncHistoryStatusClass(history.Status)">
+                                                <div class="sync-timeline-head">
+                                                    <span>@GetSyncHistoryStatusLabel(history.Status)</span>
+                                                    <span>@FormatSyncHistoryTimestamp(history.FinishedAt)</span>
+                                                </div>
+                                                <p class="sync-timeline-meta">所要時間: @FormatSyncHistoryDuration(history.DurationMs)</p>
+                                                @if (!string.IsNullOrWhiteSpace(history.Command))
+                                                {
+                                                    <p class="sync-timeline-meta">command: @history.Command</p>
+                                                }
+                                                @if (!string.IsNullOrWhiteSpace(history.Reason))
+                                                {
+                                                    <p class="sync-timeline-reason">@history.Reason</p>
+                                                }
+                                            </li>
+                                        }
+                                    </ul>
+                                }
+                            </details>
 
                             <div class="game-card-actions">
                                 <button type="button"
@@ -257,9 +271,9 @@ else
 }
 
 <div class="notification-dock" aria-live="polite" aria-atomic="true">
-    @if (!string.IsNullOrWhiteSpace(_message))
+    @if (!string.IsNullOrWhiteSpace(_message) && !_isHelpOpen && !_isSettingsOpen && !_isDeleteConfirmOpen && !_isEditorOpen)
     {
-        <p class="notification-message @GetMessageClass()">@_message</p>
+        @notificationContent
     }
 </div>
 
@@ -276,8 +290,14 @@ else
 @if (_isHelpOpen)
 {
     <div class="editor-overlay help-overlay" @onclick="CloseHelp">
-        <section class="help-modal" @onclick:stopPropagation="true">
-            <h2>Help / 使い方ガイド</h2>
+        <section class="help-modal" role="dialog" aria-modal="true" aria-labelledby="help-title" tabindex="-1" @onclick:stopPropagation="true">
+            <h2 id="help-title">Help / 使い方ガイド</h2>
+            <div class="dialog-notification" aria-live="polite" aria-atomic="true">
+                @if (!string.IsNullOrWhiteSpace(_message) && !_isSettingsOpen && !_isEditorOpen && !_isDeleteConfirmOpen)
+                {
+                    @notificationContent
+                }
+            </div>
 
             <div class="help-section">
                 <h3>基本操作</h3>
@@ -365,7 +385,7 @@ else
             <div class="help-section">
                 <h3>トラブル時の導線</h3>
                 <ul>
-                    <li>右下通知ドックで直近メッセージを確認</li>
+                    <li>画面上の通知で直近メッセージを確認</li>
                     <li>環境設定 → ログビューア でエラー詳細を確認</li>
                     <li>必要なら `最新エラーログを開く` / `ログフォルダを開く` を利用</li>
                 </ul>
@@ -374,7 +394,7 @@ else
             <div class="editor-actions">
                 <button type="button"
                         class="secondary-button"
-                        @onclick="CloseHelp">
+                        @onclick="CloseHelp" data-dialog-dismiss>
                     閉じる
                 </button>
             </div>
@@ -384,307 +404,317 @@ else
 
 @if (_isSettingsOpen)
 {
-    <div class="editor-overlay settings-overlay" @onclick="() => CloseSettings()">
-        <section class="settings-modal" @onclick:stopPropagation="true">
-            <h2>環境設定</h2>
-
-            <div class="settings-section">
-                <label class="settings-toggle-row">
-                    <span>Windows起動時に自動起動</span>
-                    <input type="checkbox"
-                           checked="@_autoStartEnabled"
-                           @onchange="OnAutoStartChangedAsync"
-                           disabled="@(_isSettingsLoading || _isAutoStartSaving)" />
-                </label>
-                @if (_isSettingsLoading)
+    <div class="editor-overlay settings-overlay" @onclick="RequestCloseSettingsAsync">
+        <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabindex="-1" @onclick:stopPropagation="true">
+            <h2 id="settings-title" class="dialog-heading">環境設定</h2>
+            <div class="dialog-notification" aria-live="polite" aria-atomic="true">
+                @if (!string.IsNullOrWhiteSpace(_message) && !_isEditorOpen && !_isDeleteConfirmOpen)
                 {
-                    <p class="settings-note">設定を読み込み中...</p>
+                    @notificationContent
                 }
             </div>
+            <div class="dialog-body">
+                <nav class="settings-quick-links" aria-label="設定内の移動">
+                    <a href="#notification-center">通知</a>
+                    <a href="#log-viewer">ログ</a>
+                </nav>
 
-            <div class="settings-section settings-sync-section">
-                <h3>同期・通知設定</h3>
-                <div class="settings-sync-grid">
-                    <label class="settings-value-row">
-                        <span class="settings-value-label">変更検知デバウンス秒</span>
-                        <input type="number"
-                               min="1"
-                               max="300"
-                               @bind="_syncDebounceSeconds"
-                               disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                <div class="settings-section">
+                    <label class="settings-toggle-row">
+                        <span>Windows起動時に自動起動（即時反映）</span>
+                        <input type="checkbox"
+                               checked="@_autoStartEnabled"
+                               @onchange="OnAutoStartChangedAsync"
+                               disabled="@(_isSettingsLoading || _isAutoStartSaving)" />
                     </label>
-                    <label class="settings-value-row">
-                        <span class="settings-value-label">再試行 初期待機秒</span>
-                        <input type="number"
-                               min="1"
-                               max="600"
-                               @bind="_syncRetryInitialSeconds"
-                               disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
-                    </label>
-                    <label class="settings-value-row">
-                        <span class="settings-value-label">再試行 最大待機秒</span>
-                        <input type="number"
-                               min="1"
-                               max="3600"
-                               @bind="_syncRetryMaxSeconds"
-                               disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
-                    </label>
-                    <label class="settings-value-row">
-                        <span class="settings-value-label">通知抑制秒（0で無効）</span>
-                        <input type="number"
-                               min="0"
-                               max="600"
-                               @bind="_notificationSuppressSeconds"
-                               disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
-                    </label>
-                    <label class="settings-value-row">
-                        <span class="settings-value-label">ログ保持日数</span>
-                        <input type="number"
-                               min="1"
-                               max="365"
-                               @bind="_logRetentionDays"
-                               disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
-                    </label>
-                    <label class="settings-value-row">
-                        <span class="settings-value-label">ログ最大サイズMB</span>
-                        <input type="number"
-                               min="1"
-                               max="1024"
-                               @bind="_logMaxFileSizeMb"
-                               disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
-                    </label>
+                    @if (_isSettingsLoading)
+                    {
+                        <p class="settings-note">設定を読み込み中...</p>
+                    }
                 </div>
-            </div>
 
-            <div class="settings-section">
-                <h3>カード表示設定</h3>
-                <label class="settings-toggle-row">
-                    <span>タイトルを表示</span>
-                    <input type="checkbox"
-                           @bind="_showCardTitle"
-                           disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
-                </label>
-                <label class="settings-toggle-row">
-                    <span>同期ステータスを表示</span>
-                    <input type="checkbox"
-                           @bind="_showCardSyncStatus"
-                           disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
-                </label>
-                <p class="settings-note">表示項目に応じてサムネイルカードの高さを自動調整します。</p>
-                <div class="editor-actions">
-                    <button type="button"
-                            class="launch-button"
-                            @onclick="SaveAppSettingsAsync"
-                            disabled="@(_isSettingsLoading || _isAppSettingsSaving)">
-                        @(_isAppSettingsSaving ? "保存中..." : "設定を保存")
-                    </button>
+                <div class="settings-section settings-sync-section">
+                    <h3>同期・通知設定</h3>
+                    <div class="settings-sync-grid">
+                        <label class="settings-value-row">
+                            <span class="settings-value-label">変更検知デバウンス秒</span>
+                            <input type="number"
+                                   min="1"
+                                   max="300"
+                                   @bind="_syncDebounceSeconds"
+                                   disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                        </label>
+                        <label class="settings-value-row">
+                            <span class="settings-value-label">再試行 初期待機秒</span>
+                            <input type="number"
+                                   min="1"
+                                   max="600"
+                                   @bind="_syncRetryInitialSeconds"
+                                   disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                        </label>
+                        <label class="settings-value-row">
+                            <span class="settings-value-label">再試行 最大待機秒</span>
+                            <input type="number"
+                                   min="1"
+                                   max="3600"
+                                   @bind="_syncRetryMaxSeconds"
+                                   disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                        </label>
+                        <label class="settings-value-row">
+                            <span class="settings-value-label">通知抑制秒（0で無効）</span>
+                            <input type="number"
+                                   min="0"
+                                   max="600"
+                                   @bind="_notificationSuppressSeconds"
+                                   disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                        </label>
+                        <label class="settings-value-row">
+                            <span class="settings-value-label">ログ保持日数</span>
+                            <input type="number"
+                                   min="1"
+                                   max="365"
+                                   @bind="_logRetentionDays"
+                                   disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                        </label>
+                        <label class="settings-value-row">
+                            <span class="settings-value-label">ログ最大サイズMB</span>
+                            <input type="number"
+                                   min="1"
+                                   max="1024"
+                                   @bind="_logMaxFileSizeMb"
+                                   disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                        </label>
+                    </div>
                 </div>
-            </div>
 
-            <div class="settings-section settings-actions-row">
-                <button type="button"
-                        class="secondary-button"
-                        @onclick="OpenLatestErrorLogAsync"
-                        disabled="@_isSettingsLoading">
-                    最新エラーログを開く
-                </button>
-                <button type="button"
-                        class="secondary-button"
-                        @onclick="OpenLogDirectoryAsync"
-                        disabled="@_isSettingsLoading">
-                    ログフォルダを開く
-                </button>
-            </div>
+                <div class="settings-section">
+                    <h3>カード表示設定</h3>
+                    <label class="settings-toggle-row">
+                        <span>タイトルを表示</span>
+                        <input type="checkbox"
+                               @bind="_showCardTitle"
+                               disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                    </label>
+                    <label class="settings-toggle-row">
+                        <span>同期ステータスを表示</span>
+                        <input type="checkbox"
+                               @bind="_showCardSyncStatus"
+                               disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                    </label>
+                    <p class="settings-note">表示項目に応じてサムネイルカードの高さを自動調整します。</p>
+                </div>
 
-            <div class="settings-section">
-                <h3>通知センター</h3>
-                <div class="editor-actions">
+                <div class="settings-section settings-actions-row">
                     <button type="button"
-                            class="launch-button"
-                            @onclick="CopyNotificationHistoryAsync"
-                            disabled="@(_isSettingsLoading || _notificationHistoryEntries.Count == 0)">
-                        全件コピー
+                            class="secondary-button"
+                            @onclick="OpenLatestErrorLogAsync"
+                            disabled="@_isSettingsLoading">
+                        最新エラーログを開く
                     </button>
                     <button type="button"
                             class="secondary-button"
-                            @onclick="ClearNotificationHistory"
-                            disabled="@(_isSettingsLoading || _notificationHistoryEntries.Count == 0)">
-                        履歴クリア
+                            @onclick="OpenLogDirectoryAsync"
+                            disabled="@_isSettingsLoading">
+                        ログフォルダを開く
                     </button>
                 </div>
-                <div class="notification-center-filters">
-                    <label>
-                        <input type="checkbox"
-                               @bind="_showSuccessNotifications"
-                               disabled="@_isSettingsLoading" />
-                        成功を表示
-                    </label>
-                    <label>
-                        <input type="checkbox"
-                               @bind="_showFailedNotifications"
-                               disabled="@_isSettingsLoading" />
-                        失敗を表示
-                    </label>
-                </div>
-                <div class="notification-center-list" role="log">
-                    @{
-                        var filteredNotificationEntries = GetFilteredNotificationHistoryEntries();
-                    }
-                    @if (_notificationHistoryEntries.Count == 0)
-                    {
-                        <p class="notification-center-empty">通知履歴はありません。</p>
-                    }
-                    else if (filteredNotificationEntries.Count == 0)
-                    {
-                        <p class="notification-center-empty">フィルタ条件に一致する通知はありません。</p>
-                    }
-                    else
-                    {
-                        @foreach (var entry in filteredNotificationEntries)
-                        {
-                            <article class="notification-center-item">
-                                <div class="notification-center-item-header">
-                                    <span class="notification-center-time">@FormatNotificationHistoryTimestamp(entry.Timestamp)</span>
-                                    <span class="notification-center-type @GetNotificationHistoryTypeClass(entry.IsSuccess)">
-                                        @GetNotificationHistoryTypeLabel(entry.IsSuccess)
-                                    </span>
-                                </div>
-                                <p class="notification-center-message">@entry.Message</p>
-                            </article>
-                        }
-                    }
-                </div>
-            </div>
 
-            <div class="settings-section">
-                <h3>ログビューア</h3>
-                <div class="settings-log-controls">
-                    <label class="settings-log-control">
-                        <span>表示件数</span>
-                        <input type="number"
-                               min="10"
-                               max="500"
-                               @bind="_logViewerLimit"
+                <div class="settings-section" id="notification-center">
+                    <h3>通知センター</h3>
+                    <div class="editor-actions">
+                        <button type="button"
+                                class="launch-button"
+                                @onclick="CopyNotificationHistoryAsync"
+                                disabled="@(_isSettingsLoading || _notificationHistoryEntries.Count == 0)">
+                            全件コピー
+                        </button>
+                        <button type="button"
+                                class="secondary-button"
+                                @onclick="ClearNotificationHistory"
+                                disabled="@(_isSettingsLoading || _notificationHistoryEntries.Count == 0)">
+                            履歴クリア
+                        </button>
+                    </div>
+                    <div class="notification-center-filters">
+                        <label>
+                            <input type="checkbox"
+                                   @bind="_showSuccessNotifications"
+                                   disabled="@_isSettingsLoading" />
+                            成功を表示
+                        </label>
+                        <label>
+                            <input type="checkbox"
+                                   @bind="_showFailedNotifications"
+                                   disabled="@_isSettingsLoading" />
+                            失敗を表示
+                        </label>
+                    </div>
+                    <div class="notification-center-list" role="log">
+                        @{
+                            var filteredNotificationEntries = GetFilteredNotificationHistoryEntries();
+                        }
+                        @if (_notificationHistoryEntries.Count == 0)
+                        {
+                            <p class="notification-center-empty">通知履歴はありません。</p>
+                        }
+                        else if (filteredNotificationEntries.Count == 0)
+                        {
+                            <p class="notification-center-empty">フィルタ条件に一致する通知はありません。</p>
+                        }
+                        else
+                        {
+                            @foreach (var entry in filteredNotificationEntries)
+                            {
+                                <article class="notification-center-item">
+                                    <div class="notification-center-item-header">
+                                        <span class="notification-center-time">@FormatNotificationHistoryTimestamp(entry.Timestamp)</span>
+                                        <span class="notification-center-type @GetNotificationHistoryTypeClass(entry.IsSuccess)">
+                                            @GetNotificationHistoryTypeLabel(entry.IsSuccess)
+                                        </span>
+                                    </div>
+                                    <p class="notification-center-message">@entry.Message</p>
+                                </article>
+                            }
+                        }
+                    </div>
+                </div>
+
+                <div class="settings-section" id="log-viewer">
+                    <h3>ログビューア</h3>
+                    <div class="settings-log-controls">
+                        <label class="settings-log-control">
+                            <span>表示件数</span>
+                            <input type="number"
+                                   min="10"
+                                   max="500"
+                                   @bind="_logViewerLimit"
+                                   disabled="@(_isSettingsLoading || _isLogLoading)" />
+                        </label>
+                        <label class="settings-log-control">
+                            <span>レベル</span>
+                            <select @bind="_logViewerSeverityFilter"
+                                    disabled="@(_isSettingsLoading || _isLogLoading)">
+                                <option value="all">すべて</option>
+                                <option value="Critical">Critical</option>
+                                <option value="Error">Error</option>
+                                <option value="Warning">Warning</option>
+                                <option value="Information">Information</option>
+                                <option value="Debug">Debug</option>
+                                <option value="Trace">Trace</option>
+                            </select>
+                        </label>
+                    </div>
+                    <label class="settings-log-keyword">
+                        <span>キーワード</span>
+                        <input type="text"
+                               @bind="_logViewerKeyword"
+                               @bind:event="oninput"
+                               placeholder="メッセージ / TraceId / repo / command"
                                disabled="@(_isSettingsLoading || _isLogLoading)" />
                     </label>
-                    <label class="settings-log-control">
-                        <span>レベル</span>
-                        <select @bind="_logViewerSeverityFilter"
+                    <div class="editor-actions">
+                        <button type="button"
+                                class="launch-button"
+                                @onclick="LoadLogEntriesAsync"
                                 disabled="@(_isSettingsLoading || _isLogLoading)">
-                            <option value="all">すべて</option>
-                            <option value="Critical">Critical</option>
-                            <option value="Error">Error</option>
-                            <option value="Warning">Warning</option>
-                            <option value="Information">Information</option>
-                            <option value="Debug">Debug</option>
-                            <option value="Trace">Trace</option>
-                        </select>
-                    </label>
-                </div>
-                <label class="settings-log-keyword">
-                    <span>キーワード</span>
-                    <input type="text"
-                           @bind="_logViewerKeyword"
-                           @bind:event="oninput"
-                           placeholder="メッセージ / TraceId / repo / command"
-                           disabled="@(_isSettingsLoading || _isLogLoading)" />
-                </label>
-                <div class="editor-actions">
-                    <button type="button"
-                            class="launch-button"
-                            @onclick="LoadLogEntriesAsync"
-                            disabled="@(_isSettingsLoading || _isLogLoading)">
-                        @(_isLogLoading ? "読み込み中..." : "更新")
-                    </button>
-                    <button type="button"
-                            class="secondary-button"
-                            @onclick="CopyLogEntriesAsync"
-                            disabled="@(_isSettingsLoading || _isLogLoading || _logViewerEntries.Count == 0)">
-                        コピー
-                    </button>
-                </div>
-                @if (!string.IsNullOrWhiteSpace(_logViewerError))
-                {
-                    <p class="settings-log-error">@_logViewerError</p>
-                }
-                <div class="settings-log-list" role="log">
-                    @if (_isLogLoading && _logViewerEntries.Count == 0)
+                            @(_isLogLoading ? "読み込み中..." : "更新")
+                        </button>
+                        <button type="button"
+                                class="secondary-button"
+                                @onclick="CopyLogEntriesAsync"
+                                disabled="@(_isSettingsLoading || _isLogLoading || _logViewerEntries.Count == 0)">
+                            コピー
+                        </button>
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(_logViewerError))
                     {
-                        <p class="settings-log-empty">ログを読み込み中です...</p>
+                        <p class="settings-log-error">@_logViewerError</p>
                     }
-                    else if (_logViewerEntries.Count == 0)
-                    {
-                        <p class="settings-log-empty">表示できるログがありません。</p>
-                    }
-                    else
-                    {
-                        @foreach (var entry in _logViewerEntries)
+                    <div class="settings-log-list" role="log">
+                        @if (_isLogLoading && _logViewerEntries.Count == 0)
                         {
-                            <article class="settings-log-item">
-                                <div class="settings-log-item-header">
-                                    <span class="settings-log-time">@FormatLogTimestamp(entry.Timestamp)</span>
-                                    <span class="settings-log-level @GetLogLevelClass(entry.Severity)">
-                                        @entry.Severity
-                                    </span>
-                                </div>
-                                <p class="settings-log-message">@entry.Message</p>
-                                <p class="settings-log-meta">
-                                    <span class="settings-log-meta-item">name: @entry.Name</span>
-                                    @if (!string.IsNullOrWhiteSpace(entry.TraceId))
-                                    {
-                                        <span class="settings-log-meta-item">traceId: @entry.TraceId</span>
-                                    }
-                                    @if (!string.IsNullOrWhiteSpace(entry.RepositoryId))
-                                    {
-                                        <span class="settings-log-meta-item">repo: @entry.RepositoryId</span>
-                                    }
-                                    @if (!string.IsNullOrWhiteSpace(entry.Command))
-                                    {
-                                        <span class="settings-log-meta-item">command: @entry.Command</span>
-                                    }
-                                    @if (entry.ExitCode.HasValue)
-                                    {
-                                        <span class="settings-log-meta-item">exitCode: @entry.ExitCode.Value</span>
-                                    }
-                                </p>
-                                @if (!string.IsNullOrWhiteSpace(entry.Detail)
-                                     || !string.IsNullOrWhiteSpace(entry.StandardOutput)
-                                     || !string.IsNullOrWhiteSpace(entry.StandardError))
-                                {
-                                    <div class="settings-log-details">
-                                        @if (!string.IsNullOrWhiteSpace(entry.Detail))
-                                        {
-                                            <details class="settings-log-detail-block">
-                                                <summary>detail</summary>
-                                                <pre class="settings-log-detail">@entry.Detail</pre>
-                                            </details>
-                                        }
-                                        @if (!string.IsNullOrWhiteSpace(entry.StandardOutput))
-                                        {
-                                            <details class="settings-log-detail-block">
-                                                <summary>stdout</summary>
-                                                <pre class="settings-log-detail">@entry.StandardOutput</pre>
-                                            </details>
-                                        }
-                                        @if (!string.IsNullOrWhiteSpace(entry.StandardError))
-                                        {
-                                            <details class="settings-log-detail-block">
-                                                <summary>stderr</summary>
-                                                <pre class="settings-log-detail">@entry.StandardError</pre>
-                                            </details>
-                                        }
-                                    </div>
-                                }
-                            </article>
+                            <p class="settings-log-empty">ログを読み込み中です...</p>
                         }
-                    }
+                        else if (_logViewerEntries.Count == 0)
+                        {
+                            <p class="settings-log-empty">表示できるログがありません。</p>
+                        }
+                        else
+                        {
+                            @foreach (var entry in _logViewerEntries)
+                            {
+                                <article class="settings-log-item">
+                                    <div class="settings-log-item-header">
+                                        <span class="settings-log-time">@FormatLogTimestamp(entry.Timestamp)</span>
+                                        <span class="settings-log-level @GetLogLevelClass(entry.Severity)">
+                                            @entry.Severity
+                                        </span>
+                                    </div>
+                                    <p class="settings-log-message">@entry.Message</p>
+                                    <p class="settings-log-meta">
+                                        <span class="settings-log-meta-item">name: @entry.Name</span>
+                                        @if (!string.IsNullOrWhiteSpace(entry.TraceId))
+                                        {
+                                            <span class="settings-log-meta-item">traceId: @entry.TraceId</span>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(entry.RepositoryId))
+                                        {
+                                            <span class="settings-log-meta-item">repo: @entry.RepositoryId</span>
+                                        }
+                                        @if (!string.IsNullOrWhiteSpace(entry.Command))
+                                        {
+                                            <span class="settings-log-meta-item">command: @entry.Command</span>
+                                        }
+                                        @if (entry.ExitCode.HasValue)
+                                        {
+                                            <span class="settings-log-meta-item">exitCode: @entry.ExitCode.Value</span>
+                                        }
+                                    </p>
+                                    @if (!string.IsNullOrWhiteSpace(entry.Detail)
+                                         || !string.IsNullOrWhiteSpace(entry.StandardOutput)
+                                         || !string.IsNullOrWhiteSpace(entry.StandardError))
+                                    {
+                                        <div class="settings-log-details">
+                                            @if (!string.IsNullOrWhiteSpace(entry.Detail))
+                                            {
+                                                <details class="settings-log-detail-block">
+                                                    <summary>detail</summary>
+                                                    <pre class="settings-log-detail">@entry.Detail</pre>
+                                                </details>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(entry.StandardOutput))
+                                            {
+                                                <details class="settings-log-detail-block">
+                                                    <summary>stdout</summary>
+                                                    <pre class="settings-log-detail">@entry.StandardOutput</pre>
+                                                </details>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(entry.StandardError))
+                                            {
+                                                <details class="settings-log-detail-block">
+                                                    <summary>stderr</summary>
+                                                    <pre class="settings-log-detail">@entry.StandardError</pre>
+                                                </details>
+                                            }
+                                        </div>
+                                    }
+                                </article>
+                            }
+                        }
+                    </div>
                 </div>
-            </div>
 
-            <div class="editor-actions">
+            </div>
+            <div class="editor-actions dialog-footer">
+                <button type="button"
+                        class="launch-button"
+                        @onclick="SaveAppSettingsAsync"
+                        disabled="@(_isSettingsLoading || _isAppSettingsSaving)">
+                    @(_isAppSettingsSaving ? "保存中..." : "設定を保存")
+                </button>
                 <button type="button"
                         class="secondary-button"
-                        @onclick="() => CloseSettings()"
+                        @onclick="RequestCloseSettingsAsync" data-dialog-dismiss
                         disabled="@(_isSettingsLoading || _isAutoStartSaving || _isAppSettingsSaving || _isCardSizeSaving)">
                     閉じる
                 </button>
@@ -696,8 +726,14 @@ else
 @if (_isDeleteConfirmOpen)
 {
     <div class="editor-overlay delete-confirm-overlay" @onclick="() => CloseDeleteConfirm()">
-        <section class="delete-confirm-modal" @onclick:stopPropagation="true">
-            <h2>ゲームを削除しますか？</h2>
+        <section class="delete-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title" tabindex="-1" @onclick:stopPropagation="true">
+            <h2 id="delete-title">ゲームを削除しますか？</h2>
+            <div class="dialog-notification" aria-live="polite" aria-atomic="true">
+                @if (!string.IsNullOrWhiteSpace(_message))
+                {
+                    @notificationContent
+                }
+            </div>
             <p class="delete-confirm-title">@_deleteTargetGameTitle</p>
             <p class="delete-confirm-note">この操作は取り消せません。ゲーム設定と関連サムネイルを削除します。</p>
             <div class="editor-actions">
@@ -709,7 +745,7 @@ else
                 </button>
                 <button type="button"
                         class="secondary-button"
-                        @onclick="() => CloseDeleteConfirm()"
+                        @onclick="() => CloseDeleteConfirm()" data-dialog-dismiss data-dialog-initial
                         disabled="@_isDeleting">
                     キャンセル
                 </button>
@@ -720,196 +756,205 @@ else
 
 @if (_isGitReady && _isEditorOpen)
 {
-    <div class="editor-overlay" @onclick="() => CloseEditor()">
-        <section class="editor-modal" @onclick:stopPropagation="true">
-            <h2>@(_isEditMode ? "ゲーム編集" : "ゲーム追加")</h2>
-
-            <div class="editor-field">
-                <label for="editor-title">タイトル</label>
-                <input id="editor-title" @bind="_editorTitle" @bind:event="oninput" />
+    <div class="editor-overlay" @onclick="RequestCloseEditorAsync">
+        <section class="editor-modal" role="dialog" aria-modal="true" aria-labelledby="editor-title-heading" tabindex="-1" @onclick:stopPropagation="true">
+            <h2 id="editor-title-heading" class="dialog-heading">@(_isEditMode ? "ゲーム編集" : "ゲーム追加")</h2>
+            <div class="dialog-notification" aria-live="polite" aria-atomic="true">
+                @if (!string.IsNullOrWhiteSpace(_message) && !_isDeleteConfirmOpen)
+                {
+                    @notificationContent
+                }
             </div>
+            <div class="dialog-body">
 
-            <div class="editor-field">
-                <label for="editor-executable-path">実行ファイルパス</label>
-                <div class="editor-inline-input">
-                    <input id="editor-executable-path" @bind="_editorExecutablePath" @bind:event="oninput" />
-                    <button type="button" class="secondary-button picker-button" @onclick="PickExecutablePathAsync" disabled="@_isSaving">
-                        参照
-                    </button>
+                <div class="editor-field">
+                    <label for="editor-title">タイトル</label>
+                    <input id="editor-title" @bind="_editorTitle" @bind:event="oninput" />
                 </div>
-            </div>
 
-            <div class="editor-field">
-                <label>サムネイル画像</label>
-                <div class="single-repo-picker">
-                    <p class="single-repo-value">@GetThumbnailEditorLabel()</p>
-                    <div class="single-repo-actions">
-                        <button type="button"
-                                class="secondary-button picker-button"
-                                @onclick="PickThumbnailPathAsync"
-                                disabled="@_isSaving">
+                <div class="editor-field">
+                    <label for="editor-executable-path">実行ファイルパス</label>
+                    <div class="editor-inline-input">
+                        <input id="editor-executable-path" @bind="_editorExecutablePath" @bind:event="oninput" />
+                        <button type="button" class="secondary-button picker-button" @onclick="PickExecutablePathAsync" disabled="@_isSaving">
                             参照
                         </button>
-                        <button type="button"
-                                class="secondary-button picker-button"
-                                @onclick="ClearThumbnailSelection"
-                                disabled="@(!CanClearThumbnailSelection() || _isSaving)">
-                            解除
-                        </button>
                     </div>
                 </div>
-            </div>
 
-            <div class="editor-field">
-                <label>関連リポジトリ（1件のみ）</label>
-                <div class="single-repo-picker">
-                    <p class="single-repo-value">
-                        @(string.IsNullOrWhiteSpace(_editorRepositoryPath) ? "未設定" : _editorRepositoryPath)
-                    </p>
+                <div class="editor-field">
+                    <label>サムネイル画像</label>
+                    <div class="single-repo-picker">
+                        <p class="single-repo-value">@GetThumbnailEditorLabel()</p>
+                        <div class="single-repo-actions">
+                            <button type="button"
+                                    class="secondary-button picker-button"
+                                    @onclick="PickThumbnailPathAsync"
+                                    disabled="@_isSaving">
+                                参照
+                            </button>
+                            <button type="button"
+                                    class="secondary-button picker-button"
+                                    @onclick="ClearThumbnailSelection"
+                                    disabled="@(!CanClearThumbnailSelection() || _isSaving)">
+                                解除
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="editor-field">
+                    <label>関連リポジトリ（1件のみ）</label>
+                    <div class="single-repo-picker">
+                        <p class="single-repo-value">
+                            @(string.IsNullOrWhiteSpace(_editorRepositoryPath) ? "未設定" : _editorRepositoryPath)
+                        </p>
+                        <div class="single-repo-actions">
+                            <button type="button"
+                                    class="secondary-button picker-button"
+                                    @onclick="PickRepositoryDirectoryPathAsync"
+                                    disabled="@_isSaving">
+                                フォルダ選択
+                            </button>
+                            <button type="button"
+                                    class="secondary-button picker-button"
+                                    @onclick="ClearRepositoryPath"
+                                    disabled="@(_isSaving || string.IsNullOrWhiteSpace(_editorRepositoryPath))">
+                                解除
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="editor-field">
+                    <label>ブランチ操作</label>
+                    <div class="branch-picker">
+                        <p class="settings-note">操作はこのリポジトリに即時反映され、編集をキャンセルしても戻りません。</p>
+                        <p class="branch-current-value">現在: @GetEditorCurrentBranchLabel()</p>
+                        <div class="branch-switch-row">
+                            <select @bind="_editorSelectedBranch"
+                                    @bind:event="oninput"
+                                    disabled="@IsBranchSelectionDisabled()">
+                                @if (_editorBranches.Count == 0)
+                                {
+                                    <option value="">ブランチなし</option>
+                                }
+                                else
+                                {
+                                    @foreach (var branch in _editorBranches)
+                                    {
+                                        <option value="@branch">@GetEditorBranchOptionLabel(branch)</option>
+                                    }
+                                }
+                            </select>
+                            <button type="button"
+                                    class="secondary-button picker-button"
+                                    @onclick="ReloadEditorBranchesAsync"
+                                    disabled="@IsBranchReloadDisabled()">
+                                @(_isBranchLoading ? "取得中..." : "リモート更新")
+                            </button>
+                            <button type="button"
+                                    class="secondary-button picker-button"
+                                    @onclick="SwitchEditorBranchAsync"
+                                    disabled="@IsBranchSwitchDisabled()">
+                                切り替え
+                            </button>
+                        </div>
+                        <div class="branch-create-row">
+                            <input placeholder="新規ブランチ名"
+                                   @bind="_editorNewBranchName"
+                                   @bind:event="oninput"
+                                   disabled="@IsBranchCreateInputDisabled()" />
+                            <button type="button"
+                                    class="secondary-button picker-button"
+                                    @onclick="CreateEditorBranchAsync"
+                                    disabled="@IsBranchCreateDisabled()">
+                                作成して切り替え
+                            </button>
+                        </div>
+                        <p class="settings-note">リモートの一覧は前回取得した情報です。関連リポジトリ未設定時は操作できません。</p>
+                    </div>
+                </div>
+
+                <div class="editor-field">
+                    <label>セーブリンク（ジャンクション・複数）</label>
+                    <p class="settings-note">リンクを削除して保存すると、同期先データをローカル通常フォルダへ復元してリンク解除します。</p>
+                    <div class="save-link-editor">
+                        @if (_editorSaveLinks.Count == 0)
+                        {
+                            <p class="save-link-empty">未設定</p>
+                        }
+                        else
+                        {
+                            @for (var index = 0; index < _editorSaveLinks.Count; index++)
+                            {
+                                var currentIndex = index;
+                                var entry = _editorSaveLinks[index];
+                                <div class="save-link-item">
+                                    <p class="save-link-item-title">リンク @(currentIndex + 1)</p>
+                                    <p class="save-link-item-label">ローカルセーブフォルダ</p>
+                                    <p class="save-link-item-value">@GetEditorSaveLinkPathLabel(entry.LocalPath)</p>
+                                    <p class="save-link-item-label">同期先フォルダ（OneDrive など）</p>
+                                    <p class="save-link-item-value">@GetEditorSaveLinkPathLabel(entry.TargetPath)</p>
+                                    <label class="save-link-item-checkbox">
+                                        <input type="checkbox"
+                                               checked="@entry.EnsureOnLaunch"
+                                               @onchange="args => SetEditorSaveLinkEnsureOnLaunch(currentIndex, ParseCheckboxValue(args))"
+                                               disabled="@_isSaving" />
+                                        <span>起動前チェック対象</span>
+                                    </label>
+                                    <div class="single-repo-actions">
+                                        <button type="button"
+                                                class="secondary-button picker-button"
+                                                @onclick="() => PickEditorSaveLocalPathAsync(currentIndex)"
+                                                disabled="@_isSaving">
+                                            ローカル選択
+                                        </button>
+                                        <button type="button"
+                                                class="secondary-button picker-button"
+                                                @onclick="() => PickEditorSaveTargetPathAsync(currentIndex)"
+                                                disabled="@_isSaving">
+                                            同期先選択
+                                        </button>
+                                        <button type="button"
+                                                class="secondary-button picker-button"
+                                                @onclick="() => MoveEditorSaveLink(currentIndex, -1)"
+                                                disabled="@(_isSaving || currentIndex == 0)">
+                                            ↑
+                                        </button>
+                                        <button type="button"
+                                                class="secondary-button picker-button"
+                                                @onclick="() => MoveEditorSaveLink(currentIndex, 1)"
+                                                disabled="@(_isSaving || currentIndex >= _editorSaveLinks.Count - 1)">
+                                            ↓
+                                        </button>
+                                        <button type="button"
+                                                class="danger-button picker-button"
+                                                @onclick="() => RemoveEditorSaveLink(currentIndex)"
+                                                disabled="@_isSaving">
+                                            リンク解除
+                                        </button>
+                                    </div>
+                                </div>
+                            }
+                        }
+                    </div>
                     <div class="single-repo-actions">
                         <button type="button"
                                 class="secondary-button picker-button"
-                                @onclick="PickRepositoryDirectoryPathAsync"
+                                @onclick="AddEditorSaveLink"
                                 disabled="@_isSaving">
-                            フォルダ選択
-                        </button>
-                        <button type="button"
-                                class="secondary-button picker-button"
-                                @onclick="ClearRepositoryPath"
-                                disabled="@(_isSaving || string.IsNullOrWhiteSpace(_editorRepositoryPath))">
-                            解除
+                            リンク追加
                         </button>
                     </div>
                 </div>
-            </div>
 
-            <div class="editor-field">
-                <label>ブランチ操作</label>
-                <div class="branch-picker">
-                    <p class="branch-current-value">現在: @GetEditorCurrentBranchLabel()</p>
-                    <div class="branch-switch-row">
-                        <select @bind="_editorSelectedBranch"
-                                @bind:event="oninput"
-                                disabled="@IsBranchSelectionDisabled()">
-                            @if (_editorBranches.Count == 0)
-                            {
-                                <option value="">ブランチなし</option>
-                            }
-                            else
-                            {
-                                @foreach (var branch in _editorBranches)
-                                {
-                                    <option value="@branch">@GetEditorBranchOptionLabel(branch)</option>
-                                }
-                            }
-                        </select>
-                        <button type="button"
-                                class="secondary-button picker-button"
-                                @onclick="ReloadEditorBranchesAsync"
-                                disabled="@IsBranchReloadDisabled()">
-                            @(_isBranchLoading ? "取得中..." : "再読込")
-                        </button>
-                        <button type="button"
-                                class="secondary-button picker-button"
-                                @onclick="SwitchEditorBranchAsync"
-                                disabled="@IsBranchSwitchDisabled()">
-                            切り替え
-                        </button>
-                    </div>
-                    <div class="branch-create-row">
-                        <input placeholder="新規ブランチ名"
-                               @bind="_editorNewBranchName"
-                               @bind:event="oninput"
-                               disabled="@IsBranchCreateInputDisabled()" />
-                        <button type="button"
-                                class="secondary-button picker-button"
-                                @onclick="CreateEditorBranchAsync"
-                                disabled="@IsBranchCreateDisabled()">
-                            作成して切り替え
-                        </button>
-                    </div>
-                    <p class="settings-note">関連リポジトリ未設定時は操作できません。</p>
-                </div>
             </div>
-
-            <div class="editor-field">
-                <label>セーブリンク（ジャンクション・複数）</label>
-                <p class="settings-note">リンクを削除して保存すると、同期先データをローカル通常フォルダへ復元してリンク解除します。</p>
-                <div class="save-link-editor">
-                    @if (_editorSaveLinks.Count == 0)
-                    {
-                        <p class="save-link-empty">未設定</p>
-                    }
-                    else
-                    {
-                        @for (var index = 0; index < _editorSaveLinks.Count; index++)
-                        {
-                            var currentIndex = index;
-                            var entry = _editorSaveLinks[index];
-                            <div class="save-link-item">
-                                <p class="save-link-item-title">リンク @(currentIndex + 1)</p>
-                                <p class="save-link-item-label">ローカルセーブフォルダ</p>
-                                <p class="save-link-item-value">@GetEditorSaveLinkPathLabel(entry.LocalPath)</p>
-                                <p class="save-link-item-label">同期先フォルダ（OneDrive など）</p>
-                                <p class="save-link-item-value">@GetEditorSaveLinkPathLabel(entry.TargetPath)</p>
-                                <label class="save-link-item-checkbox">
-                                    <input type="checkbox"
-                                           checked="@entry.EnsureOnLaunch"
-                                           @onchange="args => SetEditorSaveLinkEnsureOnLaunch(currentIndex, ParseCheckboxValue(args))"
-                                           disabled="@_isSaving" />
-                                    <span>起動前チェック対象</span>
-                                </label>
-                                <div class="single-repo-actions">
-                                    <button type="button"
-                                            class="secondary-button picker-button"
-                                            @onclick="() => PickEditorSaveLocalPathAsync(currentIndex)"
-                                            disabled="@_isSaving">
-                                        ローカル選択
-                                    </button>
-                                    <button type="button"
-                                            class="secondary-button picker-button"
-                                            @onclick="() => PickEditorSaveTargetPathAsync(currentIndex)"
-                                            disabled="@_isSaving">
-                                        同期先選択
-                                    </button>
-                                    <button type="button"
-                                            class="secondary-button picker-button"
-                                            @onclick="() => MoveEditorSaveLink(currentIndex, -1)"
-                                            disabled="@(_isSaving || currentIndex == 0)">
-                                        ↑
-                                    </button>
-                                    <button type="button"
-                                            class="secondary-button picker-button"
-                                            @onclick="() => MoveEditorSaveLink(currentIndex, 1)"
-                                            disabled="@(_isSaving || currentIndex >= _editorSaveLinks.Count - 1)">
-                                        ↓
-                                    </button>
-                                    <button type="button"
-                                            class="danger-button picker-button"
-                                            @onclick="() => RemoveEditorSaveLink(currentIndex)"
-                                            disabled="@_isSaving">
-                                        リンク解除
-                                    </button>
-                                </div>
-                            </div>
-                        }
-                    }
-                </div>
-                <div class="single-repo-actions">
-                    <button type="button"
-                            class="secondary-button picker-button"
-                            @onclick="AddEditorSaveLink"
-                            disabled="@_isSaving">
-                        リンク追加
-                    </button>
-                </div>
-            </div>
-
-            <div class="editor-actions">
+            <div class="editor-actions dialog-footer">
                 <button type="button" class="launch-button" @onclick="SaveEditorAsync" disabled="@_isSaving">
                     @(_isSaving ? "保存中..." : "保存")
                 </button>
-                <button type="button" class="secondary-button" @onclick="() => CloseEditor()" disabled="@_isSaving">キャンセル</button>
+                <button type="button" class="secondary-button" @onclick="RequestCloseEditorAsync" disabled="@_isSaving" data-dialog-dismiss>キャンセル</button>
                 @if (_isEditMode && !string.IsNullOrWhiteSpace(_editingGameId))
                 {
                     <button type="button"
@@ -932,6 +977,7 @@ else
     private IReadOnlyList<GameCardItem>? _games;
     private string? _message;
     private bool? _isLastActionSuccess;
+    private CancellationTokenSource? _notificationDismissCts;
     private bool _isEditorOpen;
     private bool _isEditMode;
     private bool _isSaving;
@@ -954,6 +1000,7 @@ else
     private string? _editorThumbnailSourcePath;
     private bool _editorHasThumbnail;
     private bool _editorClearThumbnail;
+    private string _editorSnapshot = string.Empty;
     private bool _isBranchLoading;
     private bool _isBranchSwitching;
     private bool _isBranchCreating;
@@ -973,6 +1020,7 @@ else
     private int _gameCardSizePercent = AppSettings.Default.GameCardSizePercent;
     private bool _showCardTitle = AppSettings.Default.ShowCardTitle;
     private bool _showCardSyncStatus = AppSettings.Default.ShowCardSyncStatus;
+    private AppSettings? _settingsSnapshot;
     private int _logViewerLimit = 100;
     private string _logViewerSeverityFilter = "all";
     private string _logViewerKeyword = string.Empty;
@@ -1011,7 +1059,7 @@ else
 
         try
         {
-            var gitCheckResult = await GitService.RunAsync(AppContext.BaseDirectory, "--version");
+            var gitCheckResult = await GitService.CheckAvailabilityAsync();
             if (!gitCheckResult.IsSuccess)
             {
                 _isGitReady = false;
@@ -1046,8 +1094,19 @@ else
             });
     }
 
+    private Task LaunchFromThumbnailAsync(GameCardItem game)
+    {
+        return IsLaunchDisabled(game) ? Task.CompletedTask : LaunchAsync(game.Id);
+    }
+
     private async Task OpenSettingsAsync()
     {
+        if (_isCardSizeSaving)
+        {
+            return;
+        }
+
+        _settingsSnapshot = GetSettingsDraft();
         _isSettingsOpen = true;
         await RunWithUserOperationLoadingAsync("設定を読み込んでいます...", LoadSettingsAsync);
     }
@@ -1062,9 +1121,15 @@ else
         _isHelpOpen = false;
     }
 
-    private void CloseSettings(bool force = false)
+    private async Task RequestCloseSettingsAsync()
     {
-        if ((_isSettingsLoading || _isAutoStartSaving || _isAppSettingsSaving || _isCardSizeSaving) && !force)
+        if (_isSettingsLoading || _isAutoStartSaving || _isAppSettingsSaving || _isCardSizeSaving)
+        {
+            return;
+        }
+
+        if (_settingsSnapshot != GetSettingsDraft()
+            && !await JS.InvokeAsync<bool>("confirm", "保存していない設定を破棄して閉じますか？"))
         {
             return;
         }
@@ -1124,6 +1189,7 @@ else
         {
             _autoStartEnabled = await AutoStartService.IsEnabledAsync();
             ApplyAppSettings(AppSettingsService.Get());
+            _settingsSnapshot = GetSettingsDraft();
             await LoadLogEntriesCoreAsync();
         }
         catch (Exception ex)
@@ -1207,6 +1273,19 @@ else
         _showCardSyncStatus = normalized.ShowCardSyncStatus;
     }
 
+    private AppSettings GetSettingsDraft()
+    {
+        return new AppSettings(
+            _syncDebounceSeconds,
+            _syncRetryInitialSeconds,
+            _syncRetryMaxSeconds,
+            _notificationSuppressSeconds,
+            _logRetentionDays,
+            _logMaxFileSizeMb,
+            ShowCardTitle: _showCardTitle,
+            ShowCardSyncStatus: _showCardSyncStatus);
+    }
+
     private async Task SaveCurrentAppSettingsAsync()
     {
         var requested = AppSettingsService.Get().Normalize() with
@@ -1225,6 +1304,7 @@ else
 
         await AppSettingsService.SaveAsync(normalized);
         ApplyAppSettings(normalized);
+        _settingsSnapshot = GetSettingsDraft();
     }
 
     private async Task RefreshGitStatusesManuallyAsync()
@@ -1277,26 +1357,21 @@ else
 
         var previous = _gameCardSizePercent;
         _gameCardSizePercent = next;
-        await RunWithUserOperationLoadingAsync(
-            "カードサイズを保存しています...",
-            async () =>
-            {
-                _isCardSizeSaving = true;
-
-                try
-                {
-                    await SaveCurrentAppSettingsAsync();
-                }
-                catch (Exception ex)
-                {
-                    _gameCardSizePercent = previous;
-                    SetNotification($"カードサイズ設定の保存に失敗しました: {ex.Message}", false);
-                }
-                finally
-                {
-                    _isCardSizeSaving = false;
-                }
-            });
+        _isCardSizeSaving = true;
+        try
+        {
+            var requested = AppSettingsService.Get().Normalize() with { GameCardSizePercent = next };
+            await AppSettingsService.SaveAsync(requested);
+        }
+        catch (Exception ex)
+        {
+            _gameCardSizePercent = previous;
+            SetNotification($"カードサイズ設定の保存に失敗しました: {ex.Message}", false);
+        }
+        finally
+        {
+            _isCardSizeSaving = false;
+        }
     }
 
     private string GetGameGridStyle()
@@ -1503,6 +1578,7 @@ else
         _editorThumbnailSourcePath = null;
         _editorHasThumbnail = false;
         _editorClearThumbnail = false;
+        _editorSnapshot = GetEditorDraft();
         _isEditorOpen = true;
     }
 
@@ -1569,8 +1645,9 @@ else
         _editorThumbnailSourcePath = null;
         _editorHasThumbnail = HasThumbnail(game);
         _editorClearThumbnail = false;
+        _editorSnapshot = GetEditorDraft();
         _isEditorOpen = true;
-        await LoadEditorBranchesAsync(showNotificationOnFailure: false, preserveSelection: false);
+        await LoadEditorBranchesAsync(showNotificationOnFailure: true, preserveSelection: false);
     }
 
     private async Task DeleteGameAsync()
@@ -1623,6 +1700,41 @@ else
                     _isDeleting = false;
                 }
             });
+    }
+
+    private string GetEditorDraft()
+    {
+        return System.Text.Json.JsonSerializer.Serialize(new
+        {
+            _editorTitle,
+            _editorExecutablePath,
+            _editorRepositoryPath,
+            _editorThumbnailSourcePath,
+            _editorClearThumbnail,
+            SaveLinks = _editorSaveLinks.Select(static entry => new
+            {
+                entry.Id,
+                entry.LocalPath,
+                entry.TargetPath,
+                entry.EnsureOnLaunch
+            })
+        });
+    }
+
+    private async Task RequestCloseEditorAsync()
+    {
+        if (_isSaving)
+        {
+            return;
+        }
+
+        if (_editorSnapshot != GetEditorDraft()
+            && !await JS.InvokeAsync<bool>("confirm", "保存していない編集内容を破棄して閉じますか？"))
+        {
+            return;
+        }
+
+        CloseEditor();
     }
 
     private void CloseEditor(bool force = false)
@@ -1861,7 +1973,13 @@ else
             "ブランチ一覧を取得しています...",
             async () =>
             {
-                await LoadEditorBranchesAsync(showNotificationOnFailure: true, preserveSelection: true);
+                if (await LoadEditorBranchesAsync(showNotificationOnFailure: true, preserveSelection: true, fetchRemote: true))
+                {
+                    if (!await RefreshGitStatusesAsync())
+                    {
+                        SetNotification("リモート更新後、一部の Git ステータス取得に失敗しました。ログを確認してください。", false);
+                    }
+                }
             });
     }
 
@@ -1881,7 +1999,7 @@ else
             return;
         }
 
-        string switchCommand;
+        IReadOnlyList<string> switchCommand;
         string switchTargetLabel;
         var switchedFromRemote = false;
         if (_editorLocalBranches.Contains(selectedBranch))
@@ -1892,7 +2010,7 @@ else
                 return;
             }
 
-            switchCommand = $"checkout {EscapeGitArgument(selectedBranch)}";
+            switchCommand = ["checkout", selectedBranch];
             switchTargetLabel = selectedBranch;
         }
         else if (_editorRemoteBranches.Contains(selectedBranch))
@@ -1910,8 +2028,7 @@ else
                 return;
             }
 
-            switchCommand =
-                $"checkout -b {EscapeGitArgument(localBranchName)} --track {EscapeGitArgument(selectedBranch)}";
+            switchCommand = ["checkout", "-b", localBranchName, "--track", selectedBranch];
             switchTargetLabel = $"{localBranchName} <- {selectedBranch}";
             switchedFromRemote = true;
         }
@@ -1940,7 +2057,7 @@ else
                     }
 
                     await LoadEditorBranchesAsync(showNotificationOnFailure: false, preserveSelection: false);
-                    var currentBranchResult = await GitService.RunAsync(repositoryPath, "branch --show-current");
+                    var currentBranchResult = await GitService.RunAsync(repositoryPath, ["branch", "--show-current"]);
                     if (currentBranchResult.IsSuccess)
                     {
                         var actualBranch = NormalizeBranchName(FirstNonEmptyLine(currentBranchResult.StandardOutput));
@@ -2000,7 +2117,7 @@ else
                 {
                     var validateResult = await GitService.RunAsync(
                         repositoryPath,
-                        $"check-ref-format --branch {EscapeGitArgument(newBranchName)}");
+                        ["check-ref-format", "--branch", newBranchName]);
                     if (!validateResult.IsSuccess)
                     {
                         SetNotification(
@@ -2011,7 +2128,7 @@ else
 
                     var createResult = await GitService.RunAsync(
                         repositoryPath,
-                        $"checkout -b {EscapeGitArgument(newBranchName)}");
+                        ["checkout", "-b", newBranchName]);
                     if (!createResult.IsSuccess)
                     {
                         SetNotification(
@@ -2036,7 +2153,7 @@ else
             });
     }
 
-    private async Task<bool> LoadEditorBranchesAsync(bool showNotificationOnFailure, bool preserveSelection)
+    private async Task<bool> LoadEditorBranchesAsync(bool showNotificationOnFailure, bool preserveSelection, bool fetchRemote = false)
     {
         var repositoryPath = NormalizeRepositoryPath(_editorRepositoryPath);
         if (repositoryPath is null)
@@ -2048,7 +2165,7 @@ else
         _isBranchLoading = true;
         try
         {
-            var gitCheck = await GitService.RunAsync(repositoryPath, "rev-parse --is-inside-work-tree");
+            var gitCheck = await GitService.RunAsync(repositoryPath, ["rev-parse", "--is-inside-work-tree"]);
             if (!gitCheck.IsSuccess)
             {
                 if (showNotificationOnFailure)
@@ -2062,15 +2179,20 @@ else
                 return false;
             }
 
-            var fetchResult = await GitService.RunAsync(repositoryPath, "fetch --all --prune");
-            if (!fetchResult.IsSuccess && showNotificationOnFailure)
+            var remoteUpdateSucceeded = true;
+            if (fetchRemote)
             {
-                SetNotification(
-                    $"リモートブランチ取得前の更新に失敗しました: {BuildGitFailureReason(fetchResult)}",
-                    false);
+                var fetchResult = await GitService.RunAsync(repositoryPath, ["fetch", "--all", "--prune"]);
+                remoteUpdateSucceeded = fetchResult.IsSuccess;
+                if (!remoteUpdateSucceeded && showNotificationOnFailure)
+                {
+                    SetNotification(
+                        $"リモートブランチの更新に失敗しました。以前の情報を表示します: {BuildGitFailureReason(fetchResult)}",
+                        false);
+                }
             }
 
-            var currentBranchResult = await GitService.RunAsync(repositoryPath, "branch --show-current");
+            var currentBranchResult = await GitService.RunAsync(repositoryPath, ["branch", "--show-current"]);
             if (!currentBranchResult.IsSuccess)
             {
                 if (showNotificationOnFailure)
@@ -2086,7 +2208,7 @@ else
 
             var localBranchesResult = await GitService.RunAsync(
                 repositoryPath,
-                "for-each-ref --format=\"%(refname:short)\" refs/heads");
+                ["for-each-ref", "--format=%(refname:short)", "refs/heads"]);
             if (!localBranchesResult.IsSuccess)
             {
                 if (showNotificationOnFailure)
@@ -2102,7 +2224,7 @@ else
 
             var remoteBranchesResult = await GitService.RunAsync(
                 repositoryPath,
-                "for-each-ref --format=\"%(refname:short)\" refs/remotes");
+                ["for-each-ref", "--format=%(refname:short)", "refs/remotes"]);
             if (!remoteBranchesResult.IsSuccess)
             {
                 if (showNotificationOnFailure)
@@ -2116,7 +2238,7 @@ else
                 return false;
             }
 
-            var remoteNamesResult = await GitService.RunAsync(repositoryPath, "remote");
+            var remoteNamesResult = await GitService.RunAsync(repositoryPath, ["remote"]);
             if (!remoteNamesResult.IsSuccess)
             {
                 if (showNotificationOnFailure)
@@ -2231,7 +2353,7 @@ else
                 _editorSelectedBranch = _editorBranches.FirstOrDefault();
             }
 
-            return true;
+            return remoteUpdateSucceeded;
         }
         catch (Exception ex)
         {
@@ -2327,22 +2449,7 @@ else
 
     private static string BuildGitFailureReason(GitCommandResult result)
     {
-        return FirstNonEmptyLine(result.StandardError)
-            ?? FirstNonEmptyLine(result.StandardOutput)
-            ?? $"exit code: {result.ExitCode}";
-    }
-
-    private static string EscapeGitArgument(string value)
-    {
-        if (string.IsNullOrEmpty(value))
-        {
-            return "\"\"";
-        }
-
-        var escaped = value
-            .Replace("\\", "\\\\", StringComparison.Ordinal)
-            .Replace("\"", "\\\"", StringComparison.Ordinal);
-        return $"\"{escaped}\"";
+        return result.GetFailureReason();
     }
 
     private void ResetEditorBranchState(bool clearNewBranchName)
@@ -2820,6 +2927,8 @@ else
     public void Dispose()
     {
         SettingsPanelService.OpenRequested -= OnSettingsOpenRequested;
+        _notificationDismissCts?.Cancel();
+        _notificationDismissCts?.Dispose();
         _stateRefreshCts.Cancel();
         _stateRefreshCts.Dispose();
         UnregisterAllWatchers();
@@ -2990,7 +3099,9 @@ else
                 cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
-                    nextStates[repositoryPath] = await EvaluateGitVisualStateAsync(repositoryPath, cancellationToken);
+                    var state = await EvaluateGitVisualStateAsync(repositoryPath, cancellationToken);
+                    nextStates[repositoryPath] = state;
+                    isSuccess &= state != GitRepositoryVisualState.Error;
                 }
                 catch (OperationCanceledException)
                 {
@@ -3021,15 +3132,11 @@ else
         string repositoryPath,
         CancellationToken cancellationToken)
     {
-        if (!Directory.Exists(repositoryPath))
-        {
-            return GitRepositoryVisualState.Error;
-        }
-
         var result = await GitService.RunAsync(
             repositoryPath,
-            "status --porcelain --branch",
+            ["status", "--porcelain", "--branch"],
             cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         if (!result.IsSuccess)
         {
             return GitRepositoryVisualState.Error;
@@ -3393,32 +3500,26 @@ else
 
     private IReadOnlyList<NotificationHistoryEntry> GetFilteredNotificationHistoryEntries()
     {
-        if (_showSuccessNotifications && _showFailedNotifications)
-        {
-            return _notificationHistoryEntries;
-        }
-
-        if (_showSuccessNotifications)
-        {
-            return _notificationHistoryEntries
-                .Where(static entry => entry.IsSuccess == true)
-                .ToArray();
-        }
-
-        if (_showFailedNotifications)
-        {
-            return _notificationHistoryEntries
-                .Where(static entry => entry.IsSuccess == false)
-                .ToArray();
-        }
-
-        return _notificationHistoryEntries;
+        return _notificationHistoryEntries
+            .Where(entry => entry.IsSuccess is null
+                || (entry.IsSuccess == true && _showSuccessNotifications)
+                || (entry.IsSuccess == false && _showFailedNotifications))
+            .ToArray();
     }
 
     private void SetNotification(string message, bool? isSuccess, bool addToHistory = true)
     {
+        _notificationDismissCts?.Cancel();
+        _notificationDismissCts?.Dispose();
+        _notificationDismissCts = null;
         _message = message;
         _isLastActionSuccess = isSuccess;
+
+        if (isSuccess != false)
+        {
+            _notificationDismissCts = new CancellationTokenSource();
+            _ = DismissNotificationAfterDelayAsync(_notificationDismissCts.Token);
+        }
 
         if (addToHistory)
         {
@@ -3428,6 +3529,33 @@ else
         if (isSuccess == false)
         {
             _ = WriteErrorLogSafeAsync(message);
+        }
+    }
+
+    private void DismissNotification()
+    {
+        _notificationDismissCts?.Cancel();
+        _notificationDismissCts?.Dispose();
+        _notificationDismissCts = null;
+        _message = null;
+    }
+
+    private async Task DismissNotificationAfterDelayAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+            await InvokeAsync(() =>
+            {
+                if (!cancellationToken.IsCancellationRequested)
+                {
+                    _message = null;
+                    StateHasChanged();
+                }
+            });
+        }
+        catch (OperationCanceledException)
+        {
         }
     }
 
@@ -3480,9 +3608,7 @@ else
 
     private static string BuildGitStartupError(GitCommandResult result)
     {
-        var reason = FirstNonEmptyLine(result.StandardError)
-            ?? FirstNonEmptyLine(result.StandardOutput)
-            ?? $"exit code: {result.ExitCode}";
+        var reason = result.GetFailureReason();
         return $"Git の起動確認に失敗しました。reason={reason}";
     }
 
@@ -3524,6 +3650,21 @@ else
         Behind = 5,
         Diverged = 6,
         Error = 7
+    }
+
+    private static string GetGitVisualStateLabel(GitRepositoryVisualState state)
+    {
+        return state switch
+        {
+            GitRepositoryVisualState.NotConfigured => "リポジトリ未設定",
+            GitRepositoryVisualState.Clean => "変更なし",
+            GitRepositoryVisualState.Dirty => "未コミットの変更あり",
+            GitRepositoryVisualState.Ahead => "ローカルが先行",
+            GitRepositoryVisualState.Behind => "リモートが先行",
+            GitRepositoryVisualState.Diverged => "ローカルとリモートが分岐",
+            GitRepositoryVisualState.Error => "状態取得エラー",
+            _ => "未確認"
+        };
     }
 
     private void OnSettingsOpenRequested(object? sender, EventArgs e)

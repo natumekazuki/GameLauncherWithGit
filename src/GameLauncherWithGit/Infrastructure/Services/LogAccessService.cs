@@ -6,6 +6,7 @@ using System.Text.Json;
 using GameLauncherWithGit.Application.Abstractions;
 using GameLauncherWithGit.Application.Models;
 using GameLauncherWithGit.Infrastructure.Abstractions;
+using GameLauncherWithGit.Infrastructure.Models;
 using Microsoft.Extensions.Logging;
 using MonochromeMemory.Log.Core;
 using MonochromeMemory.Log.Sinks.File;
@@ -74,6 +75,32 @@ public sealed class LogAccessService : ILogAccessService
 			Resource: _resource,
 			Data: payload);
 		await _logDispatcher.SendAsync(logEvent, cancellationToken);
+	}
+
+	public async Task AppendGitErrorAsync(
+		string? repositoryPath,
+		IReadOnlyList<string> arguments,
+		GitCommandResult result,
+		CancellationToken cancellationToken = default)
+	{
+		EnsureLogsDirectory();
+		var payload = new ExceptionLogData(
+			Type: "GitCommandError",
+			Message: result.GetFailureReason(),
+			StackTrace: string.Empty,
+			Inner: null,
+			HResult: null,
+			KeyValues: new Dictionary<string, object?>
+			{
+				["repositoryPath"] = repositoryPath,
+				["command"] = $"git {string.Join(' ', arguments)}",
+				["exitCode"] = result.ExitCode,
+				["standardOutput"] = result.StandardOutput,
+				["standardError"] = result.StandardError
+			});
+		await _logDispatcher.SendAsync(
+			new ExceptionLogEvent(Trace: CreateTraceContext(), Timestamp: DateTimeOffset.UtcNow, Resource: _resource, Data: payload),
+			cancellationToken);
 	}
 
 	public Task MaintainLogFilesAsync(CancellationToken cancellationToken = default)
