@@ -97,7 +97,7 @@ public sealed class LauncherService : ILauncherService
 		}
 
 		var repositoryPath = game.RelatedRepositoryPath;
-		var fetchResult = await _gitService.RunAsync(repositoryPath, "fetch", cancellationToken);
+		var fetchResult = await _gitService.RunAsync(repositoryPath, ["fetch"], cancellationToken);
 		if (!fetchResult.IsSuccess)
 		{
 			return BuildFailureResult(repositoryPath, "fetch", fetchResult);
@@ -111,13 +111,13 @@ public sealed class LauncherService : ILauncherService
 
 		if (remoteAheadResult.RemoteAheadCount <= 0)
 		{
-			var addResult = await _gitService.RunAsync(repositoryPath, "add -A", cancellationToken);
+			var addResult = await _gitService.RunAsync(repositoryPath, ["add", "-A"], cancellationToken);
 			if (!addResult.IsSuccess)
 			{
 				return BuildFailureResult(repositoryPath, "add -A", addResult);
 			}
 
-			var statusResult = await _gitService.RunAsync(repositoryPath, "status --porcelain", cancellationToken);
+			var statusResult = await _gitService.RunAsync(repositoryPath, ["status", "--porcelain"], cancellationToken);
 			if (!statusResult.IsSuccess)
 			{
 				return BuildFailureResult(repositoryPath, "status --porcelain", statusResult);
@@ -128,7 +128,7 @@ public sealed class LauncherService : ILauncherService
 				var timestamp = DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss");
 				var commitResult = await _gitService.RunAsync(
 					repositoryPath,
-					$"commit -m \"auto: save sync {timestamp}\"",
+					["commit", "-m", $"auto: save sync {timestamp}"],
 					cancellationToken);
 				if (!commitResult.IsSuccess && !IsNothingToCommit(commitResult))
 				{
@@ -175,7 +175,7 @@ public sealed class LauncherService : ILauncherService
 	{
 		var result = await _gitService.RunAsync(
 			repositoryPath,
-			"rev-list --left-right --count HEAD...@{upstream}",
+			["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
 			cancellationToken);
 		if (!result.IsSuccess)
 		{
@@ -262,9 +262,7 @@ public sealed class LauncherService : ILauncherService
 
 	private static LaunchResult BuildFailureResult(string repositoryPath, string command, GitCommandResult result)
 	{
-		var reason = FirstNonEmptyLine(result.StandardError)
-			?? FirstNonEmptyLine(result.StandardOutput)
-			?? $"exit code: {result.ExitCode}";
+		var reason = result.GetFailureReason();
 
 		var message = $"起動前同期に失敗しました。repo={repositoryPath}, command=git {command}, reason={reason}";
 		return new LaunchResult(false, message);
@@ -328,7 +326,7 @@ public sealed class LauncherService : ILauncherService
 			return new PullExecutionResult(pullTarget.FailureCommand, pullTarget.FailureResult);
 		}
 
-		if (string.IsNullOrWhiteSpace(pullTarget.Command))
+		if (pullTarget.Arguments is null)
 		{
 			_logger.LogInformation(
 				"Skip pull because upstream is not configured. repositoryPath={RepositoryPath}",
@@ -338,15 +336,15 @@ public sealed class LauncherService : ILauncherService
 				new GitCommandResult(0, "skip pull: no upstream", string.Empty));
 		}
 
-		var pullResult = await _gitService.RunAsync(repositoryPath, pullTarget.Command, cancellationToken);
-		return new PullExecutionResult(pullTarget.Command, pullResult);
+		var pullResult = await _gitService.RunAsync(repositoryPath, pullTarget.Arguments, cancellationToken);
+		return new PullExecutionResult(string.Join(' ', pullTarget.Arguments), pullResult);
 	}
 
 	private async Task<PullCommandBuildResult> TryBuildPullCommandAsync(
 		string repositoryPath,
 		CancellationToken cancellationToken)
 	{
-		var branchResult = await _gitService.RunAsync(repositoryPath, "branch --show-current", cancellationToken);
+		var branchResult = await _gitService.RunAsync(repositoryPath, ["branch", "--show-current"], cancellationToken);
 		if (!branchResult.IsSuccess)
 		{
 			return PullCommandBuildResult.Failed("branch --show-current", branchResult);
@@ -361,7 +359,7 @@ public sealed class LauncherService : ILauncherService
 		var remoteConfigKey = BuildBranchConfigKey(branchName, "remote");
 		var remoteResult = await _gitService.RunAsync(
 			repositoryPath,
-			$"config --get {remoteConfigKey}",
+			["config", "--get", remoteConfigKey],
 			cancellationToken);
 		if (!remoteResult.IsSuccess)
 		{
@@ -384,7 +382,7 @@ public sealed class LauncherService : ILauncherService
 		var mergeConfigKey = BuildBranchConfigKey(branchName, "merge");
 		var mergeResult = await _gitService.RunAsync(
 			repositoryPath,
-			$"config --get {mergeConfigKey}",
+			["config", "--get", mergeConfigKey],
 			cancellationToken);
 		if (!mergeResult.IsSuccess)
 		{
@@ -405,7 +403,7 @@ public sealed class LauncherService : ILauncherService
 		}
 
 		return new PullCommandBuildResult(
-			$"pull --rebase --autostash {EscapeGitArgument(remoteName)} {EscapeGitArgument(mergeTarget)}",
+			["pull", "--rebase", "--autostash", remoteName, mergeTarget],
 			false,
 			null,
 			null);
@@ -416,7 +414,7 @@ public sealed class LauncherService : ILauncherService
 		GitCommandResult Result);
 
 	private sealed record PullCommandBuildResult(
-		string? Command,
+		IReadOnlyList<string>? Arguments,
 		bool IsDetachedHead,
 		string? FailureCommand,
 		GitCommandResult? FailureResult)
@@ -430,23 +428,7 @@ public sealed class LauncherService : ILauncherService
 
 	private static string BuildBranchConfigKey(string branchName, string key)
 	{
-		var escapedBranchName = branchName
-			.Replace("\\", "\\\\", StringComparison.Ordinal)
-			.Replace("\"", "\\\"", StringComparison.Ordinal);
-		return $"branch.\"{escapedBranchName}\".{key}";
-	}
-
-	private static string EscapeGitArgument(string value)
-	{
-		if (string.IsNullOrEmpty(value))
-		{
-			return "\"\"";
-		}
-
-		var escaped = value
-			.Replace("\\", "\\\\", StringComparison.Ordinal)
-			.Replace("\"", "\\\"", StringComparison.Ordinal);
-		return $"\"{escaped}\"";
+		return $"branch.{branchName}.{key}";
 	}
 
 	private static string NormalizeMergeTarget(string mergeTarget)

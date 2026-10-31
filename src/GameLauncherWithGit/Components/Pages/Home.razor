@@ -79,7 +79,7 @@ else if (!_isGitReady)
 {
     <section class="startup-error-panel">
         <h1>Git が利用できません</h1>
-        <p>Git のインストールまたは PATH 設定を確認してから、アプリを再起動してください。</p>
+        <p>下記の内容を確認してから、アプリを再起動してください。</p>
         @if (!string.IsNullOrWhiteSpace(_startupError))
         {
             <p class="startup-error-detail">@_startupError</p>
@@ -1011,7 +1011,7 @@ else
 
         try
         {
-            var gitCheckResult = await GitService.RunAsync(AppContext.BaseDirectory, "--version");
+            var gitCheckResult = await GitService.CheckAvailabilityAsync();
             if (!gitCheckResult.IsSuccess)
             {
                 _isGitReady = false;
@@ -1881,7 +1881,7 @@ else
             return;
         }
 
-        string switchCommand;
+        IReadOnlyList<string> switchCommand;
         string switchTargetLabel;
         var switchedFromRemote = false;
         if (_editorLocalBranches.Contains(selectedBranch))
@@ -1892,7 +1892,7 @@ else
                 return;
             }
 
-            switchCommand = $"checkout {EscapeGitArgument(selectedBranch)}";
+            switchCommand = ["checkout", selectedBranch];
             switchTargetLabel = selectedBranch;
         }
         else if (_editorRemoteBranches.Contains(selectedBranch))
@@ -1910,8 +1910,7 @@ else
                 return;
             }
 
-            switchCommand =
-                $"checkout -b {EscapeGitArgument(localBranchName)} --track {EscapeGitArgument(selectedBranch)}";
+            switchCommand = ["checkout", "-b", localBranchName, "--track", selectedBranch];
             switchTargetLabel = $"{localBranchName} <- {selectedBranch}";
             switchedFromRemote = true;
         }
@@ -1940,7 +1939,7 @@ else
                     }
 
                     await LoadEditorBranchesAsync(showNotificationOnFailure: false, preserveSelection: false);
-                    var currentBranchResult = await GitService.RunAsync(repositoryPath, "branch --show-current");
+                    var currentBranchResult = await GitService.RunAsync(repositoryPath, ["branch", "--show-current"]);
                     if (currentBranchResult.IsSuccess)
                     {
                         var actualBranch = NormalizeBranchName(FirstNonEmptyLine(currentBranchResult.StandardOutput));
@@ -2000,7 +1999,7 @@ else
                 {
                     var validateResult = await GitService.RunAsync(
                         repositoryPath,
-                        $"check-ref-format --branch {EscapeGitArgument(newBranchName)}");
+                        ["check-ref-format", "--branch", newBranchName]);
                     if (!validateResult.IsSuccess)
                     {
                         SetNotification(
@@ -2011,7 +2010,7 @@ else
 
                     var createResult = await GitService.RunAsync(
                         repositoryPath,
-                        $"checkout -b {EscapeGitArgument(newBranchName)}");
+                        ["checkout", "-b", newBranchName]);
                     if (!createResult.IsSuccess)
                     {
                         SetNotification(
@@ -2048,7 +2047,7 @@ else
         _isBranchLoading = true;
         try
         {
-            var gitCheck = await GitService.RunAsync(repositoryPath, "rev-parse --is-inside-work-tree");
+            var gitCheck = await GitService.RunAsync(repositoryPath, ["rev-parse", "--is-inside-work-tree"]);
             if (!gitCheck.IsSuccess)
             {
                 if (showNotificationOnFailure)
@@ -2062,7 +2061,7 @@ else
                 return false;
             }
 
-            var fetchResult = await GitService.RunAsync(repositoryPath, "fetch --all --prune");
+            var fetchResult = await GitService.RunAsync(repositoryPath, ["fetch", "--all", "--prune"]);
             if (!fetchResult.IsSuccess && showNotificationOnFailure)
             {
                 SetNotification(
@@ -2070,7 +2069,7 @@ else
                     false);
             }
 
-            var currentBranchResult = await GitService.RunAsync(repositoryPath, "branch --show-current");
+            var currentBranchResult = await GitService.RunAsync(repositoryPath, ["branch", "--show-current"]);
             if (!currentBranchResult.IsSuccess)
             {
                 if (showNotificationOnFailure)
@@ -2086,7 +2085,7 @@ else
 
             var localBranchesResult = await GitService.RunAsync(
                 repositoryPath,
-                "for-each-ref --format=\"%(refname:short)\" refs/heads");
+                ["for-each-ref", "--format=%(refname:short)", "refs/heads"]);
             if (!localBranchesResult.IsSuccess)
             {
                 if (showNotificationOnFailure)
@@ -2102,7 +2101,7 @@ else
 
             var remoteBranchesResult = await GitService.RunAsync(
                 repositoryPath,
-                "for-each-ref --format=\"%(refname:short)\" refs/remotes");
+                ["for-each-ref", "--format=%(refname:short)", "refs/remotes"]);
             if (!remoteBranchesResult.IsSuccess)
             {
                 if (showNotificationOnFailure)
@@ -2116,7 +2115,7 @@ else
                 return false;
             }
 
-            var remoteNamesResult = await GitService.RunAsync(repositoryPath, "remote");
+            var remoteNamesResult = await GitService.RunAsync(repositoryPath, ["remote"]);
             if (!remoteNamesResult.IsSuccess)
             {
                 if (showNotificationOnFailure)
@@ -2327,22 +2326,7 @@ else
 
     private static string BuildGitFailureReason(GitCommandResult result)
     {
-        return FirstNonEmptyLine(result.StandardError)
-            ?? FirstNonEmptyLine(result.StandardOutput)
-            ?? $"exit code: {result.ExitCode}";
-    }
-
-    private static string EscapeGitArgument(string value)
-    {
-        if (string.IsNullOrEmpty(value))
-        {
-            return "\"\"";
-        }
-
-        var escaped = value
-            .Replace("\\", "\\\\", StringComparison.Ordinal)
-            .Replace("\"", "\\\"", StringComparison.Ordinal);
-        return $"\"{escaped}\"";
+        return result.GetFailureReason();
     }
 
     private void ResetEditorBranchState(bool clearNewBranchName)
@@ -2990,7 +2974,9 @@ else
                 cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
-                    nextStates[repositoryPath] = await EvaluateGitVisualStateAsync(repositoryPath, cancellationToken);
+                    var state = await EvaluateGitVisualStateAsync(repositoryPath, cancellationToken);
+                    nextStates[repositoryPath] = state;
+                    isSuccess &= state != GitRepositoryVisualState.Error;
                 }
                 catch (OperationCanceledException)
                 {
@@ -3021,15 +3007,11 @@ else
         string repositoryPath,
         CancellationToken cancellationToken)
     {
-        if (!Directory.Exists(repositoryPath))
-        {
-            return GitRepositoryVisualState.Error;
-        }
-
         var result = await GitService.RunAsync(
             repositoryPath,
-            "status --porcelain --branch",
+            ["status", "--porcelain", "--branch"],
             cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         if (!result.IsSuccess)
         {
             return GitRepositoryVisualState.Error;
@@ -3480,9 +3462,7 @@ else
 
     private static string BuildGitStartupError(GitCommandResult result)
     {
-        var reason = FirstNonEmptyLine(result.StandardError)
-            ?? FirstNonEmptyLine(result.StandardOutput)
-            ?? $"exit code: {result.ExitCode}";
+        var reason = result.GetFailureReason();
         return $"Git の起動確認に失敗しました。reason={reason}";
     }
 

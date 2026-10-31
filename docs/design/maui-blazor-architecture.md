@@ -52,7 +52,7 @@ flowchart LR
 - `SyncOrchestrator`
   - 監視イベント受信、デバウンス管理、同期ジョブ実行順序制御
   - 失敗分類とリトライポリシー適用（指数バックオフ再試行、通知抑制、復旧通知）
-  - pull は追跡設定（`branch.<name>.remote` / `branch.<name>.merge`）の有効値（`git config --get`）から明示的に組み立て、remote/branch 引数をエスケープして実行する
+  - pull は追跡設定（`branch.<name>.remote` / `branch.<name>.merge`）の有効値（`git config --get`）から組み立て、remote/branch を個別の引数として実行する
   - push は `git push` 既定解決（`branch.<name>.pushRemote` / `remote.pushDefault` 等）を利用して宛先を決定する
   - `branch/config` 取得の「キー未設定（exit=1 かつ出力空）」時は upstream 未設定として pull をスキップし、push は `git push` 既定解決で実行する（それ以外の取得失敗は同期エラー）
   - 同期結果（成功/失敗/停止）をリポジトリ単位の履歴ストアへ記録
@@ -64,7 +64,8 @@ flowchart LR
   - unborn branch（初回コミット前）や upstream 未設定は専用判定で分離し、追跡情報取得コマンド自体の失敗は同期失敗として扱う
   - 失敗時の起動ブロックとログ導線制御
 - `GitService`
-  - Git コマンド実行と結果収集（exit code / stdout / stderr）
+  - Git 2.38.0 以降を使用し、登録対象の作業ツリールートを検証して、各 Git コマンドへそのルートだけの `safe.directory` を command scope で渡す
+  - 引数を個別に渡し、UTF-8 の stdout / stderr と終了コードを収集する。失敗時の詳細はログビューアで確認できる
 - `RepositoryWatcherService`
   - FileSystemWatcher で変更イベントを集約して通知
 - `NotificationService`

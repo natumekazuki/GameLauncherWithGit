@@ -286,29 +286,28 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		CancellationToken cancellationToken)
 	{
 		var repositoryPath = repositoryId;
-		if (string.IsNullOrWhiteSpace(repositoryPath) || !Directory.Exists(repositoryPath))
+		if (string.IsNullOrWhiteSpace(repositoryPath))
 		{
 			throw new SyncCommandException(
 				repositoryPath,
 				"validate-path",
-				"監視対象のリポジトリパスが存在しません。",
+				"監視対象のリポジトリパスが設定されていません。",
 				startedAt,
 				shouldPauseRepository: false);
 		}
 
-		await EnsureCommandSuccessAsync(repositoryPath, "fetch", startedAt, shouldPauseRepository: false, cancellationToken);
+		await EnsureCommandSuccessAsync(repositoryPath, ["fetch"], startedAt, shouldPauseRepository: false, cancellationToken);
 
 		var tracking = await TryGetTrackingInfoAsync(repositoryPath, startedAt, cancellationToken);
 		if (tracking is not null)
 		{
-			var pullCommand =
-				$"pull --rebase --autostash {EscapeGitArgument(tracking.RemoteName)} {EscapeGitArgument(tracking.MergeTarget)}";
+			string[] pullCommand = ["pull", "--rebase", "--autostash", tracking.RemoteName, tracking.MergeTarget];
 			var pullResult = await _gitService.RunAsync(repositoryPath, pullCommand, cancellationToken);
 			if (!pullResult.IsSuccess)
 			{
 				throw new SyncCommandException(
 					repositoryPath,
-					pullCommand,
+					string.Join(' ', pullCommand),
 					BuildFailureReason(pullResult),
 					startedAt,
 					shouldPauseRepository: IsPullConflict(pullResult) || IsPullConfigurationError(pullResult));
@@ -321,8 +320,8 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 				repositoryPath);
 		}
 
-		await EnsureCommandSuccessAsync(repositoryPath, "add -A", startedAt, shouldPauseRepository: false, cancellationToken);
-		var statusResult = await _gitService.RunAsync(repositoryPath, "status --porcelain", cancellationToken);
+		await EnsureCommandSuccessAsync(repositoryPath, ["add", "-A"], startedAt, shouldPauseRepository: false, cancellationToken);
+		var statusResult = await _gitService.RunAsync(repositoryPath, ["status", "--porcelain"], cancellationToken);
 		if (!statusResult.IsSuccess)
 		{
 			throw new SyncCommandException(
@@ -338,7 +337,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 			var timestamp = DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss");
 			var commitResult = await _gitService.RunAsync(
 				repositoryPath,
-				$"commit -m \"auto: save sync {timestamp}\"",
+				["commit", "-m", $"auto: save sync {timestamp}"],
 				cancellationToken);
 			if (!commitResult.IsSuccess && !IsNothingToCommit(commitResult))
 			{
@@ -358,13 +357,13 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 				repositoryPath);
 		}
 
-		await EnsureCommandSuccessAsync(repositoryPath, "push", startedAt, shouldPauseRepository: false, cancellationToken);
+		await EnsureCommandSuccessAsync(repositoryPath, ["push"], startedAt, shouldPauseRepository: false, cancellationToken);
 		_logger.LogInformation("Repository sync completed. repositoryId={RepositoryId}", repositoryId);
 	}
 
 	private async Task EnsureCommandSuccessAsync(
 		string repositoryPath,
-		string command,
+		IReadOnlyList<string> command,
 		DateTimeOffset startedAt,
 		bool shouldPauseRepository,
 		CancellationToken cancellationToken)
@@ -377,7 +376,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 
 		throw new SyncCommandException(
 			repositoryPath,
-			command,
+			string.Join(' ', command),
 			BuildFailureReason(result),
 			startedAt,
 			shouldPauseRepository);
@@ -430,9 +429,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 
 	private static string BuildFailureReason(GitCommandResult result)
 	{
-		return FirstNonEmptyLine(result.StandardError)
-			?? FirstNonEmptyLine(result.StandardOutput)
-			?? $"exit code: {result.ExitCode}";
+		return result.GetFailureReason();
 	}
 
 	private static bool IsMissingGitConfigValue(GitCommandResult result)
@@ -452,7 +449,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		DateTimeOffset startedAt,
 		CancellationToken cancellationToken)
 	{
-		var branchResult = await _gitService.RunAsync(repositoryPath, "branch --show-current", cancellationToken);
+		var branchResult = await _gitService.RunAsync(repositoryPath, ["branch", "--show-current"], cancellationToken);
 		if (!branchResult.IsSuccess)
 		{
 			throw new SyncCommandException(
@@ -477,7 +474,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		var remoteConfigKey = BuildBranchConfigKey(branchName, "remote");
 		var remoteResult = await _gitService.RunAsync(
 			repositoryPath,
-			$"config --get {remoteConfigKey}",
+			["config", "--get", remoteConfigKey],
 			cancellationToken);
 		if (!remoteResult.IsSuccess)
 		{
@@ -503,7 +500,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		var mergeConfigKey = BuildBranchConfigKey(branchName, "merge");
 		var mergeResult = await _gitService.RunAsync(
 			repositoryPath,
-			$"config --get {mergeConfigKey}",
+			["config", "--get", mergeConfigKey],
 			cancellationToken);
 		if (!mergeResult.IsSuccess)
 		{
@@ -531,23 +528,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 
 	private static string BuildBranchConfigKey(string branchName, string key)
 	{
-		var escapedBranchName = branchName
-			.Replace("\\", "\\\\", StringComparison.Ordinal)
-			.Replace("\"", "\\\"", StringComparison.Ordinal);
-		return $"branch.\"{escapedBranchName}\".{key}";
-	}
-
-	private static string EscapeGitArgument(string value)
-	{
-		if (string.IsNullOrEmpty(value))
-		{
-			return "\"\"";
-		}
-
-		var escaped = value
-			.Replace("\\", "\\\\", StringComparison.Ordinal)
-			.Replace("\"", "\\\"", StringComparison.Ordinal);
-		return $"\"{escaped}\"";
+		return $"branch.{branchName}.{key}";
 	}
 
 	private static string NormalizeMergeTarget(string mergeTarget)

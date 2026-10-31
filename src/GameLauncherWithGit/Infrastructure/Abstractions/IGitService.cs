@@ -4,8 +4,10 @@ namespace GameLauncherWithGit.Infrastructure.Abstractions;
 
 public interface IGitService
 {
+	Task<GitCommandResult> CheckAvailabilityAsync(CancellationToken cancellationToken = default);
+
 	Task<GitCommandResult> RunAsync(
 		string repositoryPath,
-		string arguments,
+		IReadOnlyList<string> arguments,
 		CancellationToken cancellationToken = default);
 }

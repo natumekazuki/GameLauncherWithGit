@@ -289,19 +289,18 @@ public sealed class GameLibraryService : IGameLibraryService
 			return;
 		}
 
-		var result = await _gitService.RunAsync(repositoryPath, "rev-parse --is-inside-work-tree", cancellationToken);
+		var result = await _gitService.RunAsync(repositoryPath, ["rev-parse", "--is-inside-work-tree"], cancellationToken);
 		var output = FirstNonEmptyLine(result.StandardOutput);
 		if (result.IsSuccess && string.Equals(output, "true", StringComparison.OrdinalIgnoreCase))
 		{
 			return;
 		}
 
-		var reason = FirstNonEmptyLine(result.StandardError)
-			?? output
-			?? $"exit code: {result.ExitCode}";
-
+		var reason = result.IsSuccess
+			? "Git の作業ツリーを確認できません。ルートを選択してください。"
+			: result.GetFailureReason();
 		throw new InvalidOperationException(
-			$"関連リポジトリとして登録できません。Git リポジトリを選択してください。path={repositoryPath}, reason={reason}");
+			$"関連リポジトリとして登録できません。{reason}");
 	}
 
 	private static string? FirstNonEmptyLine(string value)

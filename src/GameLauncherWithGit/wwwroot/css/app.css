@@ -544,6 +544,8 @@ h1:focus {
 
 .editor-modal {
     width: min(640px, 100%);
+    max-height: calc(100vh - 2rem);
+    overflow-y: auto;
     background: #ffffff;
     border-radius: 14px;
     padding: 1rem;
