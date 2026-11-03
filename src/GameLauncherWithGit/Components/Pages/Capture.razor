@@ -2,6 +2,7 @@
 @using GameLauncherWithGit.Application.Models
 @using GameLauncherWithGit.Application.Services
 @using GameLauncherWithGit.Infrastructure.Abstractions
+@using GameLauncherWithGit.Components
 @using System.Text
 @implements IAsyncDisposable
 @inject IScenarioCaptureStore Store
@@ -12,107 +13,124 @@
 <PageTitle>シナリオ抽出</PageTitle>
 <section class="capture-page">
     <header class="capture-header">
-        <div><a href="/">← ゲーム一覧</a><h1>シナリオ抽出</h1></div>
+        <div class="capture-heading">
+            <a class="secondary-button capture-icon-button" href="/" title="ゲーム一覧" aria-label="ゲーム一覧"><CaptureIcon Name="Back" /></a>
+            <h1>シナリオ</h1>
+        </div>
         <div class="capture-tabs" aria-label="表示切替">
-            <button class="secondary-button" aria-pressed="@(_live ? "true" : "false")" @onclick="ShowLiveAsync">取得中のゲーム</button>
-            <button class="secondary-button" aria-pressed="@(!_live ? "true" : "false")" @onclick="ShowHistoryAsync">保存履歴</button>
+            <button class="secondary-button capture-icon-button" title="取得中" aria-label="取得中のゲーム" aria-pressed="@(_live ? "true" : "false")" @onclick="ShowLiveAsync"><CaptureIcon Name="Live" /></button>
+            <button class="secondary-button capture-icon-button" title="履歴" aria-label="保存履歴" aria-pressed="@(!_live ? "true" : "false")" @onclick="ShowHistoryAsync"><CaptureIcon Name="History" /></button>
         </div>
     </header>
-    @if (_loading) { <p role="status">履歴を読み込んでいます…</p> }
+    @if (_loading) { <p role="status">読込中…</p> }
     else
     {
         @if (_live)
         {
-            <div class="capture-status">
-                <strong>@(_snapshot.Profile?.Title ?? "取得中のゲームはありません")</strong>
-                <span role="status">@_snapshot.Status</span>
-                <span class="capture-count">今回：受信 @_snapshot.Received / 保存 @_snapshot.Saved 件</span>
-                <span class="capture-warning">@(_snapshot.Lost > 0 ? $"未保存・破棄 {_snapshot.Lost} 件（未選択候補を含む）" : "")</span>
+            <div class="capture-livebar">
+                <strong class="capture-game-title">@(_snapshot.Profile?.Title ?? "ゲームなし")</strong>
+                <div class="capture-play-range" aria-label="プレイ中の区間指定">
+                    <span class="capture-range-caption">区間</span>
+                    <button class="launch-button capture-icon-button" title="区間を開始" aria-label="ここから開始" @onclick="StartLiveRangeAsync" disabled="@(_busy || !_snapshot.Connected || _snapshot.RangeStart is not null)"><CaptureIcon Name="Play" /></button>
+                    <button class="launch-button capture-icon-button" title="区間を終了" aria-label="ここまでで終了" @onclick="EndLiveRangeAsync" disabled="@(_busy || _snapshot.RangeStart is null)"><CaptureIcon Name="Stop" /></button>
+                    <button class="secondary-button capture-icon-button" title="区間指定を取消" aria-label="区間指定を取消" @onclick="CancelLiveRange" disabled="@(_busy || _snapshot.RangeStart is null)"><CaptureIcon Name="Close" /></button>
+                </div>
+                <div class="capture-live-details">
+                    <span class="capture-connection" role="status" title="@_snapshot.Status">@_snapshot.Status</span>
+                    <span class="capture-count" title="今回の受信" aria-label="@($"今回の受信 {_snapshot.Received}件")"><CaptureIcon Name="Receive" />@_snapshot.Received</span>
+                    <span class="capture-count" title="今回の保存" aria-label="@($"今回の保存 {_snapshot.Saved}件")"><CaptureIcon Name="Save" />@_snapshot.Saved</span>
+                    <span class="capture-loss @(_snapshot.Lost == 0 ? "capture-hidden" : "")" title="未保存・破棄（未選択候補を含む）" aria-label="@($"未保存・破棄 {_snapshot.Lost}件、未選択候補を含む")"><CaptureIcon Name="Warning" />@_snapshot.Lost</span>
+                    <span class="capture-range-active @(_snapshot.RangeStart is null ? "capture-hidden" : "")" role="status">区間指定中</span>
+                </div>
             </div>
         }
-        @if (_live)
-        {
-            <div class="capture-play-range" aria-label="プレイ中の区間指定">
-                <button class="launch-button" @onclick="StartLiveRangeAsync" disabled="@(_busy || !_snapshot.Connected || _snapshot.RangeStart is not null)">ここから開始</button>
-                <button class="launch-button" @onclick="EndLiveRangeAsync" disabled="@(_busy || _snapshot.RangeStart is null)">ここまでで終了</button>
-                <button class="secondary-button" @onclick="CancelLiveRange" disabled="@(_busy || _snapshot.RangeStart is null)">取消</button>
-                <span role="status">@(_snapshot.RangeStart is null ? "必要な場面だけ区間を作成" : "区間指定中 — 終了後に名前を入力")</span>
-            </div>
-        }
-        <div class="capture-layout">
-            <section class="capture-content @(_live ? "capture-content-live" : "")" aria-busy="@(_busy ? "true" : "false")">
-                <div class="capture-filters @(_live ? "capture-filters-live" : "")">
-                    @if (!_live)
-                    {
-                    <label>ゲーム<select value="@_profileId" @onchange="ChangeProfileAsync" disabled="@(_busy || _live)">
-                        <option value="0">選択してください</option>
+        <section class="capture-content" aria-busy="@(_busy ? "true" : "false")">
+            <div class="capture-filters @(_live ? "capture-filters-live" : "")">
+                @if (!_live)
+                {
+                    <label class="capture-filter" title="ゲーム"><CaptureIcon Name="Game" /><select aria-label="ゲーム" value="@_profileId" @onchange="ChangeProfileAsync" disabled="@_busy">
+                        <option value="0">ゲームを選択</option>
                         @foreach (var profile in _profiles) { <option value="@profile.Id">@profile.Title@(profile.GameId is null ? "（登録なし）" : "")</option> }
                     </select></label>
-                    }
-                    <label>区間<select @bind="_rangeId" @bind:after="ChangeRangeAsync" disabled="@_busy">
-                        <option value="0">ゲーム全体</option>
-                        @foreach (var range in _ranges) { <option value="@range.Id">@RangeName(range)</option> }
-                    </select></label>
-                    <label>ラベル<select @bind="_filter" @bind:after="FilterAsync" disabled="@_busy">
-                        <option value="all">すべて</option><option value="none">未判定</option>
-                        @foreach (var label in _labels) { <option value="@label.Id">@label.Name</option> }
-                    </select></label>
-                </div>
-                <div class="capture-toolbar">
+                }
+                <label class="capture-filter" title="区間"><CaptureIcon Name="Range" /><select aria-label="区間" @bind="_rangeId" @bind:after="ChangeRangeAsync" disabled="@_busy">
+                    <option value="0">ゲーム全体</option>
+                    @foreach (var range in _ranges) { <option value="@range.Id">@RangeName(range)</option> }
+                </select></label>
+                <label class="capture-filter" title="ラベル"><CaptureIcon Name="Tag" /><select aria-label="ラベル" @bind="_filter" @bind:after="FilterAsync" disabled="@_busy">
+                    <option value="all">すべて</option><option value="none">未判定</option>
+                    @foreach (var label in _labels) { <option value="@label.Id">@label.Name</option> }
+                </select></label>
+            </div>
+            <div class="capture-tools">
+                <div class="capture-tool-group capture-view-tools">
                     @if (LatestOrder)
                     {
-                        <span class="capture-follow-state">@(_pickingRange ? "本文で区間指定中" : _following ? "新着に追従中" : "追従を停止中")</span>
-                        <button class="secondary-button" @onclick="FollowAsync" disabled="@(_busy || _following || _selected.Count > 0 || _pickingRange)">新着・末尾を表示</button>
+                        <button class="secondary-button capture-icon-button" title="@(_following ? "末尾に追従中" : "末尾へ戻る")" aria-label="末尾を表示" aria-pressed="@(_following ? "true" : "false")" @onclick="FollowAsync" disabled="@(_busy || _following || _selected.Count > 0 || _pickingRange)"><CaptureIcon Name="Follow" /></button>
                     }
                     else
                     {
-                        <button class="secondary-button" @onclick="PreviousAsync" disabled="@(_busy || _offset == 0)">前の200件</button>
-                        <span>@(_items.Count == 0 ? "0件" : $"{_offset + 1}–{_offset + _items.Count}件目")</span>
-                        <button class="secondary-button" @onclick="NextAsync" disabled="@(_busy || _items.Count < 200)">次の200件</button>
-                    }
-                    @if (!LatestOrder) { <button class="secondary-button" @onclick="RefreshAsync" disabled="@_busy">更新</button> }
-                    <button class="secondary-button" @onclick="OpenSettings" disabled="@_busy">抽出設定</button>
-                    <button class="secondary-button capture-export" @onclick="ExportAsync" disabled="@(_busy || _profileId == 0)">条件の全件をTXT出力</button>
-                </div>
-                <div class="capture-text-range">
-                    <button class="secondary-button" aria-pressed="@(_pickingRange ? "true" : "false")" @onclick="ToggleTextRange" disabled="@(_busy || _profileId == 0)">本文で区間指定</button>
-                    <span class="capture-range-summary" role="status" title="@TextRangeSummary">@TextRangeSummary</span>
-                    <button class="secondary-button" @onclick="OpenTextRange" disabled="@(_busy || !TextRangeValid)">区間を保存</button>
-                    <button class="secondary-button" @onclick="ClearTextRangeAsync" disabled="@(_busy || !_pickingRange)">解除</button>
-                </div>
-                <div class="capture-bulk">
-                    <label><input type="checkbox" checked="@(_items.Count > 0 && _selected.Count == _items.Count)" @onchange="SelectPage" disabled="@(_busy || _items.Count == 0 || !CanEdit)" /> 表示分を選択</label>
-                    <span class="capture-selection-count">@_selected.Count 件選択</span>
-                    <button class="secondary-button" @onclick="OpenBulk" disabled="@(_busy || _selected.Count == 0)">一括修正</button>
-                    <button class="secondary-button" @onclick="ClearSelection" disabled="@_busy">選択解除</button>
-                    <span class="capture-hint">@(_rangeId != 0 ? "修正は「ゲーム全体」で行えます" : FollowingView ? "直近200件まで表示" : "表示した本文が選択対象")</span>
-                </div>
-                <div class="capture-feed" @ref="_feed" tabindex="0" aria-label="抽出本文">
-                    @if (_items.Count == 0) { <p class="capture-empty">@EmptyMessage</p> }
-                    @foreach (var item in _items)
-                    {
-                        <article class="capture-item @(IsRangeEdge(item) ? "capture-range-edge" : "")" @key="item.Id">
-                            <header><input type="checkbox" aria-label="この本文を選択" checked="@_selected.Contains(item.Id)" @onchange="e => SelectItem(item.Id, e.Value is true)" disabled="@(_busy || !CanEdit)" />
-                                <span class="capture-label" title="@(item.LabelName ?? "未判定")">@(item.LabelName ?? "未判定")</span>
-                                <strong title="@item.Speaker">@(item.Kind == CaptureKind.Dialogue || item.Kind is null ? item.Speaker ?? "話者未確定" : "")</strong>
-                                <span class="capture-manual">@(item.ManualLabel || item.ManualSpeaker || item.ManualBoundaries ? "手動修正あり" : "")</span>
-                                @if (_pickingRange)
-                                {
-                                    <button class="secondary-button capture-edit" aria-pressed="@(item.StartPosition == _rangeFirst?.StartPosition ? "true" : "false")" @onclick="() => PickRangeStart(item)" disabled="@_busy">ここから</button>
-                                    <button class="secondary-button" aria-pressed="@(item.EndPosition == _rangeLast?.EndPosition ? "true" : "false")" @onclick="() => PickRangeEnd(item)" disabled="@_busy">ここまで</button>
-                                }
-                                else
-                                {
-                                    <button class="secondary-button capture-edit" @onclick="() => Edit(item)" disabled="@(_busy || !CanEdit)">修正</button>
-                                    <button class="secondary-button" @onclick="() => OpenPartitionAsync(item)" disabled="@(_busy || !CanEdit)">原文・分割</button>
-                                }
-                            </header>
-                            <p>@item.Text</p>
-                        </article>
+                        <button class="secondary-button capture-icon-button" title="前の200件" aria-label="前の200件" @onclick="PreviousAsync" disabled="@(_busy || _offset == 0)"><CaptureIcon Name="Previous" /></button>
+                        <span class="capture-page-count">@(_items.Count == 0 ? "0" : $"{_offset + 1}–{_offset + _items.Count}")</span>
+                        <button class="secondary-button capture-icon-button" title="次の200件" aria-label="次の200件" @onclick="NextAsync" disabled="@(_busy || _items.Count < 200)"><CaptureIcon Name="Next" /></button>
+                        <button class="secondary-button capture-icon-button" title="更新" aria-label="更新" @onclick="RefreshAsync" disabled="@_busy"><CaptureIcon Name="Refresh" /></button>
                     }
                 </div>
-            </section>
-        </div>
+                <div class="capture-tool-group" aria-label="本文で区間指定">
+                    <button class="secondary-button capture-icon-button" title="本文から区間を指定" aria-label="本文で区間指定" aria-pressed="@(_pickingRange ? "true" : "false")" @onclick="ToggleTextRange" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Pick" /></button>
+                    <button class="secondary-button capture-icon-button" title="区間を保存" aria-label="区間を保存" @onclick="OpenTextRange" disabled="@(_busy || !TextRangeValid)"><CaptureIcon Name="Save" /></button>
+                    <button class="secondary-button capture-icon-button" title="本文の区間指定を解除" aria-label="本文の区間指定を解除" @onclick="ClearTextRangeAsync" disabled="@(_busy || !_pickingRange)"><CaptureIcon Name="Close" /></button>
+                </div>
+                <div class="capture-tool-group capture-bulk" aria-label="本文の修正" title="@(_rangeId != 0 ? "修正はゲーム全体で" : "本文の修正")">
+                    <input type="checkbox" aria-label="表示分を選択" title="表示分を選択" checked="@(_items.Count > 0 && _selected.Count == _items.Count)" @onchange="SelectPage" disabled="@(_busy || _items.Count == 0 || !CanEdit)" />
+                    <span class="capture-selection-count" aria-label="@($"{_selected.Count}件選択")">@_selected.Count</span>
+                    <button class="secondary-button capture-icon-button" title="一括修正" aria-label="一括修正" @onclick="OpenBulk" disabled="@(_busy || _selected.Count == 0)"><CaptureIcon Name="BulkEdit" /></button>
+                    <button class="secondary-button capture-icon-button" title="選択解除" aria-label="選択解除" @onclick="ClearSelection" disabled="@(_busy || _selected.Count == 0)"><CaptureIcon Name="ClearSelection" /></button>
+                </div>
+                <div class="capture-tool-group capture-utilities">
+                    <button class="secondary-button capture-icon-button" title="抽出設定" aria-label="抽出設定" @onclick="OpenSettings" disabled="@_busy"><CaptureIcon Name="Settings" /></button>
+                    <button class="secondary-button capture-icon-button" title="TXT出力（条件の全件）" aria-label="条件の全件をTXT出力" @onclick="ExportAsync" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Export" /></button>
+                </div>
+            </div>
+            <div class="capture-range-summary" role="status" aria-label="@TextRangeSummary" title="@TextRangeSummary">
+                @if (_pickingRange)
+                {
+                    <span><CaptureIcon Name="Start" />@(_rangeFirst is null ? "—" : CandidatePreview(_rangeFirst.Text))</span>
+                    <span><CaptureIcon Name="End" />@(_rangeLast is null ? "—" : CandidatePreview(_rangeLast.Text))</span>
+                }
+            </div>
+            <div class="capture-feed" @ref="_feed" tabindex="0" aria-label="抽出本文">
+                @if (_items.Count == 0) { <p class="capture-empty">@EmptyMessage</p> }
+                @foreach (var item in _items)
+                {
+                    <article class="capture-item @(IsRangeEdge(item) ? "capture-range-edge" : "")" @key="item.Id">
+                        <header>
+                            <input type="checkbox" aria-label="この本文を選択" title="選択" checked="@_selected.Contains(item.Id)" @onchange="e => SelectItem(item.Id, e.Value is true)" disabled="@(_busy || !CanEdit)" />
+                            <span class="capture-label" title="@(item.LabelName ?? "未判定")">@(item.LabelName ?? "未判定")</span>
+                            <strong class="capture-speaker" title="@item.Speaker">
+                                @if (item.Kind == CaptureKind.Dialogue || item.Kind is null)
+                                {
+                                    @if (item.Speaker is not null) { @item.Speaker }
+                                    else { <span title="話者未確定" aria-label="話者未確定"><CaptureIcon Name="User" /></span> }
+                                }
+                            </strong>
+                            <span class="capture-manual @(item.ManualLabel || item.ManualSpeaker || item.ManualBoundaries ? "" : "capture-hidden")" title="手動修正" aria-label="手動修正"><CaptureIcon Name="Edit" /></span>
+                            @if (_pickingRange)
+                            {
+                                <button class="secondary-button capture-icon-button" title="ここから" aria-label="ここから" aria-pressed="@(item.StartPosition == _rangeFirst?.StartPosition ? "true" : "false")" @onclick="() => PickRangeStart(item)" disabled="@_busy"><CaptureIcon Name="Start" /></button>
+                                <button class="secondary-button capture-icon-button" title="ここまで" aria-label="ここまで" aria-pressed="@(item.EndPosition == _rangeLast?.EndPosition ? "true" : "false")" @onclick="() => PickRangeEnd(item)" disabled="@_busy"><CaptureIcon Name="End" /></button>
+                            }
+                            else
+                            {
+                                <button class="secondary-button capture-icon-button" title="@(_rangeId != 0 ? "修正はゲーム全体で" : "修正")" aria-label="修正" @onclick="() => Edit(item)" disabled="@(_busy || !CanEdit)"><CaptureIcon Name="Edit" /></button>
+                                <button class="secondary-button capture-icon-button" title="@(_rangeId != 0 ? "分割はゲーム全体で" : "原文・分割")" aria-label="原文・分割" @onclick="() => OpenPartitionAsync(item)" disabled="@(_busy || !CanEdit)"><CaptureIcon Name="Split" /></button>
+                            }
+                        </header>
+                        <p>@item.Text</p>
+                    </article>
+                }
+            </div>
+        </section>
     }
 </section>
 
@@ -120,90 +138,77 @@
 {
     <div class="capture-feedback @(_error is null ? "capture-message" : "capture-error")">
         <span role="@(_error is null ? "status" : "alert")">@(_error ?? _message)</span>
-        <button class="secondary-button" aria-label="通知を閉じる" @onclick="() => { _message = null; _error = null; }">×</button>
+        <button class="secondary-button capture-icon-button" title="閉じる" aria-label="通知を閉じる" @onclick="() => { _message = null; _error = null; }"><CaptureIcon Name="Close" /></button>
     </div>
 }
 
 @if (_rangeSelection is not null)
 {
     <div class="modal-backdrop"><section id="capture-editor" class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-range-title">
-        <h2 id="capture-range-title">区間に名前を付けて保存</h2>
-        <p>開始と終了は指定済みです。この後の受信は区間に含めません。</p>
-        <label>区間名<input @bind="_rangeName" placeholder="例：第1章、気になった場面" /></label>
-        <div class="capture-toolbar"><button class="launch-button" @onclick="SaveRangeAsync" disabled="@_busy">保存</button><button class="secondary-button" @onclick="CloseEditors" disabled="@_busy">キャンセル</button></div>
+        <header class="capture-dialog-header"><h2 id="capture-range-title">区間</h2><button class="secondary-button capture-icon-button" title="キャンセル" aria-label="キャンセル" @onclick="CloseEditors" disabled="@_busy"><CaptureIcon Name="Close" /></button></header>
+        <label>名前<input @bind="_rangeName" /></label>
+        <div class="capture-dialog-actions"><button class="launch-button capture-icon-button" title="保存" aria-label="保存" @onclick="SaveRangeAsync" disabled="@_busy"><CaptureIcon Name="Check" /></button></div>
     </section></div>
 }
 
 @if (_settingsOpen)
 {
     <div class="modal-backdrop"><section id="capture-editor" class="capture-dialog capture-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-settings-title">
-        <header class="capture-dialog-header"><h2 id="capture-settings-title">抽出設定</h2><button class="secondary-button" @onclick="CloseEditors" disabled="@_busy">閉じる</button></header>
+        <header class="capture-dialog-header"><h2 id="capture-settings-title">抽出設定</h2><button class="secondary-button capture-icon-button" title="閉じる" aria-label="閉じる" @onclick="CloseEditors" disabled="@_busy"><CaptureIcon Name="Close" /></button></header>
         <div class="capture-settings capture-dialog-body">
-                @if (_live)
-                {
-                    <section><h2>ゲーム本体</h2>
-                        <input type="search" placeholder="プロセス名で絞り込み" aria-label="プロセスを検索" @bind="_processSearch" @bind:event="oninput" />
-                        <button class="secondary-button" @onclick="FindProcesses" disabled="@_busy">候補を更新</button>
-                        <select aria-label="ゲーム本体プロセス" @bind="_processId" disabled="@(_busy || !_snapshot.NeedsProcess)">
-                            <option value="0">本体を選択</option>
-                            @foreach (var process in _processes.Where(x => x.Name.Contains(_processSearch, StringComparison.OrdinalIgnoreCase)))
-                            { <option value="@process.Id">@process.Name — @process.Path</option> }
-                        </select>
-                        <button class="launch-button" @onclick="ConnectAsync" disabled="@(_busy || !_snapshot.NeedsProcess || _processId == 0)">この本体へ接続</button>
-                        <small>@_snapshot.Status</small>
-                    </section>
-                }
-                @if (_live)
-                {
-                    <section><h2>取得元の設定</h2>
-                        <label>HOOK候補<select aria-label="HOOK候補" @bind="_candidateKey" disabled="@_busy">
-                            <option value="">候補を選択</option>
-                            @foreach (var source in _snapshot.Candidates)
-                            {
-                                <option value="@source.Source.Key">@RoleName(source.Role) · @source.Source.HookName — @CandidatePreview(source.Text)</option>
-                            }
+            @if (_live)
+            {
+                <section><h3>接続</h3>
+                    <div class="capture-setting-row">
+                        <input type="search" placeholder="プロセス" aria-label="プロセスを検索" @bind="_processSearch" @bind:event="oninput" />
+                        <button class="secondary-button capture-icon-button" title="候補を更新" aria-label="候補を更新" @onclick="FindProcesses" disabled="@_busy"><CaptureIcon Name="Refresh" /></button>
+                    </div>
+                    <select aria-label="ゲーム本体プロセス" @bind="_processId" disabled="@(_busy || !_snapshot.NeedsProcess)">
+                        <option value="0">プロセスを選択</option>
+                        @foreach (var process in _processes.Where(x => x.Name.Contains(_processSearch, StringComparison.OrdinalIgnoreCase))) { <option value="@process.Id">@process.Name — @process.Path</option> }
+                    </select>
+                    <div class="capture-setting-row">
+                        <span class="capture-setting-status">@_snapshot.Status</span>
+                        <button class="launch-button capture-icon-button" title="接続" aria-label="この本体へ接続" @onclick="ConnectAsync" disabled="@(_busy || !_snapshot.NeedsProcess || _processId == 0)"><CaptureIcon Name="Link" /></button>
+                    </div>
+                </section>
+                <section><h3>取得元</h3>
+                    <select aria-label="HOOK候補" @bind="_candidateKey" disabled="@_busy">
+                        <option value="">取得元を選択</option>
+                        @foreach (var source in _snapshot.Candidates) { <option value="@source.Source.Key">@RoleName(source.Role) · @source.Source.HookName — @CandidatePreview(source.Text)</option> }
+                    </select>
+                    <p class="capture-candidate-preview">@(CurrentCandidate?.Text ?? "未受信")</p>
+                    <div class="capture-candidate-controls">
+                    @if (CurrentCandidate is { } candidate)
+                    {
+                        <label>用途<select aria-label="候補の用途" value="@((int)candidate.Role)" @onchange="e => ChangeCandidateAsync(candidate, e)" disabled="@_busy">
+                            <option value="0">取得しない</option><option value="1">本文</option><option value="2">キャラ名</option>
                         </select></label>
-                        <p class="capture-candidate-preview">@(CurrentCandidate?.Text ?? "ゲームの文章が届いたら、実出力を見て本文・キャラ名を指定します。")</p>
-                        <div class="capture-candidate-controls">
-                        @if (CurrentCandidate is { } candidate)
-                        {
-                                <label>用途
-                                <select aria-label="候補の用途" value="@((int)candidate.Role)" @onchange="e => ChangeCandidateAsync(candidate, e)" disabled="@_busy">
-                                    <option value="0">取得しない</option><option value="1">本文</option><option value="2">キャラ名</option>
-                                </select></label>
-                                <label>既定ラベル
-                                <select aria-label="候補の既定ラベル" value="@(candidate.LabelId ?? 0)" @onchange="e => ChangeCandidateLabelAsync(candidate, e)" disabled="@(_busy || candidate.Role != CaptureRole.Body)">
-                                    <option value="0">内容で分類</option>
-                                    @foreach (var label in _labels) { <option value="@label.Id">@label.Name</option> }
-                                </select></label>
-                                <small class="capture-diagnostics">@candidate.Source.HookCode / @candidate.Source.Context.ToString("x") / @candidate.Source.Context2.ToString("x")</small>
-                        }
-                        </div>
-                        <small>候補選択前は直近の文章のみ一時保持します。保持上限を超えた分は保存できません。</small>
-                    </section>
-                }
-                @if (_profile is not null)
-                {
-                    <section class="capture-rules"><h2>分類・名前の照合</h2>
-                        <div class="capture-settings-body">
-                        <label><input type="checkbox" @bind="_split" /> 「」でセリフを分割</label>
-                        <label><input type="checkbox" @bind="_outside" /> 括弧の外は地の文</label>
-                        <label>名前の照合一覧（任意・1行1名）<textarea rows="4" @bind="_names"></textarea></label>
-                        <small>名前用候補と一覧の全文一致で照合します。未登録名・連結名は未確定のままです。</small>
-                        <button class="secondary-button" @onclick="SaveRulesAsync" disabled="@_busy">以降の受信に適用</button>
-                        <small>過去分は本文を選んで再適用します。手動修正と分割位置は保護します。</small>
-                        </div>
-                    </section>
-                    <section><h2>ラベルの作成・改名</h2>
-                        <label>ラベル<select @bind="_labelEditId" @bind:after="LoadLabelName"><option value="0">新しく作成</option>
-                            @foreach (var label in _labels) { <option value="@label.Id">@label.Name</option> }
+                        <label>ラベル<select aria-label="候補の既定ラベル" value="@(candidate.LabelId ?? 0)" @onchange="e => ChangeCandidateLabelAsync(candidate, e)" disabled="@(_busy || candidate.Role != CaptureRole.Body)">
+                            <option value="0">自動分類</option>@foreach (var label in _labels) { <option value="@label.Id">@label.Name</option> }
                         </select></label>
-                        <label>名称<input @bind="_labelName" /></label>
-                        <label>用途<select @bind="_labelKind" disabled="@(_labelEditId != 0)"><option value="@CaptureKind.Dialogue">セリフ</option><option value="@CaptureKind.Narration">地の文</option><option value="@CaptureKind.Other">その他</option></select></label>
-                        <button class="secondary-button" @onclick="SaveLabelAsync" disabled="@_busy">保存</button>
-                        <small>改名は過去の表示・TXTにも反映されます。</small>
-                    </section>
-                }
+                        <small class="capture-diagnostics">@candidate.Source.HookCode / @candidate.Source.Context.ToString("x") / @candidate.Source.Context2.ToString("x")</small>
+                    }
+                    </div>
+                </section>
+            }
+            @if (_profile is not null)
+            {
+                <section class="capture-rules"><h3>分類</h3>
+                    <label><input type="checkbox" @bind="_split" /> 「」を分割</label>
+                    <label><input type="checkbox" @bind="_outside" /> 外側は地の文</label>
+                    <label>キャラ名（1行1名）<textarea rows="4" @bind="_names"></textarea></label>
+                    <div class="capture-dialog-actions"><button class="secondary-button capture-icon-button" title="新着に適用" aria-label="新着に適用" @onclick="SaveRulesAsync" disabled="@_busy"><CaptureIcon Name="Check" /></button></div>
+                </section>
+                <section><h3>ラベル</h3>
+                    <select aria-label="編集するラベル" @bind="_labelEditId" @bind:after="LoadLabelName"><option value="0">新規</option>
+                        @foreach (var label in _labels) { <option value="@label.Id">@label.Name</option> }
+                    </select>
+                    <label>名前<input @bind="_labelName" /></label>
+                    <label>種類<select @bind="_labelKind" disabled="@(_labelEditId != 0)"><option value="@CaptureKind.Dialogue">セリフ</option><option value="@CaptureKind.Narration">地の文</option><option value="@CaptureKind.Other">その他</option></select></label>
+                    <div class="capture-dialog-actions"><button class="secondary-button capture-icon-button" title="保存" aria-label="ラベルを保存" @onclick="SaveLabelAsync" disabled="@_busy"><CaptureIcon Name="Check" /></button></div>
+                </section>
+            }
         </div>
     </section></div>
 }
@@ -211,33 +216,31 @@
 @if (_bulkOpen)
 {
     <div class="modal-backdrop"><section id="capture-editor" class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-bulk-title">
-        <h2 id="capture-bulk-title">選択した@(_selected.Count)件を一括修正</h2>
-        <label>変更先のラベル<select @bind="_bulkLabel"><option value="0">未判定</option>
-            @foreach (var label in _labels) { <option value="@label.Id">@label.Name</option> }
-        </select></label>
-        <button class="secondary-button" @onclick="BulkLabelAsync" disabled="@_busy">ラベルを変更</button>
-        <p>保存済みの分類ルールで再判定します。手動修正と分割位置は保護します。</p>
-        <button class="secondary-button" @onclick="ReapplyAsync" disabled="@_busy">選択分にルール再適用</button>
-        <button class="secondary-button" @onclick="CloseEditors" disabled="@_busy">キャンセル</button>
+        <header class="capture-dialog-header"><h2 id="capture-bulk-title">一括修正 · @_selected.Count</h2><button class="secondary-button capture-icon-button" title="キャンセル" aria-label="キャンセル" @onclick="CloseEditors" disabled="@_busy"><CaptureIcon Name="Close" /></button></header>
+        <label>ラベル<select @bind="_bulkLabel"><option value="0">未判定</option>@foreach (var label in _labels) { <option value="@label.Id">@label.Name</option> }</select></label>
+        <div class="capture-dialog-actions">
+            <button class="secondary-button capture-icon-button" title="ルールを再適用（手動修正は保持）" aria-label="ルールを再適用" @onclick="ReapplyAsync" disabled="@_busy"><CaptureIcon Name="Refresh" /></button>
+            <button class="launch-button capture-icon-button" title="ラベルを変更" aria-label="ラベルを変更" @onclick="BulkLabelAsync" disabled="@_busy"><CaptureIcon Name="Check" /></button>
+        </div>
     </section></div>
 }
 
 @if (_edit is not null)
 {
-    <div class="modal-backdrop"><section id="capture-editor" class="modal-panel capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-edit-title">
-        <h2 id="capture-edit-title">本文の修正</h2><p class="capture-raw">@_edit.Text</p>
+    <div class="modal-backdrop"><section id="capture-editor" class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-edit-title">
+        <header class="capture-dialog-header"><h2 id="capture-edit-title">修正</h2><button class="secondary-button capture-icon-button" title="キャンセル" aria-label="キャンセル" @onclick="CloseEditors" disabled="@_busy"><CaptureIcon Name="Close" /></button></header>
+        <p class="capture-raw">@_edit.Text</p>
         <label>ラベル<select @bind="_editLabel"><option value="0">未判定</option>@foreach (var label in _labels) { <option value="@label.Id">@label.Name</option> }</select></label>
-        <label>話者名（空欄は未確定）<input @bind="_editSpeaker" disabled="@IsNarration(_editLabel)" /></label>
-        <div class="capture-toolbar"><button class="launch-button" @onclick="SaveEditAsync" disabled="@_busy">@(_busy ? "保存中…" : "保存")</button><button class="secondary-button" @onclick="CloseEditors" disabled="@_busy">キャンセル</button></div>
+        <label>話者<input @bind="_editSpeaker" placeholder="未確定" disabled="@IsNarration(_editLabel)" /></label>
+        <div class="capture-dialog-actions"><button class="launch-button capture-icon-button" title="保存" aria-label="保存" @onclick="SaveEditAsync" disabled="@_busy"><CaptureIcon Name="Check" /></button></div>
     </section></div>
 }
 @if (_partition is not null)
 {
-    <div class="modal-backdrop"><section id="capture-editor" class="modal-panel capture-dialog capture-partition-dialog" role="dialog" aria-modal="true" aria-labelledby="partition-title">
-        <h2 id="partition-title">原文と分割</h2>
-        <p>原文の区切りたい位置をクリックして「この位置で分割」を押します。原文の文字は変更しません。</p>
+    <div class="modal-backdrop"><section id="capture-editor" class="capture-dialog capture-partition-dialog" role="dialog" aria-modal="true" aria-labelledby="partition-title">
+        <header class="capture-dialog-header"><h2 id="partition-title">原文・分割</h2><button class="secondary-button capture-icon-button" title="キャンセル" aria-label="キャンセル" @onclick="CloseEditors" disabled="@_busy"><CaptureIcon Name="Close" /></button></header>
         <textarea class="capture-raw" rows="5" readonly @ref="_rawInput" aria-label="受信原文">@_partition.RawText</textarea>
-        <button class="secondary-button" @onclick="AddBoundaryAsync" disabled="@_busy">この位置で分割</button>
+        <button class="secondary-button capture-icon-button" title="カーソル位置で分割" aria-label="カーソル位置で分割" @onclick="AddBoundaryAsync" disabled="@_busy"><CaptureIcon Name="Split" /></button>
         <div class="capture-parts" aria-label="分割後の本文">
         @for (var i = 0; i < _parts.Count; i++)
         {
@@ -245,12 +248,14 @@
             <div class="capture-part"><p>@part.Text</p>
                 <select aria-label="分割範囲のラベル" @bind="part.Label"><option value="0">未判定</option>@foreach (var label in _labels) { <option value="@label.Id">@label.Name</option> }</select>
                 <input aria-label="分割範囲の話者" placeholder="話者未確定" @bind="part.Speaker" disabled="@IsNarration(part.Label)" />
-                @if (index < _parts.Count - 1) { <button class="secondary-button" @onclick="() => RemoveBoundary(index)" disabled="@_busy">次と結合</button> }
+                @if (index < _parts.Count - 1) { <button class="secondary-button capture-icon-button" title="次と結合" aria-label="次と結合" @onclick="() => RemoveBoundary(index)" disabled="@_busy"><CaptureIcon Name="Join" /></button> }
             </div>
         }
         </div>
-        <p class="capture-warning">保存すると、この原文の分類・話者を上の内容へ置き換えます。</p>
-        <div class="capture-toolbar"><button class="launch-button" @onclick="SavePartitionAsync" disabled="@_busy">@(_busy ? "保存中…" : "この分割で保存")</button><button class="secondary-button" @onclick="CloseEditors" disabled="@_busy">キャンセル</button></div>
+        <div class="capture-dialog-actions">
+            <span class="capture-warning">この原文の分類・話者を置換</span>
+            <button class="launch-button capture-icon-button" title="この分割で保存" aria-label="この分割で保存" @onclick="SavePartitionAsync" disabled="@_busy"><CaptureIcon Name="Check" /></button>
+        </div>
     </section></div>
 }
 
@@ -290,7 +295,7 @@
     private bool LatestOrder => _live && _rangeId == 0;
     private bool CanEdit => _rangeId == 0 && !_pickingRange;
     private bool TextRangeValid => _rangeFirst is not null && _rangeLast is not null && _rangeFirst.StartPosition.CompareTo(_rangeLast.EndPosition) < 0;
-    private string TextRangeSummary => !_pickingRange ? "保存済みの本文からも作成できます"
+    private string TextRangeSummary => !_pickingRange ? ""
         : $"開始：{(_rangeFirst is null ? "未指定" : CandidatePreview(_rangeFirst.Text))} ／ 終了：{(_rangeLast is null ? "未指定" : CandidatePreview(_rangeLast.Text))}";
     private bool IsRangeEdge(CaptureTextItem item) => _pickingRange && (item.StartPosition == _rangeFirst?.StartPosition || item.EndPosition == _rangeLast?.EndPosition);
     private string RangeName(CaptureRange range)
@@ -300,8 +305,8 @@
     }
     private CaptureCandidate? CurrentCandidate => _snapshot.Candidates.FirstOrDefault(x => x.Source.Key == _candidateKey);
     private string EmptyMessage => _profileId == 0
-        ? (_live ? "取得中のゲームはありません。ゲームを起動するか、保存履歴を開いてください。" : "ゲームを選択してください。")
-        : _live && _filter == "all" ? "本文の受信待ちです。抽出設定で本文の取得元を確認できます。" : "この条件の保存済み本文はありません。";
+        ? (_live ? "ゲームなし" : "ゲーム未選択")
+        : _live && _filter == "all" ? "本文待ち" : "本文なし";
     private static string CandidatePreview(string text) => string.Concat(text.Take(60)).ReplaceLineEndings(" ");
     private sealed class PartDraft { public string Text { get; set; } = ""; public long Label { get; set; } public string Speaker { get; set; } = ""; }
     protected override async Task OnInitializedAsync()
@@ -416,7 +421,7 @@
         await Store.SaveCaptureRangeAsync(_rangeSelection.CaptureGameId, _rangeName, _rangeSelection.Start, _rangeSelection.End);
         if (_profileId == _rangeSelection.CaptureGameId) _ranges = await Store.GetCaptureRangesAsync(_profileId);
         CloseEditors(); ClearTextRange(); _offset = 0; await LoadItemsAsync();
-    }, "区間を保存しました。区間外の本文もそのまま残っています。");
+    }, "区間を保存しました。");
     private void ClearSelection() => _selected.Clear();
     private void OpenBulk() { _bulkOpen = true; _focusEditor = true; }
     private void OpenSettings() { _settingsOpen = true; _focusEditor = true; _candidateKey = _snapshot.Candidates.FirstOrDefault()?.Source.Key ?? ""; FindProcesses(); }
@@ -440,7 +445,7 @@
         if (_profile is null) return;
         await PersistRulesAsync(_profile.Rules with { SplitDialogue = _split, OutsideIsNarration = _outside,
             Names = _names.Split(['\r', '\n'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Distinct().ToArray() });
-    }, "以降の受信に使うルールを保存しました。");
+    }, "新着に適用しました。");
     private async Task PersistRulesAsync(CaptureRules rules, CaptureSource? selectedSource = null)
     {
         if (_profile is null) return;
@@ -470,7 +475,7 @@
     }
     private Task AddBoundaryAsync() => RunAsync(async () => { if (_partition is null || _module is null) return; var position = await _module.InvokeAsync<int>("selectionStart", _rawInput); var next = _boundaries.Append(position).Distinct().Order().ToArray(); ScenarioTextProcessor.ValidateBoundaries(_partition.RawText, next); _boundaries.Clear(); _boundaries.AddRange(next); RebuildParts(); });
     private void RemoveBoundary(int index) { _boundaries.RemoveAt(index); RebuildParts(); }
-    private Task SavePartitionAsync() => RunAsync(async () => { if (_partition is null) return; await Store.SplitCaptureEventAsync(_partition.SessionId, _partition.Sequence, _boundaries.ToArray(), _parts.Select(x => new CaptureManualPart(x.Label == 0 ? null : x.Label, IsNarration(x.Label) ? null : string.IsNullOrWhiteSpace(x.Speaker) ? null : x.Speaker.Trim())).ToArray()); CloseEditors(); _selected.Clear(); await LoadItemsAsync(); }, "原文を保持したまま分割・分類を保存しました。");
+    private Task SavePartitionAsync() => RunAsync(async () => { if (_partition is null) return; await Store.SplitCaptureEventAsync(_partition.SessionId, _partition.Sequence, _boundaries.ToArray(), _parts.Select(x => new CaptureManualPart(x.Label == 0 ? null : x.Label, IsNarration(x.Label) ? null : string.IsNullOrWhiteSpace(x.Speaker) ? null : x.Speaker.Trim())).ToArray()); CloseEditors(); _selected.Clear(); await LoadItemsAsync(); }, "分割を保存しました。");
     private void CloseEditors() { _edit = null; _partition = null; _settingsOpen = false; _bulkOpen = false; _rangeSelection = null; _restoreFocus = true; }
     [JSInvokable] public void CloseEditorFromKeyboard() { if (!_busy) { CloseEditors(); StateHasChanged(); } }
     private Task ExportAsync() => RunAsync(async () =>

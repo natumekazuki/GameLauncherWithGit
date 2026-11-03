@@ -24,7 +24,8 @@ export function focusEditor(owner) {
     const scrollbar = window.innerWidth - document.documentElement.clientWidth;
     if (scrollbar > 0) document.body.style.paddingRight = `${parseFloat(getComputedStyle(document.body).paddingRight) + scrollbar}px`;
     document.body.style.overflow = 'hidden';
-    controls()[0]?.focus({ preventScroll: true });
+    const elements = controls();
+    (elements.find(x => x.matches('input, select, textarea')) ?? elements[0])?.focus({ preventScroll: true });
     dialog.onkeydown = event => {
         if (event.key === 'Escape') { event.preventDefault(); owner.invokeMethodAsync('CloseEditorFromKeyboard'); }
         if (event.key !== 'Tab') return;

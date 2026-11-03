@@ -3,11 +3,8 @@
 @inject IScenarioCaptureStore Store
 
 <div class="capture-preference">
-    <label><input type="checkbox" @bind="_enabled" disabled="@(_profile is null || Disabled)" /> シナリオ抽出（次回起動から）</label>
-    <div class="capture-preference-feedback">
-        @if (_error is not null) { <p role="alert">@_error</p> }
-        else { <small>ゲーム設定の保存で確定します。</small> }
-    </div>
+    <label><input type="checkbox" @bind="_enabled" disabled="@(_profile is null || Disabled)" /> シナリオ抽出（次回起動）</label>
+    @if (_error is not null) { <p class="capture-preference-error" role="alert">@_error</p> }
 </div>
 
 @code {
