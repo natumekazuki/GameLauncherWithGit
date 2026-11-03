@@ -37,8 +37,11 @@
 
 Windows、.NET 9 の MAUI 開発環境、Git 2.38.0 以降が必要です。初回はサブモジュールも取得します。
 
+シナリオ抽出のnative buildにはVisual Studio 2022のC++ x86/x64ツール、C++ ATL、Windows SDK、CMakeが必要です。スクリプトはATLを含むVisual Studioインスタンスを選び、32/64bitのHost・Hook・注入helperを構築します。初回はCMake依存取得にもネットワークを使います。
+
 ```powershell
 git submodule update --init --recursive
+./scripts/build-luna-native.ps1
 dotnet build src/GameLauncherWithGit/GameLauncherWithGit.csproj -f net9.0-windows10.0.19041.0
 dotnet run --project src/GameLauncherWithGit/GameLauncherWithGit.csproj -f net9.0-windows10.0.19041.0 --no-build
 ```
@@ -46,3 +49,19 @@ dotnet run --project src/GameLauncherWithGit/GameLauncherWithGit.csproj -f net9.
 起動時には、その Windows ユーザーの登録済みリポジトリを監視・同期します。確認には既存データのない別の Windows ユーザープロファイルや仮想環境を使い、実際のセーブデータやリモートを登録しないでください。
 
 「新規追加」でタイトルだけを入力して保存すると、リポジトリや実行ファイルを使わず一覧の表示を確認できます。環境設定、ゲーム編集、通知などを開き、必要な状態へスクロールしたうえで Windows の画面キャプチャ機能を使って撮影できます。共有前にパスや個人情報が画像に含まれていないことを確認してください。
+
+## シナリオ抽出
+
+ゲーム編集で次回起動からのON/OFFを設定します（初期値ON）。起動後にゲーム本体を選び、HOOK候補の実出力から本文・キャラ名を指定します。候補と本体パスはゲーム別に記憶します。「抽出・履歴」から保存済み本文の分類・話者・分割を修正し、ゲーム/プレイ回/ラベルで絞ったTXTを書き出せます。登録削除後も履歴は残ります。
+
+取得はベストエフォートで、OCR・翻訳・全作品対応・欠落救済は提供しません。信頼できるゲームだけへ接続してください。動作・データ・安全境界の詳細は[シナリオ抽出設計](docs/design/scenario-extraction.md)、依存と配布条件は[Third-party notices](THIRD-PARTY-NOTICES.md)を参照してください。
+
+保存処理と分類のtestは実ユーザーDBを使わず実行できます。
+
+```powershell
+dotnet test tests/GameLauncherWithGit.Capture.Tests
+```
+
+## ライセンス
+
+本体はGPL-3.0-onlyです。[LICENSE](LICENSE)を参照してください。第三者部品の条件は各依存のlicenseと[Third-party notices](THIRD-PARTY-NOTICES.md)に従います。

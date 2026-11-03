@@ -6,9 +6,8 @@ using System.Text.Json;
 
 namespace GameLauncherWithGit.Infrastructure.Services;
 
-public sealed class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncHistoryStore, ISaveLinkStore
+public sealed partial class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncHistoryStore, ISaveLinkStore, IScenarioCaptureStore
 {
-	private const string DatabaseFileName = "game-library.db";
 	private const int DefaultMaxHistoryPerRepository = 50;
 	private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -17,10 +16,10 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncH
 	private readonly string _databasePath;
 	private bool _isInitialized;
 
-	public SqliteGameLibraryStore(ILogger<SqliteGameLibraryStore> logger)
+	public SqliteGameLibraryStore(ILogger<SqliteGameLibraryStore> logger, string databasePath)
 	{
 		_logger = logger;
-		_databasePath = Path.Combine(FileSystem.AppDataDirectory, DatabaseFileName);
+		_databasePath = databasePath;
 	}
 
 	public async Task<IReadOnlyList<GameCardItem>> GetAllAsync(CancellationToken cancellationToken = default)
@@ -77,8 +76,10 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncH
 		await EnsureInitializedAsync(cancellationToken);
 
 		await using var connection = await OpenConnectionAsync(cancellationToken);
+		await using var transaction = connection.BeginTransaction();
 		var now = DateTimeOffset.Now.ToString("O");
-		await UpsertGameInternalAsync(connection, null, game, now, cancellationToken);
+		await UpsertGameInternalAsync(connection, transaction, game, now, cancellationToken);
+		await transaction.CommitAsync(cancellationToken);
 	}
 
 	public async Task UpsertWithSaveLinksAsync(
@@ -416,6 +417,7 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncH
 			ON RepositorySyncHistory (RepositoryId, FinishedAt DESC);
 			""";
 		await createHistoryIndexCommand.ExecuteNonQueryAsync(cancellationToken);
+		await EnsureCaptureSchemaAsync(connection, cancellationToken);
 	}
 
 	private static async Task EnsureColumnExistsAsync(
@@ -491,7 +493,8 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncH
 		var builder = new SqliteConnectionStringBuilder
 		{
 			DataSource = _databasePath,
-			Mode = SqliteOpenMode.ReadWriteCreate
+			Mode = SqliteOpenMode.ReadWriteCreate,
+			ForeignKeys = true
 		};
 
 		var connection = new SqliteConnection(builder.ConnectionString);
@@ -541,6 +544,9 @@ public sealed class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncH
 		command.Parameters.AddWithValue("$updatedAt", timestamp);
 
 		await command.ExecuteNonQueryAsync(cancellationToken);
+		await using var captureTitle = CaptureCommand(connection, transaction,
+			"UPDATE CaptureGames SET Title=$title WHERE CurrentGameId=$game", ("$title", game.Title), ("$game", game.Id));
+		await captureTitle.ExecuteNonQueryAsync(cancellationToken);
 	}
 
 	private static async Task ReplaceSaveLinksByGameIdInternalAsync(

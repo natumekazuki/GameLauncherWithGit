@@ -13,17 +13,20 @@ public sealed class LauncherService : ILauncherService
 	private readonly ISaveLinkService _saveLinkService;
 	private readonly IGitService _gitService;
 	private readonly ILogger<LauncherService> _logger;
+	private readonly ScenarioCaptureService _capture;
 
 	public LauncherService(
 		IGameLibraryService gameLibraryService,
 		ISaveLinkService saveLinkService,
 		IGitService gitService,
-		ILogger<LauncherService> logger)
+		ILogger<LauncherService> logger,
+		ScenarioCaptureService capture)
 	{
 		_gameLibraryService = gameLibraryService;
 		_saveLinkService = saveLinkService;
 		_gitService = gitService;
 		_logger = logger;
+		_capture = capture;
 	}
 
 	public async Task<LaunchResult> LaunchAsync(string gameId, CancellationToken cancellationToken = default)
@@ -58,7 +61,8 @@ public sealed class LauncherService : ILauncherService
 			await _gameLibraryService.SetStatusAsync(game.Id, GameCardStatus.Synced, cancellationToken);
 			await _gameLibraryService.MarkLaunchedAsync(game.Id, cancellationToken);
 
-			return new LaunchResult(true, "起動前同期が完了し、ゲームを起動しました。");
+			var showCapture = await _capture.BeginGameAsync(game.Id);
+			return new LaunchResult(true, "起動前同期が完了し、ゲームを起動しました。", showCapture);
 		}
 		catch (OperationCanceledException)
 		{

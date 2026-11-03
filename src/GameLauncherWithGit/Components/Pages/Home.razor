@@ -14,6 +14,7 @@
 @inject IRepositorySyncHistoryStore RepositorySyncHistoryStore
 @inject ISaveLinkService SaveLinkService
 @inject IJSRuntime JS
+@inject NavigationManager Navigation
 
 <PageTitle>GameLauncherWithGit</PageTitle>
 
@@ -27,6 +28,7 @@
 @if (!_isStartupChecking)
 {
     <section class="utility-bar">
+        <a class="secondary-button utility-button" href="capture">抽出・履歴</a>
         <div class="search-control">
             <input type="search"
                    class="search-input"
@@ -770,6 +772,10 @@ else
                 <div class="editor-field">
                     <label for="editor-title">タイトル</label>
                     <input id="editor-title" @bind="_editorTitle" @bind:event="oninput" />
+                    @if (_isEditMode && _editingGameId is not null)
+                    {
+                        <CapturePreference GameId="@_editingGameId" />
+                    }
                 </div>
 
                 <div class="editor-field">
@@ -1091,6 +1097,7 @@ else
                 var result = await LauncherService.LaunchAsync(gameId);
                 await ReloadGamesAsync();
                 SetNotification(result.Message, result.IsSuccess);
+                if (result.ShowCapture) Navigation.NavigateTo("capture");
             });
     }
 

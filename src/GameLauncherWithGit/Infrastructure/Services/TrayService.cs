@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Collections.Concurrent;
 using GameLauncherWithGit.Application.Abstractions;
+using GameLauncherWithGit.Application.Services;
 using GameLauncherWithGit.Domain.Models;
 using GameLauncherWithGit.Infrastructure.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
@@ -309,8 +310,16 @@ public sealed class TrayService : ITrayService, IDisposable
 		}
 	}
 
-	private void ExecuteExit(IntPtr hwnd)
+	private async void ExecuteExit(IntPtr hwnd)
 	{
+		try
+		{
+			await Task.Run(() => _serviceProvider.GetRequiredService<ScenarioCaptureService>().FinishAsync()).WaitAsync(TimeSpan.FromSeconds(3));
+		}
+		catch (Exception ex)
+		{
+			_logger.LogWarning(ex, "Capture shutdown did not finish. stage=exit");
+		}
 		_allowWindowClose = true;
 		ShowWindow(hwnd, SW_RESTORE);
 		_ = PostMessage(hwnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);

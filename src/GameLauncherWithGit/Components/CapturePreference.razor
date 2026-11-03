@@ -1,0 +1,36 @@
+@using GameLauncherWithGit.Application.Models
+@using GameLauncherWithGit.Infrastructure.Abstractions
+@inject IScenarioCaptureStore Store
+
+<div class="capture-preference">
+    <label><input type="checkbox" checked="@(_profile?.Enabled ?? true)" disabled="@(_profile is null || _saving)" @onchange="ChangeAsync" /> シナリオ抽出（次回起動から）</label>
+    @if (_error is not null) { <p role="alert">@_error</p> }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string GameId { get; set; } = "";
+    private CaptureProfile? _profile;
+    private string? _loadedGame;
+    private bool _saving;
+    private string? _error;
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loadedGame == GameId) return;
+        _loadedGame = GameId;
+        _profile = null; _error = null;
+        try { _profile = await Store.GetOrCreateCaptureProfileAsync(GameId); }
+        catch (Exception ex) { _error = ex.Message; }
+    }
+    private async Task ChangeAsync(ChangeEventArgs args)
+    {
+        if (_profile is null) return;
+        _saving = true; _error = null;
+        try
+        {
+            var updated = _profile with { Enabled = args.Value is true };
+            await Store.SaveCaptureProfileAsync(updated); _profile = updated;
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _saving = false; }
+    }
+}

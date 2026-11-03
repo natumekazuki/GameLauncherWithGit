@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../../src/GameLauncherWithGit/Application/Models/ScenarioCapture.cs" Link="ScenarioCapture.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Application/Models/GameCard*.cs" Link="%(Filename)%(Extension)" />
+    <Compile Include="../../src/GameLauncherWithGit/Application/Models/GameSaveLinkItem.cs" Link="GameSaveLinkItem.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Application/Models/RepositorySyncHistory*.cs" Link="%(Filename)%(Extension)" />
+    <Compile Include="../../src/GameLauncherWithGit/Application/Services/Scenario*.cs" Link="%(Filename)%(Extension)" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Services/SqliteGameLibraryStore*.cs" Link="%(Filename)%(Extension)" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Services/LunaCaptureHost.cs" Link="LunaCaptureHost.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/IGameLibraryStore.cs" Link="IGameLibraryStore.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/ISaveLinkStore.cs" Link="ISaveLinkStore.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/IRepositorySyncHistoryStore.cs" Link="IRepositorySyncHistoryStore.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/IScenarioCaptureStore.cs" Link="IScenarioCaptureStore.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/ILunaCaptureHost.cs" Link="ILunaCaptureHost.cs" />
+  </ItemGroup>
+</Project>

@@ -62,6 +62,8 @@
 
     <ItemGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">
         <None Include="Resources\TrayIcon\*.ico" CopyToOutputDirectory="PreserveNewest" Link="TrayIcon\%(Filename)%(Extension)" />
+        <None Include="..\..\artifacts\luna-native\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Link="Luna\%(Filename)%(Extension)" />
+        <None Include="..\..\LICENSE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Link="LICENSE.txt" />
     </ItemGroup>
 
     <ItemGroup>
@@ -76,5 +78,12 @@
         <ProjectReference Include="..\..\library\MonochromeMemory.Log\MonochromeMemory.Log\MonochromeMemory.Log.csproj" />
         <ProjectReference Include="..\..\library\MonochromeMemory.Log\MonochromeMemory.Log.Sinks.File\MonochromeMemory.Log.Sinks.File.csproj" />
     </ItemGroup>
+
+    <Target Name="RequireLunaNativeBuild" BeforeTargets="PrepareForBuild" Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows' and '$(DesignTimeBuild)' != 'true'">
+        <ItemGroup>
+            <RequiredLunaFile Include="LunaHost32.dll;LunaHost64.dll;LunaHook32.dll;LunaHook64.dll;LunaInjector32.exe;LunaInjector64.exe;LunaTmpFontLoader.dll;LunaTranslator-LICENSE.txt;MinHook-LICENSE.txt;uchardet-COPYING.txt;uchardet-AUTHORS.txt;THIRD-PARTY-NOTICES.md" />
+        </ItemGroup>
+        <Error Condition="!Exists('$(MSBuildProjectDirectory)/../../artifacts/luna-native/%(RequiredLunaFile.Identity)')" Text="Native capture component missing: %(RequiredLunaFile.Identity). Run scripts/build-luna-native.ps1 first." />
+    </Target>
 
 </Project>

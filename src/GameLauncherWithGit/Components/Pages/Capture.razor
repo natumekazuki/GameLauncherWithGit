@@ -1,0 +1,352 @@
+@page "/capture"
+@using GameLauncherWithGit.Application.Models
+@using GameLauncherWithGit.Application.Services
+@using GameLauncherWithGit.Infrastructure.Abstractions
+@using System.Text
+@implements IAsyncDisposable
+@inject IScenarioCaptureStore Store
+@inject ScenarioCaptureService CaptureService
+@inject IPathPickerService Picker
+@inject IJSRuntime JS
+
+<PageTitle>シナリオ抽出</PageTitle>
+<section class="capture-page">
+    <header class="capture-header">
+        <div><a href="/">← ゲーム一覧</a><h1>シナリオ抽出</h1></div>
+        <div class="capture-tabs" aria-label="表示切替">
+            <button class="secondary-button" aria-pressed="@_live" @onclick="ShowLiveAsync">取得中のゲーム</button>
+            <button class="secondary-button" aria-pressed="@(!_live)" @onclick="ShowHistoryAsync">保存履歴</button>
+        </div>
+    </header>
+    @if (_message is not null) { <p class="capture-message" role="status">@_message</p> }
+    @if (_error is not null) { <p class="capture-error" role="alert">@_error</p> }
+    @if (_loading) { <p role="status">履歴を読み込んでいます…</p> }
+    else
+    {
+        @if (_live)
+        {
+            <div class="capture-status">
+                <strong>@(_snapshot.Profile?.Title ?? "取得中のゲームはありません")</strong>
+                <span role="status">@_snapshot.Status</span>
+                <span>受信 @_snapshot.Received / 保存 @_snapshot.Saved</span>
+                @if (_snapshot.Lost > 0) { <span class="capture-warning">未保存・破棄 @_snapshot.Lost 件</span> }
+            </div>
+        }
+        <div class="capture-layout">
+            <section class="capture-content" aria-busy="@_busy">
+                <div class="capture-filters">
+                    <label>ゲーム<select value="@_profileId" @onchange="ChangeProfileAsync" disabled="@(_busy || _live)">
+                        <option value="0">選択してください</option>
+                        @foreach (var profile in _profiles) { <option value="@profile.Id">@profile.Title@(profile.GameId is null ? "（登録なし）" : "")</option> }
+                    </select></label>
+                    <label>プレイ回<select value="@_sessionId" @onchange="ChangeSessionAsync" disabled="@(_busy || _live)">
+                        <option value="0">選択してください</option>
+                        @foreach (var session in _sessions) { <option value="@session.Id">@session.StartedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm:ss")@(session.EndedAt is null ? "（終了未記録）" : "")</option> }
+                    </select></label>
+                    <label>ラベル<select @bind="_filter" @bind:after="FilterAsync" disabled="@_busy">
+                        <option value="all">すべて</option><option value="none">未判定</option>
+                        @foreach (var label in _labels) { <option value="@label.Id">@label.Name</option> }
+                    </select></label>
+                </div>
+                <div class="capture-toolbar">
+                    @if (_live) { <button class="secondary-button" @onclick="FollowAsync" disabled="@_busy">@(_following ? "新着に追従中" : "新着・末尾を表示")</button> }
+                    else
+                    {
+                        <button class="secondary-button" @onclick="PreviousAsync" disabled="@(_busy || _offset == 0)">前の200件</button>
+                        <span>@(_items.Count == 0 ? "0件" : $"{_offset + 1}–{_offset + _items.Count}件目")</span>
+                        <button class="secondary-button" @onclick="NextAsync" disabled="@(_busy || _items.Count < 200)">次の200件</button>
+                    }
+                    <button class="secondary-button" @onclick="RefreshAsync" disabled="@_busy">更新</button>
+                    <button class="launch-button" @onclick="ExportAsync" disabled="@(_busy || _sessionId == 0)">絞り込んだ履歴をTXT出力</button>
+                </div>
+                <div class="capture-bulk">
+                    <label><input type="checkbox" checked="@(_items.Count > 0 && _selected.Count == _items.Count)" @onchange="SelectPage" disabled="@_busy" /> 表示分を選択</label>
+                    <span>@_selected.Count 件選択</span>
+                    <select aria-label="一括変更するラベル" @bind="_bulkLabel" disabled="@_busy"><option value="0">未判定</option>
+                        @foreach (var label in _labels) { <option value="@label.Id">@label.Name</option> }
+                    </select>
+                    <button class="secondary-button" @onclick="BulkLabelAsync" disabled="@(_busy || _selected.Count == 0)">ラベルを変更</button>
+                    <button class="secondary-button" @onclick="ReapplyAsync" disabled="@(_busy || _selected.Count == 0)">選択分にルール再適用</button>
+                </div>
+                <div class="capture-feed" @ref="_feed" tabindex="0" aria-label="抽出本文">
+                    @if (_items.Count == 0) { <p class="capture-empty">@(_sessionId == 0 ? "ゲームとプレイ回を選択してください。" : "この条件の保存済み本文はありません。")</p> }
+                    @foreach (var item in _items)
+                    {
+                        <article class="capture-item" @key="item.Id">
+                            <header><input type="checkbox" aria-label="この本文を選択" checked="@_selected.Contains(item.Id)" @onchange="e => SelectItem(item.Id, e.Value is true)" disabled="@_busy" />
+                                <span class="capture-label">@(item.LabelName ?? "未判定")</span>
+                                @if (item.Kind == CaptureKind.Dialogue || item.Kind is null) { <strong>@(item.Speaker ?? "話者未確定")</strong> }
+                                @if (item.ManualLabel || item.ManualSpeaker || item.ManualBoundaries) { <span class="capture-manual">手動修正あり</span> }
+                                <button class="secondary-button" @onclick="() => Edit(item)" disabled="@_busy">修正</button>
+                                <button class="secondary-button" @onclick="() => OpenPartitionAsync(item)" disabled="@_busy">原文・分割</button>
+                            </header>
+                            <p>@item.Text</p>
+                        </article>
+                    }
+                </div>
+            </section>
+            <aside class="capture-settings">
+                @if (_live && _snapshot.NeedsProcess)
+                {
+                    <section><h2>ゲーム本体</h2>
+                        <input type="search" placeholder="プロセス名で絞り込み" aria-label="プロセスを検索" @bind="_processSearch" @bind:event="oninput" />
+                        <button class="secondary-button" @onclick="FindProcesses" disabled="@_busy">候補を更新</button>
+                        <select aria-label="ゲーム本体プロセス" @bind="_processId">
+                            <option value="0">本体を選択</option>
+                            @foreach (var process in _processes.Where(x => x.Name.Contains(_processSearch, StringComparison.OrdinalIgnoreCase)))
+                            { <option value="@process.Id">@process.Name — @process.Path</option> }
+                        </select>
+                        <button class="launch-button" @onclick="ConnectAsync" disabled="@(_busy || _processId == 0)">この本体へ接続</button>
+                    </section>
+                }
+                @if (_live)
+                {
+                    <section><h2>HOOK候補</h2>
+                        @if (_snapshot.Candidates.Length == 0) { <p>接続後、ゲームの文章が届くと候補が表示されます。</p> }
+                        @foreach (var candidate in _snapshot.Candidates)
+                        {
+                            <details class="capture-candidate" @key="candidate.Source.Key">
+                                <summary>@candidate.Source.HookName <span>@RoleName(candidate.Role)</span></summary>
+                                <p>@candidate.Text</p>
+                                <select aria-label="候補の用途" value="@((int)candidate.Role)" @onchange="e => ChangeCandidateAsync(candidate, e)" disabled="@_busy">
+                                    <option value="0">取得しない</option><option value="1">本文</option><option value="2">キャラ名</option>
+                                </select>
+                                <select aria-label="候補の既定ラベル" value="@(candidate.LabelId ?? 0)" @onchange="e => ChangeCandidateLabelAsync(candidate, e)" disabled="@_busy">
+                                    <option value="0">内容で分類</option>
+                                    @foreach (var label in _labels) { <option value="@label.Id">@label.Name</option> }
+                                </select>
+                                <small>@candidate.Source.HookCode / @candidate.Source.Context.ToString("x") / @candidate.Source.Context2.ToString("x")</small>
+                            </details>
+                        }
+                        <small>候補選択前は直近の文章のみ一時保持します。保持上限を超えた分は保存できません。</small>
+                    </section>
+                }
+                @if (_profile is not null)
+                {
+                    <section><h2>分類ルール</h2>
+                        <label><input type="checkbox" @bind="_split" /> 「」でセリフを分割</label>
+                        <label><input type="checkbox" @bind="_outside" /> 括弧の外は地の文</label>
+                        <label>名前の照合一覧（任意・1行1名）<textarea rows="4" @bind="_names"></textarea></label>
+                        <small>名前用候補と一覧の全文一致で照合します。未登録名・連結名は未確定のままです。</small>
+                        <button class="secondary-button" @onclick="SaveRulesAsync" disabled="@_busy">以降の受信に適用</button>
+                        <small>過去分は左の選択範囲へ再適用します。手動修正と分割位置は保護します。</small>
+                    </section>
+                    <details><summary>ラベルの作成・改名</summary>
+                        <label>ラベル<select @bind="_labelEditId" @bind:after="LoadLabelName"><option value="0">新しく作成</option>
+                            @foreach (var label in _labels) { <option value="@label.Id">@label.Name</option> }
+                        </select></label>
+                        <label>名称<input @bind="_labelName" /></label>
+                        @if (_labelEditId == 0) { <label>用途<select @bind="_labelKind"><option value="@CaptureKind.Dialogue">セリフ</option><option value="@CaptureKind.Narration">地の文</option><option value="@CaptureKind.Other">その他</option></select></label> }
+                        <button class="secondary-button" @onclick="SaveLabelAsync" disabled="@_busy">保存</button>
+                        <small>改名は過去の表示・TXTにも反映されます。</small>
+                    </details>
+                }
+            </aside>
+        </div>
+    }
+</section>
+
+@if (_edit is not null)
+{
+    <div class="modal-backdrop"><section id="capture-editor" class="modal-panel capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-edit-title">
+        <h2 id="capture-edit-title">本文の修正</h2><p class="capture-raw">@_edit.Text</p>
+        <label>ラベル<select @bind="_editLabel"><option value="0">未判定</option>@foreach (var label in _labels) { <option value="@label.Id">@label.Name</option> }</select></label>
+        <label>話者名（空欄は未確定）<input @bind="_editSpeaker" disabled="@IsNarration(_editLabel)" /></label>
+        <div class="capture-toolbar"><button class="launch-button" @onclick="SaveEditAsync" disabled="@_busy">保存</button><button class="secondary-button" @onclick="CloseEditors" disabled="@_busy">閉じる</button></div>
+    </section></div>
+}
+@if (_partition is not null)
+{
+    <div class="modal-backdrop"><section id="capture-editor" class="modal-panel capture-dialog" role="dialog" aria-modal="true" aria-labelledby="partition-title">
+        <h2 id="partition-title">原文と分割</h2>
+        <p>原文の区切りたい位置をクリックして「この位置で分割」を押します。原文の文字は変更しません。</p>
+        <textarea class="capture-raw" rows="5" readonly @ref="_rawInput" aria-label="受信原文">@_partition.RawText</textarea>
+        <button class="secondary-button" @onclick="AddBoundaryAsync" disabled="@_busy">この位置で分割</button>
+        @for (var i = 0; i < _parts.Count; i++)
+        {
+            var index = i; var part = _parts[index];
+            <div class="capture-part"><p>@part.Text</p>
+                <select aria-label="分割範囲のラベル" @bind="part.Label"><option value="0">未判定</option>@foreach (var label in _labels) { <option value="@label.Id">@label.Name</option> }</select>
+                <input aria-label="分割範囲の話者" placeholder="話者未確定" @bind="part.Speaker" disabled="@IsNarration(part.Label)" />
+                @if (index < _parts.Count - 1) { <button class="secondary-button" @onclick="() => RemoveBoundary(index)" disabled="@_busy">次と結合</button> }
+            </div>
+        }
+        <p class="capture-warning">保存すると、この原文の分類・話者を上の内容へ置き換えます。</p>
+        <div class="capture-toolbar"><button class="launch-button" @onclick="SavePartitionAsync" disabled="@_busy">この分割で保存</button><button class="secondary-button" @onclick="CloseEditors" disabled="@_busy">閉じる</button></div>
+    </section></div>
+}
+
+@code {
+    private CaptureSnapshot _snapshot = new();
+    private IReadOnlyList<CaptureProfile> _profiles = [];
+    private IReadOnlyList<CaptureSession> _sessions = [];
+    private IReadOnlyList<CaptureLabel> _labels = [];
+    private IReadOnlyList<CaptureTextItem> _items = [];
+    private IReadOnlyList<CaptureProcess> _processes = [];
+    private CaptureProfile? _profile;
+    private long _profileId, _sessionId, _bulkLabel, _labelEditId;
+    private int _processId, _offset;
+    private bool _live = true, _following = true, _busy, _loading = true, _split = true, _outside;
+    private string _filter = "all", _names = "", _labelName = "", _processSearch = "";
+    private string? _message, _error;
+    private CaptureKind _labelKind;
+    private readonly HashSet<long> _selected = [];
+    private readonly CancellationTokenSource _stop = new();
+    private ElementReference _feed, _rawInput;
+    private IJSObjectReference? _module;
+    private DotNetObjectReference<Capture>? _self;
+    private CaptureTextItem? _edit, _partition;
+    private bool _focusEditor, _restoreFocus;
+    private long _editLabel;
+    private string _editSpeaker = "";
+    private readonly List<int> _boundaries = [];
+    private List<PartDraft> _parts = [];
+    private sealed class PartDraft { public string Text { get; set; } = ""; public long Label { get; set; } public string Speaker { get; set; } = ""; }
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _snapshot = CaptureService.Snapshot; _profiles = await Store.GetCaptureProfilesAsync();
+            _live = _snapshot.Profile is not null;
+            _profileId = _snapshot.Profile?.Id ?? _profiles.FirstOrDefault()?.Id ?? 0;
+            await LoadProfileAsync();
+            if (_live) { _sessionId = _snapshot.SessionId ?? 0; await LoadItemsAsync(); }
+            if (_snapshot.NeedsProcess) FindProcesses();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _loading = false; }
+        _ = PollAsync();
+    }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_loading) return;
+        if (_module is null)
+        {
+            _module = await JS.InvokeAsync<IJSObjectReference>("import", "./capture-view.js");
+            _self = DotNetObjectReference.Create(this);
+            await _module.InvokeVoidAsync("observeFeed", _feed, _self);
+            if (_live) await _module.InvokeVoidAsync("scrollEnd", _feed);
+        }
+        if (_focusEditor) { _focusEditor = false; await _module.InvokeVoidAsync("focusEditor", _self); }
+        if (_restoreFocus) { _restoreFocus = false; await _module.InvokeVoidAsync("restoreFocus"); }
+    }
+    private async Task PollAsync()
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+            while (await timer.WaitForNextTickAsync(_stop.Token)) await InvokeAsync(async () =>
+            {
+                _snapshot = CaptureService.Snapshot;
+                if (_live && _following && !_busy && _edit is null && _partition is null && _selected.Count == 0)
+                { await LoadItemsAsync(); if (_module is not null) await _module.InvokeVoidAsync("scrollEnd", _feed); }
+                StateHasChanged();
+            });
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { if (!_stop.IsCancellationRequested) await InvokeAsync(() => { _error = ex.Message; StateHasChanged(); }); }
+    }
+    [JSInvokable] public void FeedFollowing(bool following) { _following = following; }
+    private async Task RunAsync(Func<Task> action, string? success = null)
+    {
+        if (_busy) return; _busy = true; _error = null; _message = null;
+        try { await action(); if (success is not null) _message = success; }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+    private async Task LoadProfileAsync()
+    {
+        _profile = _profiles.FirstOrDefault(x => x.Id == _profileId);
+        _labels = _profile is null ? [] : await Store.GetCaptureLabelsAsync(_profile.Id);
+        _sessions = _profile is null ? [] : await Store.GetCaptureSessionsAsync(_profile.Id);
+        _sessionId = _sessions.FirstOrDefault()?.Id ?? 0; _offset = 0; _selected.Clear();
+        if (_profile is not null) { _split = _profile.Rules.SplitDialogue; _outside = _profile.Rules.OutsideIsNarration; _names = string.Join(Environment.NewLine, _profile.Rules.Names); }
+        await LoadItemsAsync();
+    }
+    private async Task LoadItemsAsync()
+    {
+        long? label = long.TryParse(_filter, out var id) ? id : null;
+        _items = _sessionId == 0 ? [] : await Store.GetCaptureItemsAsync(_sessionId, 200, _live ? 0 : _offset, label, _filter == "none", _live);
+    }
+    private Task ChangeProfileAsync(ChangeEventArgs e) => RunAsync(async () => { _profileId = long.Parse(e.Value!.ToString()!); await LoadProfileAsync(); });
+    private Task ChangeSessionAsync(ChangeEventArgs e) => RunAsync(async () => { _sessionId = long.Parse(e.Value!.ToString()!); _offset = 0; _selected.Clear(); await LoadItemsAsync(); });
+    private Task FilterAsync() => RunAsync(async () => { _offset = 0; _selected.Clear(); await LoadItemsAsync(); });
+    private Task PreviousAsync() => RunAsync(async () => { _offset = Math.Max(0, _offset - 200); _selected.Clear(); await LoadItemsAsync(); });
+    private Task NextAsync() => RunAsync(async () => { _offset += 200; _selected.Clear(); await LoadItemsAsync(); });
+    private Task RefreshAsync() => RunAsync(LoadItemsAsync);
+    private Task ShowHistoryAsync() => RunAsync(async () => { _live = false; _profiles = await Store.GetCaptureProfilesAsync(); await LoadProfileAsync(); });
+    private Task ShowLiveAsync() => RunAsync(async () => { _snapshot = CaptureService.Snapshot; _live = true; _following = true; _profileId = _snapshot.Profile?.Id ?? 0; _profiles = await Store.GetCaptureProfilesAsync(); await LoadProfileAsync(); _sessionId = _snapshot.SessionId ?? 0; await LoadItemsAsync(); });
+    private Task FollowAsync() => RunAsync(async () => { _following = true; _selected.Clear(); await LoadItemsAsync(); if (_module is not null) await _module.InvokeVoidAsync("scrollEnd", _feed); });
+    private void SelectItem(long id, bool selected) { if (selected) _selected.Add(id); else _selected.Remove(id); _following = false; }
+    private void SelectPage(ChangeEventArgs e) { _selected.Clear(); if (e.Value is true) _selected.UnionWith(_items.Select(x => x.Id)); _following = false; }
+    private Task BulkLabelAsync() { var ids = _selected.ToArray(); return RunAsync(async () => { await Store.SetCaptureLabelsAsync(_sessionId, ids, _bulkLabel == 0 ? null : _bulkLabel); _selected.Clear(); await LoadItemsAsync(); }, $"{ids.Length}件のラベルを変更しました。"); }
+    private Task ReapplyAsync() { var ids = _selected.ToArray(); return RunAsync(async () => { if (_profile is null) return; await Store.ReapplyCaptureRulesAsync(_sessionId, ids, _profile.Rules); _selected.Clear(); await LoadItemsAsync(); }, $"選択した{ids.Length}件へルールを再適用しました。"); }
+    private void FindProcesses() => _processes = CaptureService.GetProcesses();
+    private Task ConnectAsync() => RunAsync(async () => { await CaptureService.SelectProcessAsync(_processId); _snapshot = CaptureService.Snapshot; });
+    private static string RoleName(CaptureRole role) => role switch { CaptureRole.Body => "本文", CaptureRole.Name => "キャラ名", _ => "未選択" };
+    private Task ChangeCandidateAsync(CaptureCandidate candidate, ChangeEventArgs e) => SetCandidateAsync(candidate, (CaptureRole)int.Parse(e.Value!.ToString()!), candidate.LabelId);
+    private Task ChangeCandidateLabelAsync(CaptureCandidate candidate, ChangeEventArgs e) => SetCandidateAsync(candidate, candidate.Role, long.Parse(e.Value!.ToString()!) is var id && id != 0 ? id : null);
+    private Task SetCandidateAsync(CaptureCandidate candidate, CaptureRole role, long? label) => RunAsync(async () =>
+    {
+        if (_profile is null) return;
+        var selections = _profile.Rules.Selections.Where(x => !x.Matches(candidate.Source)).Append(new(candidate.Source.HookCode, candidate.Source.HookName, candidate.Source.Context, candidate.Source.Context2, role, label)).ToArray();
+        await PersistRulesAsync(_profile.Rules with { Selections = selections }, candidate.Source); _snapshot = CaptureService.Snapshot;
+    });
+    private Task SaveRulesAsync() => RunAsync(async () =>
+    {
+        if (_profile is null) return;
+        await PersistRulesAsync(_profile.Rules with { SplitDialogue = _split, OutsideIsNarration = _outside,
+            Names = _names.Split(['\r', '\n'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Distinct().ToArray() });
+    }, "以降の受信に使うルールを保存しました。");
+    private async Task PersistRulesAsync(CaptureRules rules, CaptureSource? selectedSource = null)
+    {
+        if (_profile is null) return;
+        if (CaptureService.Snapshot.Profile?.Id == _profile.Id) await CaptureService.SaveRulesAsync(rules, selectedSource);
+        else await Store.SaveCaptureProfileAsync(_profile with { Rules = rules });
+        _profile = _profile with { Rules = rules };
+    }
+    private void LoadLabelName() => _labelName = _labels.FirstOrDefault(x => x.Id == _labelEditId)?.Name ?? "";
+    private Task SaveLabelAsync() => RunAsync(async () => { if (_profile is null) return; await Store.SaveCaptureLabelAsync(_profile.Id, _labelName, _labelKind, _labelEditId == 0 ? null : _labelEditId); _labels = await Store.GetCaptureLabelsAsync(_profile.Id); await LoadItemsAsync(); }, "ラベルを保存しました。");
+    private bool IsNarration(long id) => _labels.FirstOrDefault(x => x.Id == id)?.Kind == CaptureKind.Narration;
+    private void Edit(CaptureTextItem item) { _edit = item; _editLabel = item.LabelId ?? 0; _editSpeaker = item.Speaker ?? ""; _following = false; _focusEditor = true; }
+    private Task SaveEditAsync() => RunAsync(async () => { if (_edit is null) return; await Store.SetCaptureLabelsAsync(_sessionId, [_edit.Id], _editLabel == 0 ? null : _editLabel); await Store.SetCaptureSpeakerAsync(_sessionId, _edit.Id, IsNarration(_editLabel) ? null : _editSpeaker); CloseEditors(); await LoadItemsAsync(); }, "修正を保存しました。");
+    private Task OpenPartitionAsync(CaptureTextItem item) => RunAsync(async () =>
+    {
+        _partition = item; _following = false;
+        _focusEditor = true;
+        var original = (await Store.GetCaptureItemsAsync(_sessionId, 0)).Where(x => x.Sequence == item.Sequence).ToArray();
+        _boundaries.Clear(); _boundaries.AddRange(original.SkipLast(1).Select(x => x.Start + x.Length));
+        _parts = original.Select(x => new PartDraft { Text = x.Text, Label = x.LabelId ?? 0, Speaker = x.Speaker ?? "" }).ToList();
+    });
+    private void RebuildParts()
+    {
+        if (_partition is null) return;
+        var start = 0; _parts = [];
+        foreach (var end in _boundaries.Append(_partition.RawText.Length)) { _parts.Add(new() { Text = _partition.RawText[start..end] }); start = end; }
+    }
+    private Task AddBoundaryAsync() => RunAsync(async () => { if (_partition is null || _module is null) return; var position = await _module.InvokeAsync<int>("selectionStart", _rawInput); var next = _boundaries.Append(position).Distinct().Order().ToArray(); ScenarioTextProcessor.ValidateBoundaries(_partition.RawText, next); _boundaries.Clear(); _boundaries.AddRange(next); RebuildParts(); });
+    private void RemoveBoundary(int index) { _boundaries.RemoveAt(index); RebuildParts(); }
+    private Task SavePartitionAsync() => RunAsync(async () => { if (_partition is null) return; await Store.SplitCaptureEventAsync(_sessionId, _partition.Sequence, _boundaries.ToArray(), _parts.Select(x => new CaptureManualPart(x.Label == 0 ? null : x.Label, IsNarration(x.Label) ? null : string.IsNullOrWhiteSpace(x.Speaker) ? null : x.Speaker.Trim())).ToArray()); CloseEditors(); _selected.Clear(); await LoadItemsAsync(); }, "原文を保持したまま分割・分類を保存しました。");
+    private void CloseEditors() { _edit = null; _partition = null; _restoreFocus = true; }
+    [JSInvokable] public void CloseEditorFromKeyboard() { if (!_busy) { CloseEditors(); StateHasChanged(); } }
+    private Task ExportAsync() => RunAsync(async () =>
+    {
+        if (_profile is null) return;
+        long? label = long.TryParse(_filter, out var id) ? id : null;
+        var items = await Store.GetCaptureItemsAsync(_sessionId, 0, 0, label, _filter == "none");
+        var folder = await Picker.PickFolderPathAsync("TXTの保存先フォルダを選択");
+        if (folder is null) return;
+        var title = string.Concat(_profile.Title.Select(x => Path.GetInvalidFileNameChars().Contains(x) ? '_' : x));
+        var path = Path.Combine(folder, $"{title}-{DateTime.Now:yyyyMMdd-HHmmss-fff}.txt");
+        await using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write);
+        await using var writer = new StreamWriter(file, new UTF8Encoding(false));
+        await writer.WriteAsync(ScenarioTextProcessor.FormatTxt(items));
+        await writer.FlushAsync(); _message = $"TXTを保存しました：{Path.GetFileName(path)}";
+    });
+    public async ValueTask DisposeAsync()
+    {
+        _stop.Cancel();
+        if (_module is not null) { try { await _module.InvokeVoidAsync("unobserveFeed", _feed); await _module.DisposeAsync(); } catch (JSDisconnectedException) { } }
+        _self?.Dispose(); _stop.Dispose();
+    }
+}
