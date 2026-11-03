@@ -54,6 +54,12 @@ public sealed partial class SqliteGameLibraryStore
                 ManualSpeakerText TEXT NULL,
                 FOREIGN KEY(SessionId, ReceiveSequence) REFERENCES CaptureEvents(SessionId, ReceiveSequence),
                 UNIQUE(SessionId, ReceiveSequence, StartUtf16));
+            CREATE TABLE IF NOT EXISTS CaptureRanges (
+                Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                CaptureGameId INTEGER NOT NULL REFERENCES CaptureGames(Id), Name TEXT NOT NULL,
+                StartSessionId INTEGER NOT NULL REFERENCES CaptureSessions(Id), StartSequence INTEGER NOT NULL, StartOffset INTEGER NOT NULL,
+                EndSessionId INTEGER NOT NULL REFERENCES CaptureSessions(Id), EndSequence INTEGER NOT NULL, EndOffset INTEGER NOT NULL);
+            CREATE INDEX IF NOT EXISTS IX_CaptureRanges_Game ON CaptureRanges(CaptureGameId,Id);
             """;
         await command.ExecuteNonQueryAsync(cancellationToken);
     }

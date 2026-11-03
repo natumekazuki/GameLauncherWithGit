@@ -30,11 +30,21 @@ public sealed record CaptureReceived(long Sequence, DateTimeOffset ReceivedAt, C
     CaptureRole Role, long? LabelId = null);
 public sealed record CaptureSegment(int Start, int Length, CaptureKind? Kind);
 public sealed record CaptureManualPart(long? LabelId, string? Speaker);
+public sealed record CapturePosition(long SessionId, long Sequence, int Offset) : IComparable<CapturePosition>
+{
+    public int CompareTo(CapturePosition? other) => other is null ? 1
+        : SessionId != other.SessionId ? SessionId.CompareTo(other.SessionId)
+        : Sequence != other.Sequence ? Sequence.CompareTo(other.Sequence) : Offset.CompareTo(other.Offset);
+}
+public sealed record CaptureRange(long Id, long CaptureGameId, string Name, CapturePosition Start, CapturePosition End);
+public sealed record CaptureRangeSelection(long CaptureGameId, CapturePosition Start, CapturePosition End);
 public sealed record CaptureTextItem(long Id, long SessionId, long Sequence, DateTimeOffset ReceivedAt,
     string RawText, int Start, int Length, long? LabelId, string? LabelName, CaptureKind? Kind,
     string? Speaker, bool ManualLabel, bool ManualSpeaker, bool ManualBoundaries)
 {
     public string Text => RawText.Substring(Start, Length);
+    public CapturePosition StartPosition => new(SessionId, Sequence, Start);
+    public CapturePosition EndPosition => new(SessionId, Sequence, Start + Length);
 }
 public sealed record CaptureCandidate(CaptureSource Source, string Text, CaptureRole Role, long? LabelId);
 public sealed record CaptureProcess(int Id, string Name, string Path);
@@ -50,4 +60,5 @@ public sealed record CaptureSnapshot
     public long Saved { get; init; }
     public long Lost { get; init; }
     public CaptureCandidate[] Candidates { get; init; } = [];
+    public CapturePosition? RangeStart { get; init; }
 }

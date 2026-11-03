@@ -12,6 +12,9 @@ public interface IScenarioCaptureStore
     Task<long> BeginCaptureSessionAsync(long profileId);
     Task EndCaptureSessionAsync(long sessionId);
     Task<IReadOnlyList<CaptureSession>> GetCaptureSessionsAsync(long profileId);
+    Task<IReadOnlyList<CaptureTextItem>> GetGameCaptureItemsAsync(long profileId, int limit = 200, int offset = 0, long? labelId = null, bool unclassifiedOnly = false, bool latest = false, long? rangeId = null);
+    Task<IReadOnlyList<CaptureRange>> GetCaptureRangesAsync(long profileId);
+    Task<long> SaveCaptureRangeAsync(long profileId, string name, CapturePosition start, CapturePosition end);
     Task<bool> AppendCaptureAsync(long sessionId, CaptureReceived received, CaptureRules rules);
     Task<IReadOnlyList<CaptureTextItem>> GetCaptureItemsAsync(long sessionId, int limit = 200, int offset = 0, long? labelId = null, bool unclassifiedOnly = false, bool latest = false);
     Task SetCaptureLabelsAsync(long sessionId, IReadOnlyCollection<long> itemIds, long? labelId);

@@ -14,8 +14,8 @@
     <header class="capture-header">
         <div><a href="/">← ゲーム一覧</a><h1>シナリオ抽出</h1></div>
         <div class="capture-tabs" aria-label="表示切替">
-            <button class="secondary-button" aria-pressed="@_live" @onclick="ShowLiveAsync">取得中のゲーム</button>
-            <button class="secondary-button" aria-pressed="@(!_live)" @onclick="ShowHistoryAsync">保存履歴</button>
+            <button class="secondary-button" aria-pressed="@(_live ? "true" : "false")" @onclick="ShowLiveAsync">取得中のゲーム</button>
+            <button class="secondary-button" aria-pressed="@(!_live ? "true" : "false")" @onclick="ShowHistoryAsync">保存履歴</button>
         </div>
     </header>
     @if (_loading) { <p role="status">履歴を読み込んでいます…</p> }
@@ -26,12 +26,21 @@
             <div class="capture-status">
                 <strong>@(_snapshot.Profile?.Title ?? "取得中のゲームはありません")</strong>
                 <span role="status">@_snapshot.Status</span>
-                <span class="capture-count">受信 @_snapshot.Received / 保存 @_snapshot.Saved 件</span>
+                <span class="capture-count">今回：受信 @_snapshot.Received / 保存 @_snapshot.Saved 件</span>
                 <span class="capture-warning">@(_snapshot.Lost > 0 ? $"未保存・破棄 {_snapshot.Lost} 件（未選択候補を含む）" : "")</span>
             </div>
         }
+        @if (_live)
+        {
+            <div class="capture-play-range" aria-label="プレイ中の区間指定">
+                <button class="launch-button" @onclick="StartLiveRangeAsync" disabled="@(_busy || !_snapshot.Connected || _snapshot.RangeStart is not null)">ここから開始</button>
+                <button class="launch-button" @onclick="EndLiveRangeAsync" disabled="@(_busy || _snapshot.RangeStart is null)">ここまでで終了</button>
+                <button class="secondary-button" @onclick="CancelLiveRange" disabled="@(_busy || _snapshot.RangeStart is null)">取消</button>
+                <span role="status">@(_snapshot.RangeStart is null ? "必要な場面だけ区間を作成" : "区間指定中 — 終了後に名前を入力")</span>
+            </div>
+        }
         <div class="capture-layout">
-            <section class="capture-content @(_live ? "capture-content-live" : "")" aria-busy="@_busy">
+            <section class="capture-content @(_live ? "capture-content-live" : "")" aria-busy="@(_busy ? "true" : "false")">
                 <div class="capture-filters @(_live ? "capture-filters-live" : "")">
                     @if (!_live)
                     {
@@ -39,21 +48,21 @@
                         <option value="0">選択してください</option>
                         @foreach (var profile in _profiles) { <option value="@profile.Id">@profile.Title@(profile.GameId is null ? "（登録なし）" : "")</option> }
                     </select></label>
-                    <label>プレイ回<select value="@_sessionId" @onchange="ChangeSessionAsync" disabled="@(_busy || _live)">
-                        <option value="0">選択してください</option>
-                        @foreach (var session in _sessions) { <option value="@session.Id">@SessionName(session)</option> }
-                    </select></label>
                     }
+                    <label>区間<select @bind="_rangeId" @bind:after="ChangeRangeAsync" disabled="@_busy">
+                        <option value="0">ゲーム全体</option>
+                        @foreach (var range in _ranges) { <option value="@range.Id">@RangeName(range)</option> }
+                    </select></label>
                     <label>ラベル<select @bind="_filter" @bind:after="FilterAsync" disabled="@_busy">
                         <option value="all">すべて</option><option value="none">未判定</option>
                         @foreach (var label in _labels) { <option value="@label.Id">@label.Name</option> }
                     </select></label>
                 </div>
                 <div class="capture-toolbar">
-                    @if (_live)
+                    @if (LatestOrder)
                     {
-                        <span class="capture-follow-state">@(_following ? "新着に追従中" : "追従を停止中")</span>
-                        <button class="secondary-button" @onclick="FollowAsync" disabled="@(_busy || _following || _selected.Count > 0)">新着・末尾を表示</button>
+                        <span class="capture-follow-state">@(_pickingRange ? "本文で区間指定中" : _following ? "新着に追従中" : "追従を停止中")</span>
+                        <button class="secondary-button" @onclick="FollowAsync" disabled="@(_busy || _following || _selected.Count > 0 || _pickingRange)">新着・末尾を表示</button>
                     }
                     else
                     {
@@ -61,28 +70,42 @@
                         <span>@(_items.Count == 0 ? "0件" : $"{_offset + 1}–{_offset + _items.Count}件目")</span>
                         <button class="secondary-button" @onclick="NextAsync" disabled="@(_busy || _items.Count < 200)">次の200件</button>
                     }
-                    @if (!_live) { <button class="secondary-button" @onclick="RefreshAsync" disabled="@_busy">更新</button> }
+                    @if (!LatestOrder) { <button class="secondary-button" @onclick="RefreshAsync" disabled="@_busy">更新</button> }
                     <button class="secondary-button" @onclick="OpenSettings" disabled="@_busy">抽出設定</button>
-                    <button class="secondary-button capture-export" @onclick="ExportAsync" disabled="@(_busy || _sessionId == 0)">条件の全件をTXT出力</button>
+                    <button class="secondary-button capture-export" @onclick="ExportAsync" disabled="@(_busy || _profileId == 0)">条件の全件をTXT出力</button>
+                </div>
+                <div class="capture-text-range">
+                    <button class="secondary-button" aria-pressed="@(_pickingRange ? "true" : "false")" @onclick="ToggleTextRange" disabled="@(_busy || _profileId == 0)">本文で区間指定</button>
+                    <span class="capture-range-summary" role="status" title="@TextRangeSummary">@TextRangeSummary</span>
+                    <button class="secondary-button" @onclick="OpenTextRange" disabled="@(_busy || !TextRangeValid)">区間を保存</button>
+                    <button class="secondary-button" @onclick="ClearTextRangeAsync" disabled="@(_busy || !_pickingRange)">解除</button>
                 </div>
                 <div class="capture-bulk">
-                    <label><input type="checkbox" checked="@(_items.Count > 0 && _selected.Count == _items.Count)" @onchange="SelectPage" disabled="@(_busy || _items.Count == 0)" /> 表示分を選択</label>
+                    <label><input type="checkbox" checked="@(_items.Count > 0 && _selected.Count == _items.Count)" @onchange="SelectPage" disabled="@(_busy || _items.Count == 0 || !CanEdit)" /> 表示分を選択</label>
                     <span class="capture-selection-count">@_selected.Count 件選択</span>
                     <button class="secondary-button" @onclick="OpenBulk" disabled="@(_busy || _selected.Count == 0)">一括修正</button>
                     <button class="secondary-button" @onclick="ClearSelection" disabled="@_busy">選択解除</button>
-                    <span class="capture-hint">@(_live ? "直近200件まで表示" : "表示した本文が選択対象")</span>
+                    <span class="capture-hint">@(_rangeId != 0 ? "修正は「ゲーム全体」で行えます" : FollowingView ? "直近200件まで表示" : "表示した本文が選択対象")</span>
                 </div>
                 <div class="capture-feed" @ref="_feed" tabindex="0" aria-label="抽出本文">
                     @if (_items.Count == 0) { <p class="capture-empty">@EmptyMessage</p> }
                     @foreach (var item in _items)
                     {
-                        <article class="capture-item" @key="item.Id">
-                            <header><input type="checkbox" aria-label="この本文を選択" checked="@_selected.Contains(item.Id)" @onchange="e => SelectItem(item.Id, e.Value is true)" disabled="@_busy" />
+                        <article class="capture-item @(IsRangeEdge(item) ? "capture-range-edge" : "")" @key="item.Id">
+                            <header><input type="checkbox" aria-label="この本文を選択" checked="@_selected.Contains(item.Id)" @onchange="e => SelectItem(item.Id, e.Value is true)" disabled="@(_busy || !CanEdit)" />
                                 <span class="capture-label" title="@(item.LabelName ?? "未判定")">@(item.LabelName ?? "未判定")</span>
                                 <strong title="@item.Speaker">@(item.Kind == CaptureKind.Dialogue || item.Kind is null ? item.Speaker ?? "話者未確定" : "")</strong>
                                 <span class="capture-manual">@(item.ManualLabel || item.ManualSpeaker || item.ManualBoundaries ? "手動修正あり" : "")</span>
-                                <button class="secondary-button capture-edit" @onclick="() => Edit(item)" disabled="@_busy">修正</button>
-                                <button class="secondary-button" @onclick="() => OpenPartitionAsync(item)" disabled="@_busy">原文・分割</button>
+                                @if (_pickingRange)
+                                {
+                                    <button class="secondary-button capture-edit" aria-pressed="@(item.StartPosition == _rangeFirst?.StartPosition ? "true" : "false")" @onclick="() => PickRangeStart(item)" disabled="@_busy">ここから</button>
+                                    <button class="secondary-button" aria-pressed="@(item.EndPosition == _rangeLast?.EndPosition ? "true" : "false")" @onclick="() => PickRangeEnd(item)" disabled="@_busy">ここまで</button>
+                                }
+                                else
+                                {
+                                    <button class="secondary-button capture-edit" @onclick="() => Edit(item)" disabled="@(_busy || !CanEdit)">修正</button>
+                                    <button class="secondary-button" @onclick="() => OpenPartitionAsync(item)" disabled="@(_busy || !CanEdit)">原文・分割</button>
+                                }
                             </header>
                             <p>@item.Text</p>
                         </article>
@@ -99,6 +122,16 @@
         <span role="@(_error is null ? "status" : "alert")">@(_error ?? _message)</span>
         <button class="secondary-button" aria-label="通知を閉じる" @onclick="() => { _message = null; _error = null; }">×</button>
     </div>
+}
+
+@if (_rangeSelection is not null)
+{
+    <div class="modal-backdrop"><section id="capture-editor" class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-range-title">
+        <h2 id="capture-range-title">区間に名前を付けて保存</h2>
+        <p>開始と終了は指定済みです。この後の受信は区間に含めません。</p>
+        <label>区間名<input @bind="_rangeName" placeholder="例：第1章、気になった場面" /></label>
+        <div class="capture-toolbar"><button class="launch-button" @onclick="SaveRangeAsync" disabled="@_busy">保存</button><button class="secondary-button" @onclick="CloseEditors" disabled="@_busy">キャンセル</button></div>
+    </section></div>
 }
 
 @if (_settingsOpen)
@@ -224,12 +257,12 @@
 @code {
     private CaptureSnapshot _snapshot = new();
     private IReadOnlyList<CaptureProfile> _profiles = [];
-    private IReadOnlyList<CaptureSession> _sessions = [];
+    private IReadOnlyList<CaptureRange> _ranges = [];
     private IReadOnlyList<CaptureLabel> _labels = [];
     private IReadOnlyList<CaptureTextItem> _items = [];
     private IReadOnlyList<CaptureProcess> _processes = [];
     private CaptureProfile? _profile;
-    private long _profileId, _sessionId, _bulkLabel, _labelEditId;
+    private long _profileId, _rangeId, _bulkLabel, _labelEditId;
     private int _processId, _offset;
     private bool _live = true, _following = true, _busy, _loading = true, _split = true, _outside;
     private string _filter = "all", _names = "", _labelName = "", _processSearch = "";
@@ -248,14 +281,28 @@
     private string _editSpeaker = "";
     private readonly List<int> _boundaries = [];
     private List<PartDraft> _parts = [];
-    private bool EditorOpen => _settingsOpen || _bulkOpen || _edit is not null || _partition is not null;
+    private bool _pickingRange;
+    private CaptureTextItem? _rangeFirst, _rangeLast;
+    private CaptureRangeSelection? _rangeSelection;
+    private string _rangeName = "";
+    private bool EditorOpen => _settingsOpen || _bulkOpen || _edit is not null || _partition is not null || _rangeSelection is not null;
+    private bool FollowingView => _live && _rangeId == 0 && !_pickingRange;
+    private bool LatestOrder => _live && _rangeId == 0;
+    private bool CanEdit => _rangeId == 0 && !_pickingRange;
+    private bool TextRangeValid => _rangeFirst is not null && _rangeLast is not null && _rangeFirst.StartPosition.CompareTo(_rangeLast.EndPosition) < 0;
+    private string TextRangeSummary => !_pickingRange ? "保存済みの本文からも作成できます"
+        : $"開始：{(_rangeFirst is null ? "未指定" : CandidatePreview(_rangeFirst.Text))} ／ 終了：{(_rangeLast is null ? "未指定" : CandidatePreview(_rangeLast.Text))}";
+    private bool IsRangeEdge(CaptureTextItem item) => _pickingRange && (item.StartPosition == _rangeFirst?.StartPosition || item.EndPosition == _rangeLast?.EndPosition);
+    private string RangeName(CaptureRange range)
+    {
+        var same = _ranges.Where(x => x.Name == range.Name).ToList();
+        return same.Count == 1 ? range.Name : $"{range.Name}（同名の{same.IndexOf(range) + 1}/{same.Count}件目）";
+    }
     private CaptureCandidate? CurrentCandidate => _snapshot.Candidates.FirstOrDefault(x => x.Source.Key == _candidateKey);
-    private string EmptyMessage => _sessionId == 0
-        ? (_live ? "取得中のゲームはありません。ゲームを起動するか、保存履歴を開いてください。" : "ゲームとプレイ回を選択してください。")
+    private string EmptyMessage => _profileId == 0
+        ? (_live ? "取得中のゲームはありません。ゲームを起動するか、保存履歴を開いてください。" : "ゲームを選択してください。")
         : _live && _filter == "all" ? "本文の受信待ちです。抽出設定で本文の取得元を確認できます。" : "この条件の保存済み本文はありません。";
     private static string CandidatePreview(string text) => string.Concat(text.Take(60)).ReplaceLineEndings(" ");
-    private string SessionName(CaptureSession session) => session.StartedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm:ss")
-        + (session.EndedAt is not null ? "" : session.Id == _snapshot.SessionId && _snapshot.Connected ? "（取得中）" : "（終了未記録）");
     private sealed class PartDraft { public string Text { get; set; } = ""; public long Label { get; set; } public string Speaker { get; set; } = ""; }
     protected override async Task OnInitializedAsync()
     {
@@ -265,7 +312,6 @@
             _live = _snapshot.Profile is not null;
             _profileId = _snapshot.Profile?.Id ?? _profiles.FirstOrDefault()?.Id ?? 0;
             await LoadProfileAsync();
-            if (_live) { _sessionId = _snapshot.SessionId ?? 0; await LoadItemsAsync(); }
             if (_snapshot.NeedsProcess) FindProcesses();
         }
         catch (Exception ex) { _error = ex.Message; }
@@ -294,7 +340,11 @@
             while (await timer.WaitForNextTickAsync(_stop.Token)) await InvokeAsync(async () =>
             {
                 _snapshot = CaptureService.Snapshot;
-                if (_live && _following && !_busy && !EditorOpen && _selected.Count == 0)
+                if (_live && (_snapshot.Profile?.Id ?? 0) != _profileId && !_busy && !EditorOpen)
+                {
+                    _profileId = _snapshot.Profile?.Id ?? 0; _profiles = await Store.GetCaptureProfilesAsync(); await LoadProfileAsync();
+                }
+                if (FollowingView && _following && !_busy && !EditorOpen && _selected.Count == 0)
                 { await LoadItemsAsync(); _scrollToEnd = true; }
                 StateHasChanged();
             });
@@ -302,7 +352,7 @@
         catch (OperationCanceledException) { }
         catch (Exception ex) { if (!_stop.IsCancellationRequested) await InvokeAsync(() => { _error = ex.Message; StateHasChanged(); }); }
     }
-    [JSInvokable] public void FeedFollowing(bool following) { if (!_live || EditorOpen || _selected.Count > 0) return; _following = following; StateHasChanged(); }
+    [JSInvokable] public void FeedFollowing(bool following) { if (!FollowingView || EditorOpen || _selected.Count > 0) return; _following = following; StateHasChanged(); }
     private async Task RunAsync(Func<Task> action, string? success = null)
     {
         if (_busy) return; _busy = true; _error = null; _message = null;
@@ -314,32 +364,66 @@
     {
         _profile = _profiles.FirstOrDefault(x => x.Id == _profileId);
         _labels = _profile is null ? [] : await Store.GetCaptureLabelsAsync(_profile.Id);
-        _sessions = _profile is null ? [] : await Store.GetCaptureSessionsAsync(_profile.Id);
-        _sessionId = _sessions.FirstOrDefault()?.Id ?? 0; _offset = 0; _selected.Clear(); _filter = "all"; _labelEditId = 0; _labelName = ""; _labelKind = CaptureKind.Dialogue;
+        _ranges = _profile is null ? [] : await Store.GetCaptureRangesAsync(_profile.Id);
+        _rangeId = 0; _rangeFirst = _rangeLast = null; _pickingRange = false;
+        _offset = 0; _selected.Clear(); _filter = "all"; _labelEditId = 0; _labelName = ""; _labelKind = CaptureKind.Dialogue;
         if (_profile is not null) { _split = _profile.Rules.SplitDialogue; _outside = _profile.Rules.OutsideIsNarration; _names = string.Join(Environment.NewLine, _profile.Rules.Names); }
         await LoadItemsAsync();
     }
     private async Task LoadItemsAsync()
     {
         long? label = long.TryParse(_filter, out var id) ? id : null;
-        _items = _sessionId == 0 ? [] : await Store.GetCaptureItemsAsync(_sessionId, 200, _live ? 0 : _offset, label, _filter == "none", _live);
+        _items = _profileId == 0 ? [] : await Store.GetGameCaptureItemsAsync(_profileId, 200, FollowingView ? 0 : _offset, label, _filter == "none", LatestOrder, _rangeId == 0 ? null : _rangeId);
     }
     private Task ChangeProfileAsync(ChangeEventArgs e) => RunAsync(async () => { _profileId = long.Parse(e.Value!.ToString()!); await LoadProfileAsync(); _scrollToEnd = false; });
-    private Task ChangeSessionAsync(ChangeEventArgs e) => RunAsync(async () => { _sessionId = long.Parse(e.Value!.ToString()!); _offset = 0; _selected.Clear(); await LoadItemsAsync(); _scrollToEnd = false; });
-    private Task FilterAsync() => RunAsync(async () => { _offset = 0; _selected.Clear(); await LoadItemsAsync(); _scrollToEnd = _live && _following; });
+    private Task ChangeRangeAsync() => RunAsync(async () => { _offset = 0; _selected.Clear(); await LoadItemsAsync(); _scrollToEnd = FollowingView && _following; });
+    private Task FilterAsync() => RunAsync(async () => { _offset = 0; _selected.Clear(); await LoadItemsAsync(); _scrollToEnd = FollowingView && _following; });
     private Task PreviousAsync() => RunAsync(async () => { _offset = Math.Max(0, _offset - 200); _selected.Clear(); await LoadItemsAsync(); _scrollToEnd = false; });
     private Task NextAsync() => RunAsync(async () => { _offset += 200; _selected.Clear(); await LoadItemsAsync(); _scrollToEnd = false; });
     private Task RefreshAsync() => RunAsync(LoadItemsAsync);
     private Task ShowHistoryAsync() => RunAsync(async () => { _live = false; _profiles = await Store.GetCaptureProfilesAsync(); await LoadProfileAsync(); _scrollToEnd = false; });
-    private Task ShowLiveAsync() => RunAsync(async () => { _snapshot = CaptureService.Snapshot; _live = true; _following = true; _profileId = _snapshot.Profile?.Id ?? 0; _profiles = await Store.GetCaptureProfilesAsync(); await LoadProfileAsync(); _sessionId = _snapshot.SessionId ?? 0; await LoadItemsAsync(); _scrollToEnd = true; });
+    private Task ShowLiveAsync() => RunAsync(async () => { _snapshot = CaptureService.Snapshot; _live = true; _following = true; _profileId = _snapshot.Profile?.Id ?? 0; _profiles = await Store.GetCaptureProfilesAsync(); await LoadProfileAsync(); _scrollToEnd = true; });
     private Task FollowAsync() => RunAsync(async () => { _following = true; await LoadItemsAsync(); _scrollToEnd = true; });
+    private Task StartLiveRangeAsync() => RunAsync(() => { CaptureService.StartRange(); _snapshot = CaptureService.Snapshot; return Task.CompletedTask; });
+    private Task EndLiveRangeAsync() => RunAsync(() => { _rangeSelection = CaptureService.EndRange(); _snapshot = CaptureService.Snapshot; _rangeName = ""; _focusEditor = true; return Task.CompletedTask; });
+    private void CancelLiveRange() { CaptureService.CancelRange(); _snapshot = CaptureService.Snapshot; }
+    private Task ToggleTextRange() => RunAsync(async () =>
+    {
+        _pickingRange = !_pickingRange; _selected.Clear(); _following = false;
+        if (LatestOrder) _offset = 0;
+        if (!_pickingRange) _rangeFirst = _rangeLast = null;
+        await LoadItemsAsync();
+    });
+    private void ClearTextRange() { _rangeFirst = _rangeLast = null; _pickingRange = false; }
+    private Task ClearTextRangeAsync() => RunAsync(async () => { ClearTextRange(); _offset = 0; await LoadItemsAsync(); });
+    private void PickRangeStart(CaptureTextItem item) { _rangeFirst = item; _following = false; ValidateTextRange(); }
+    private void PickRangeEnd(CaptureTextItem item)
+    {
+        _rangeLast = item; _following = false;
+        ValidateTextRange();
+    }
+    private void ValidateTextRange() => _error = _rangeFirst is not null && _rangeLast is not null && !TextRangeValid
+        ? "開始より後の終了位置を選んでください。" : null;
+    private void OpenTextRange()
+    {
+        if (!TextRangeValid) return;
+        _rangeSelection = new(_profileId, _rangeFirst!.StartPosition, _rangeLast!.EndPosition); _rangeName = ""; _focusEditor = true;
+    }
+    private Task SaveRangeAsync() => RunAsync(async () =>
+    {
+        if (_rangeSelection is null) return;
+        await CaptureService.FlushPendingAsync();
+        await Store.SaveCaptureRangeAsync(_rangeSelection.CaptureGameId, _rangeName, _rangeSelection.Start, _rangeSelection.End);
+        if (_profileId == _rangeSelection.CaptureGameId) _ranges = await Store.GetCaptureRangesAsync(_profileId);
+        CloseEditors(); ClearTextRange(); _offset = 0; await LoadItemsAsync();
+    }, "区間を保存しました。区間外の本文もそのまま残っています。");
     private void ClearSelection() => _selected.Clear();
     private void OpenBulk() { _bulkOpen = true; _focusEditor = true; }
     private void OpenSettings() { _settingsOpen = true; _focusEditor = true; _candidateKey = _snapshot.Candidates.FirstOrDefault()?.Source.Key ?? ""; FindProcesses(); }
     private void SelectItem(long id, bool selected) { if (selected) _selected.Add(id); else _selected.Remove(id); _following = false; }
     private void SelectPage(ChangeEventArgs e) { _selected.Clear(); if (e.Value is true) _selected.UnionWith(_items.Select(x => x.Id)); _following = false; }
-    private Task BulkLabelAsync() { var ids = _selected.ToArray(); return RunAsync(async () => { await Store.SetCaptureLabelsAsync(_sessionId, ids, _bulkLabel == 0 ? null : _bulkLabel); _selected.Clear(); CloseEditors(); await LoadItemsAsync(); }, $"{ids.Length}件のラベルを変更しました。"); }
-    private Task ReapplyAsync() { var ids = _selected.ToArray(); return RunAsync(async () => { if (_profile is null) return; await Store.ReapplyCaptureRulesAsync(_sessionId, ids, _profile.Rules); _selected.Clear(); CloseEditors(); await LoadItemsAsync(); }, $"選択した{ids.Length}件へルールを再適用しました。"); }
+    private Task BulkLabelAsync() { var groups = _items.Where(x => _selected.Contains(x.Id)).GroupBy(x => x.SessionId).ToArray(); var count = _selected.Count; return RunAsync(async () => { foreach (var group in groups) await Store.SetCaptureLabelsAsync(group.Key, group.Select(x => x.Id).ToArray(), _bulkLabel == 0 ? null : _bulkLabel); _selected.Clear(); CloseEditors(); await LoadItemsAsync(); }, $"{count}件のラベルを変更しました。"); }
+    private Task ReapplyAsync() { var groups = _items.Where(x => _selected.Contains(x.Id)).GroupBy(x => x.SessionId).ToArray(); var count = _selected.Count; return RunAsync(async () => { if (_profile is null) return; foreach (var group in groups) await Store.ReapplyCaptureRulesAsync(group.Key, group.Select(x => x.Id).ToArray(), _profile.Rules); _selected.Clear(); CloseEditors(); await LoadItemsAsync(); }, $"選択した{count}件へルールを再適用しました。"); }
     private void FindProcesses() => _processes = CaptureService.GetProcesses();
     private Task ConnectAsync() => RunAsync(async () => { await CaptureService.SelectProcessAsync(_processId); _snapshot = CaptureService.Snapshot; });
     private static string RoleName(CaptureRole role) => role switch { CaptureRole.Body => "本文", CaptureRole.Name => "キャラ名", _ => "未選択" };
@@ -369,12 +453,12 @@
     private Task SaveLabelAsync() => RunAsync(async () => { if (_profile is null) return; await Store.SaveCaptureLabelAsync(_profile.Id, _labelName, _labelKind, _labelEditId == 0 ? null : _labelEditId); _labels = await Store.GetCaptureLabelsAsync(_profile.Id); await LoadItemsAsync(); }, "ラベルを保存しました。");
     private bool IsNarration(long id) => _labels.FirstOrDefault(x => x.Id == id)?.Kind == CaptureKind.Narration;
     private void Edit(CaptureTextItem item) { _edit = item; _editLabel = item.LabelId ?? 0; _editSpeaker = item.Speaker ?? ""; _following = false; _focusEditor = true; }
-    private Task SaveEditAsync() => RunAsync(async () => { if (_edit is null) return; await Store.SetCaptureLabelsAsync(_sessionId, [_edit.Id], _editLabel == 0 ? null : _editLabel); await Store.SetCaptureSpeakerAsync(_sessionId, _edit.Id, IsNarration(_editLabel) ? null : _editSpeaker); CloseEditors(); await LoadItemsAsync(); }, "修正を保存しました。");
+    private Task SaveEditAsync() => RunAsync(async () => { if (_edit is null) return; await Store.SetCaptureLabelsAsync(_edit.SessionId, [_edit.Id], _editLabel == 0 ? null : _editLabel); await Store.SetCaptureSpeakerAsync(_edit.SessionId, _edit.Id, IsNarration(_editLabel) ? null : _editSpeaker); CloseEditors(); await LoadItemsAsync(); }, "修正を保存しました。");
     private Task OpenPartitionAsync(CaptureTextItem item) => RunAsync(async () =>
     {
         _partition = item; _following = false;
         _focusEditor = true;
-        var original = (await Store.GetCaptureItemsAsync(_sessionId, 0)).Where(x => x.Sequence == item.Sequence).ToArray();
+        var original = (await Store.GetCaptureItemsAsync(item.SessionId, 0)).Where(x => x.Sequence == item.Sequence).ToArray();
         _boundaries.Clear(); _boundaries.AddRange(original.SkipLast(1).Select(x => x.Start + x.Length));
         _parts = original.Select(x => new PartDraft { Text = x.Text, Label = x.LabelId ?? 0, Speaker = x.Speaker ?? "" }).ToList();
     });
@@ -386,17 +470,17 @@
     }
     private Task AddBoundaryAsync() => RunAsync(async () => { if (_partition is null || _module is null) return; var position = await _module.InvokeAsync<int>("selectionStart", _rawInput); var next = _boundaries.Append(position).Distinct().Order().ToArray(); ScenarioTextProcessor.ValidateBoundaries(_partition.RawText, next); _boundaries.Clear(); _boundaries.AddRange(next); RebuildParts(); });
     private void RemoveBoundary(int index) { _boundaries.RemoveAt(index); RebuildParts(); }
-    private Task SavePartitionAsync() => RunAsync(async () => { if (_partition is null) return; await Store.SplitCaptureEventAsync(_sessionId, _partition.Sequence, _boundaries.ToArray(), _parts.Select(x => new CaptureManualPart(x.Label == 0 ? null : x.Label, IsNarration(x.Label) ? null : string.IsNullOrWhiteSpace(x.Speaker) ? null : x.Speaker.Trim())).ToArray()); CloseEditors(); _selected.Clear(); await LoadItemsAsync(); }, "原文を保持したまま分割・分類を保存しました。");
-    private void CloseEditors() { _edit = null; _partition = null; _settingsOpen = false; _bulkOpen = false; _restoreFocus = true; }
+    private Task SavePartitionAsync() => RunAsync(async () => { if (_partition is null) return; await Store.SplitCaptureEventAsync(_partition.SessionId, _partition.Sequence, _boundaries.ToArray(), _parts.Select(x => new CaptureManualPart(x.Label == 0 ? null : x.Label, IsNarration(x.Label) ? null : string.IsNullOrWhiteSpace(x.Speaker) ? null : x.Speaker.Trim())).ToArray()); CloseEditors(); _selected.Clear(); await LoadItemsAsync(); }, "原文を保持したまま分割・分類を保存しました。");
+    private void CloseEditors() { _edit = null; _partition = null; _settingsOpen = false; _bulkOpen = false; _rangeSelection = null; _restoreFocus = true; }
     [JSInvokable] public void CloseEditorFromKeyboard() { if (!_busy) { CloseEditors(); StateHasChanged(); } }
     private Task ExportAsync() => RunAsync(async () =>
     {
         if (_profile is null) return;
         long? label = long.TryParse(_filter, out var id) ? id : null;
-        var items = await Store.GetCaptureItemsAsync(_sessionId, 0, 0, label, _filter == "none");
+        var items = await Store.GetGameCaptureItemsAsync(_profileId, 0, 0, label, _filter == "none", rangeId: _rangeId == 0 ? null : _rangeId);
         var folder = await Picker.PickFolderPathAsync("TXTの保存先フォルダを選択");
         if (folder is null) return;
-        var title = string.Concat(_profile.Title.Select(x => Path.GetInvalidFileNameChars().Contains(x) ? '_' : x));
+        var title = string.Concat((_profile.Title + (_ranges.FirstOrDefault(x => x.Id == _rangeId) is { } range ? "-" + range.Name : "")).Select(x => Path.GetInvalidFileNameChars().Contains(x) ? '_' : x));
         var path = Path.Combine(folder, $"{title}-{DateTime.Now:yyyyMMdd-HHmmss-fff}.txt");
         await using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write);
         await using var writer = new StreamWriter(file, new UTF8Encoding(false));

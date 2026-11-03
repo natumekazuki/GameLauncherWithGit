@@ -28,6 +28,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
     private long _lost;
     private CaptureProfile? _profile;
     private long? _session;
+    private CapturePosition? _lastBodyPosition, _rangeStart;
     private Process? _body;
     private bool _active;
     private bool _finishing;
@@ -63,7 +64,8 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
                 Received = _received,
                 Saved = _saved,
                 Lost = _lost,
-                Candidates = _candidates.Values.ToArray()
+                Candidates = _candidates.Values.ToArray(),
+                RangeStart = _rangeStart
             };
         }
     }
@@ -83,6 +85,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
             {
                 _profile = profile; _session = session; _active = true; _connected = false; _needsProcess = true;
                 _sequence = _received = _saved = _lost = 0; _status = "ゲーム本体を選択してください";
+                _lastBodyPosition = new(session, 0, 0); _rangeStart = null;
                 _speakerPending.Clear();
                 _buffer.Clear(); _candidates.Clear(); _attempted.Clear(); _currentSelections.Clear(); _bufferBytes = 0;
             }
@@ -184,6 +187,42 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
         var size = received.Text.Length * 2;
         if (_pendingBytes + size > MaxBytes || !_writes.Writer.TryWrite(new(session, received, rules))) { Lose("save-queue"); return; }
         _pendingBytes += size;
+        if (received.Role == CaptureRole.Body && received.Text.Length > 0)
+        {
+            var position = new CapturePosition(session, received.Sequence, received.Text.Length);
+            if (_lastBodyPosition is null || position.CompareTo(_lastBodyPosition) > 0) _lastBodyPosition = position;
+        }
+    }
+
+    public void StartRange()
+    {
+        lock (_gate)
+        {
+            if (!_active || !_connected || _lastBodyPosition is null) throw new InvalidOperationException("取得中のゲームで区間を開始してください。");
+            if (_rangeStart is not null) throw new InvalidOperationException("指定中の区間を終了または取り消してください。");
+            _rangeStart = _lastBodyPosition;
+        }
+    }
+
+    public CaptureRangeSelection EndRange()
+    {
+        lock (_gate)
+        {
+            if (_rangeStart is null || _lastBodyPosition is null || _profile is null) throw new InvalidOperationException("区間の開始を指定してください。");
+            if (_rangeStart.CompareTo(_lastBodyPosition) >= 0) throw new InvalidOperationException("開始後の本文がまだ届いていません。");
+            var selection = new CaptureRangeSelection(_profile.Id, _rangeStart, _lastBodyPosition);
+            _rangeStart = null;
+            return selection;
+        }
+    }
+
+    public void CancelRange() { lock (_gate) _rangeStart = null; }
+
+    public async Task FlushPendingAsync()
+    {
+        var barrier = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await _writes.Writer.WriteAsync(new(0, null, new(), barrier));
+        await barrier.Task;
     }
 
     private (CaptureRole Role, long? Label) Selection(CaptureSource source, CaptureRules rules)
@@ -302,6 +341,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
         {
             if (!_active) return;
             _active = false; _finishing = true; _connected = false; _needsProcess = false;
+            _rangeStart = null;
             body = _body; _body = null; session = _session;
             if (!_status.Contains("失敗")) _status = "取得終了";
             _buffer.Clear(); _bufferBytes = 0;
@@ -314,9 +354,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
                 _host.Detach(body.Id);
                 body.Dispose();
             }
-            var barrier = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            await _writes.Writer.WriteAsync(new(session ?? 0, null, new(), barrier));
-            await barrier.Task;
+            await FlushPendingAsync();
             if (session is { } id)
             {
                 await ResolvePendingAsync(DateTimeOffset.UtcNow);

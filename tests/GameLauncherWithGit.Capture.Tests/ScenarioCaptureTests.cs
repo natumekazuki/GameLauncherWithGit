@@ -273,6 +273,173 @@ public sealed class ScenarioCaptureTests : IDisposable
         Assert.Equal("美咲", item?.Speaker);
     }
 
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "ゲーム全体の本文とTXTは複数取得回を受信順に含み区間外や他ゲームを混同しない"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#ゲーム単位の本文と任意区間" }
+    // fault = "最新回だけを読む、受信時刻で順序を変える、または区間作成で範囲外を消す"
+    // observable = "全体と区間の本文順、手動話者、ラベル条件、全件とページの件数、再読込した区間"
+    // observation_boundary = "public-boundary"
+    // scope = "game-wide SQLite read, range and TXT"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task GameLogAndRangeSpanAcquisitionsWithoutRemovingOutsideText()
+    {
+        var (profile, first) = await StartAsync();
+        await _store.AppendCaptureAsync(first, Receive(2, "「一章」"), new());
+        await _store.AppendCaptureAsync(first, Receive(1, "範囲の前"), new());
+        var old = (await _store.GetCaptureItemsAsync(first))[1];
+        await _store.SetCaptureSpeakerAsync(first, old.Id, "手動名");
+        await _store.EndCaptureSessionAsync(first);
+        var second = await _store.BeginCaptureSessionAsync(profile.Id);
+        await _store.AppendCaptureAsync(second, Receive(1, "「二章」", time: DateTimeOffset.UtcNow.AddDays(-1)), new());
+        for (var i = 2; i <= 205; i++) await _store.AppendCaptureAsync(second, Receive(i, $"範囲の後{i}"), new());
+        await _store.UpsertAsync(new("other", "別作品", "other.exe", null, null, null, GameCardStatus.Unknown));
+        var other = await _store.GetOrCreateCaptureProfileAsync("other");
+        var otherSession = await _store.BeginCaptureSessionAsync(other.Id);
+        await _store.AppendCaptureAsync(otherSession, Receive(1, "別作品の本文"), new());
+        Assert.Empty(await _store.GetCaptureRangesAsync(profile.Id));
+        var beforeRangeSchema = await _store.GetGameCaptureItemsAsync(profile.Id, 0);
+        // Model an existing capture database without the additive range table, using only this test's database.
+        await using (var connection = new SqliteConnection($"Data Source={Path.Combine(_directory, "library.db")}"))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = "DROP TABLE CaptureRanges";
+            await command.ExecuteNonQueryAsync();
+        }
+        var upgraded = new SqliteGameLibraryStore(NullLogger<SqliteGameLibraryStore>.Instance, Path.Combine(_directory, "library.db"));
+        Assert.Equal(beforeRangeSchema, await upgraded.GetGameCaptureItemsAsync(profile.Id, 0));
+        Assert.Empty(await upgraded.GetCaptureRangesAsync(profile.Id));
+        var end = (await _store.GetCaptureItemsAsync(second))[0].EndPosition;
+        var id = await _store.SaveCaptureRangeAsync(profile.Id, " 自由な章名 ", old.StartPosition, end);
+        await _store.SaveCaptureRangeAsync(profile.Id, "自由な章名", new(first, 0, 0), end);
+        var all = await _store.GetGameCaptureItemsAsync(profile.Id, 0);
+        Assert.Equal(207, all.Count);
+        Assert.Equal(new[] { "範囲の前", "「一章」", "「二章」" }, all.Take(3).Select(x => x.Text));
+        Assert.Equal(200, (await _store.GetGameCaptureItemsAsync(profile.Id)).Count);
+        Assert.Equal(all.Skip(7).Select(x => x.Id), (await _store.GetGameCaptureItemsAsync(profile.Id, latest: true)).Select(x => x.Id));
+        Assert.Equal(all.Skip(200).Select(x => x.Id), (await _store.GetGameCaptureItemsAsync(profile.Id, offset: 200)).Select(x => x.Id));
+        var range = await _store.GetGameCaptureItemsAsync(profile.Id, 0, rangeId: id);
+        Assert.Equal(new[] { "「一章」", "「二章」" }, range.Select(x => x.Text));
+        Assert.Equal("手動名", range[0].Speaker);
+        var dialogue = Assert.Single(await _store.GetCaptureLabelsAsync(profile.Id), x => x.Kind == CaptureKind.Dialogue);
+        Assert.Equal(range.Select(x => x.Id), (await _store.GetGameCaptureItemsAsync(profile.Id, 0, labelId: dialogue.Id, rangeId: id)).Select(x => x.Id));
+        var narration = Assert.Single(await _store.GetCaptureLabelsAsync(profile.Id), x => x.Kind == CaptureKind.Narration);
+        Assert.Empty(await _store.GetGameCaptureItemsAsync(profile.Id, 0, labelId: narration.Id, rangeId: id));
+        var txt = ScenarioTextProcessor.FormatTxt(range);
+        Assert.Contains("[セリフ：手動名]", txt); Assert.Contains("「二章」", txt);
+        Assert.DoesNotContain("範囲の", txt); Assert.DoesNotContain("別作品", txt);
+        Assert.Equal(205, (await _store.GetGameCaptureItemsAsync(profile.Id, 0, unclassifiedOnly: true)).Count);
+        var reopened = new SqliteGameLibraryStore(NullLogger<SqliteGameLibraryStore>.Instance, Path.Combine(_directory, "library.db"));
+        Assert.Equal(2, (await reopened.GetCaptureRangesAsync(profile.Id)).Count);
+        Assert.All(await reopened.GetCaptureRangesAsync(profile.Id), x => Assert.Equal("自由な章名", x.Name));
+        Assert.Equal(all, await reopened.GetGameCaptureItemsAsync(profile.Id, 0));
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "区間は可変item IDではなく原文位置に結び付き再分割後も同じ文字だけを表示し出力する"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#ゲーム単位の本文と任意区間" }
+    // fault = "item再生成で区間が消える、または再分割後のitem全体へ範囲を広げる"
+    // observable = "item ID変更後の区間の文字列とTXT、範囲外を含む全体原文"
+    // observation_boundary = "public-boundary"
+    // scope = "raw-position range persistence and clipping"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task RangeKeepsExactRawPositionsAfterRepartition()
+    {
+        var (profile, session) = await StartAsync();
+        await _store.AppendCaptureAsync(session, Receive(1, "前ABC後"), new());
+        var original = Assert.Single(await _store.GetGameCaptureItemsAsync(profile.Id));
+        var id = await _store.SaveCaptureRangeAsync(profile.Id, "中間", new(session, 1, 1), new(session, 1, 4));
+        await _store.SplitCaptureEventAsync(session, 1, [2], [new(null, null), new(null, null)]);
+        var parts = await _store.GetGameCaptureItemsAsync(profile.Id, 0, rangeId: id);
+        Assert.DoesNotContain(parts, x => x.Id == original.Id);
+        Assert.Equal(new[] { "A", "BC" }, parts.Select(x => x.Text));
+        Assert.Equal("前ABC後", string.Concat((await _store.GetGameCaptureItemsAsync(profile.Id)).Select(x => x.Text)));
+        Assert.Equal("[未判定]" + Environment.NewLine + "A" + Environment.NewLine + Environment.NewLine
+            + "[未判定]" + Environment.NewLine + "BC" + Environment.NewLine, ScenarioTextProcessor.FormatTxt(parts));
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "区間の保存は同じゲームの有効な文字境界と非空範囲と名前を検証し失敗を保存済みにしない"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#ゲーム単位の本文と任意区間" }
+    // fault = "他ゲームや未保存本文や文字途中の境界を受理する、または失敗時に部分区間を残す"
+    // observable = "無効指定の例外と区間0件、元の本文の保持、別ゲームからの範囲読出し拒否"
+    // observation_boundary = "public-boundary"
+    // scope = "range write and owner validation"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task InvalidRangeDoesNotWriteOrChangeText()
+    {
+        var (profile, session) = await StartAsync();
+        await _store.AppendCaptureAsync(session, Receive(1, "🌅e\u0301朝"), new());
+        var item = Assert.Single(await _store.GetGameCaptureItemsAsync(profile.Id));
+        await _store.UpsertAsync(new("other", "別", "other.exe", null, null, null, GameCardStatus.Unknown));
+        var other = await _store.GetOrCreateCaptureProfileAsync("other");
+        var otherSession = await _store.BeginCaptureSessionAsync(other.Id);
+        await _store.AppendCaptureAsync(otherSession, Receive(1, "別"), new());
+        foreach (var bad in new[] { new CapturePosition(session, 1, 1), new(session, 1, 3), new(session, 9, 0), new(otherSession, 1, 0) })
+            await Assert.ThrowsAsync<ArgumentException>(() => _store.SaveCaptureRangeAsync(profile.Id, "章", bad, item.EndPosition));
+        await Assert.ThrowsAsync<ArgumentException>(() => _store.SaveCaptureRangeAsync(profile.Id, "章", item.StartPosition, new(otherSession, 1, 1)));
+        await Assert.ThrowsAsync<ArgumentException>(() => _store.SaveCaptureRangeAsync(profile.Id, "章", item.EndPosition, item.StartPosition));
+        await Assert.ThrowsAsync<ArgumentException>(() => _store.SaveCaptureRangeAsync(profile.Id, "章", item.EndPosition, item.EndPosition));
+        foreach (var name in new[] { " ", "章\n名" })
+            await Assert.ThrowsAsync<ArgumentException>(() => _store.SaveCaptureRangeAsync(profile.Id, name, item.StartPosition, item.EndPosition));
+        Assert.Empty(await _store.GetCaptureRangesAsync(profile.Id));
+        Assert.Equal(item, Assert.Single(await _store.GetGameCaptureItemsAsync(profile.Id)));
+        var id = await _store.SaveCaptureRangeAsync(profile.Id, "章", item.StartPosition, item.EndPosition);
+        await Assert.ThrowsAsync<ArgumentException>(() => _store.GetGameCaptureItemsAsync(other.Id, rangeId: id));
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "プレイ中の区間は開始後から終了までの受理済み本文に固定され取消や未完了終了でも本文保存を止めない"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#ゲーム単位の本文と任意区間" }
+    // fault = "開始前や終了後を区間に混ぜる、未完了を自動保存する、または取消で原文まで捨てる"
+    // observable = "固定された区間本文、全体本文、二重開始と空終了の拒否、取消と終了後のdraft状態"
+    // observation_boundary = "public-boundary"
+    // scope = "capture service live range and writer barrier"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task LiveRangeFixesReceivedPositionsWithoutControllingCapture()
+    {
+        var (profile, _) = await StartAsync();
+        var host = new FakeHost();
+        await using var manager = new ScenarioCaptureService(_store, host, NullLogger<ScenarioCaptureService>.Instance);
+        Assert.Throws<InvalidOperationException>(manager.StartRange);
+        await manager.BeginGameAsync("game"); await manager.SelectProcessAsync(Environment.ProcessId);
+        var source = Source with { ProcessId = (uint)Environment.ProcessId };
+        await manager.SaveRulesAsync(new() { Selections = [new(source.HookCode, source.HookName, source.Context, source.Context2, CaptureRole.Body)] });
+        manager.StartRange();
+        Assert.Throws<InvalidOperationException>(manager.StartRange);
+        Assert.Throws<InvalidOperationException>(() => manager.EndRange());
+        Assert.NotNull(manager.Snapshot.RangeStart);
+        host.Emit(source, "先頭の区間");
+        var first = manager.EndRange();
+        host.Emit(source, "区間外");
+        manager.StartRange(); host.Emit(source, "区間内");
+        var second = manager.EndRange();
+        host.Emit(source, "終了後");
+        await manager.FlushPendingAsync();
+        var firstId = await _store.SaveCaptureRangeAsync(profile.Id, "先頭", first.Start, first.End);
+        var secondId = await _store.SaveCaptureRangeAsync(profile.Id, "途中", second.Start, second.End);
+        Assert.Equal("先頭の区間", Assert.Single(await _store.GetGameCaptureItemsAsync(profile.Id, rangeId: firstId)).Text);
+        Assert.Equal("区間内", Assert.Single(await _store.GetGameCaptureItemsAsync(profile.Id, rangeId: secondId)).Text);
+        manager.StartRange(); manager.CancelRange(); Assert.Null(manager.Snapshot.RangeStart);
+        manager.StartRange(); host.Emit(source, "未完了でも保存する本文");
+        await manager.FinishAsync();
+        Assert.Null(manager.Snapshot.RangeStart);
+        Assert.Equal(2, (await _store.GetCaptureRangesAsync(profile.Id)).Count);
+        Assert.Equal(new[] { "先頭の区間", "区間外", "区間内", "終了後", "未完了でも保存する本文" }, (await _store.GetGameCaptureItemsAsync(profile.Id)).Select(x => x.Text));
+    }
+
     private sealed class FakeHost : ILunaCaptureHost
     {
         public event Action<CaptureSource, string>? Output;
@@ -311,7 +478,7 @@ public sealed class ScenarioCaptureTests : IDisposable
             await using var command = connection.CreateCommand();
             command.CommandText = """
                 PRAGMA foreign_keys=OFF;
-                DROP TABLE CaptureItems; DROP TABLE CaptureEvents; DROP TABLE CaptureSources;
+                DROP TABLE CaptureRanges; DROP TABLE CaptureItems; DROP TABLE CaptureEvents; DROP TABLE CaptureSources;
                 DROP TABLE CaptureSessions; DROP TABLE CaptureLabels; DROP TABLE CaptureGames;
                 """;
             await command.ExecuteNonQueryAsync();
