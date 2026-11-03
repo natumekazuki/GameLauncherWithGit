@@ -1,0 +1,5 @@
+.capture-preference label { display:flex; align-items:center; gap:.5rem; }
+.capture-preference input[type=checkbox] { width:1rem; height:1rem; margin:0; padding:0; accent-color:#85b4ff; flex-shrink:0; }
+.capture-preference p { color:#ffc3c3; }
+.capture-preference-feedback { height:2.5rem; overflow:auto; margin-top:.25rem; font-size:.8rem; line-height:1.5; color:#adbed5; }
+.capture-preference-feedback p { margin:0; }

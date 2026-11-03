@@ -6,10 +6,17 @@
 .capture-header a { color:#a7c7ff; text-decoration:none; }
 .capture-tabs { display:flex; gap:.5rem; }
 .capture-tabs [aria-pressed=true] { border-color:#8db8ff; background:#253c5a; }
-.capture-status { padding:.75rem 1rem; background:#142239; border-radius:8px; margin-bottom:1rem; }
-.capture-layout { display:grid; grid-template-columns:minmax(0,1fr) minmax(250px,320px); gap:1.5rem; align-items:start; }
+.capture-status { display:grid; grid-template-columns:minmax(0,1fr) auto auto; grid-template-rows:1.4rem 1.4rem; gap:.25rem .65rem; padding:.65rem 1rem; background:#142239; border-radius:8px; margin-bottom:1rem; height:4.5rem; overflow:auto; }
+.capture-status strong { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.capture-status .capture-warning { grid-column:1 / -1; font-size:.8rem; }
+.capture-count { font-variant-numeric:tabular-nums; }
+.capture-layout { min-width:0; }
 .capture-content { min-width:0; }
+.capture-content-live { display:grid; grid-template-columns:minmax(12rem,20rem) minmax(0,1fr); column-gap:1rem; align-items:end; }
+.capture-content-live .capture-bulk,.capture-content-live .capture-feed { grid-column:1 / -1; }
+.capture-content-live .capture-toolbar { margin-bottom:1rem; }
 .capture-filters { display:grid; grid-template-columns:1fr 1.3fr 1fr; gap:.65rem; margin-bottom:1rem; }
+.capture-filters-live { grid-template-columns:minmax(12rem,20rem); }
 label { display:flex; flex-direction:column; gap:.3rem; font-size:.9rem; }
 label:has(input[type=checkbox]) { flex-direction:row; align-items:center; }
 input:not([type=checkbox]),select,textarea { background:#101d30; color:#e6edf7; border:1px solid #41516b; border-radius:5px; padding:.5rem; min-width:0; width:100%; }
@@ -18,32 +25,61 @@ input[type=checkbox] { width:1rem; height:1rem; accent-color:#85b4ff; }
 .capture-tabs button { white-space:nowrap; }
 button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,a:focus-visible,summary:focus-visible,.capture-feed:focus-visible { outline:2px solid #a4c8ff; outline-offset:3px; }
 .capture-toolbar { margin-bottom:.8rem; }
+.capture-follow-state { width:8rem; color:#adbed5; font-size:.85rem; }
+.capture-export { margin-left:auto; }
 .capture-bulk { font-size:.85rem; padding:.65rem 0; border-top:1px solid #30415a; }
-.capture-bulk select { max-width:150px; }
-.capture-feed { overflow:auto; max-height:70vh; min-height:24rem; border:1px solid #30415a; border-radius:8px; background:#0f1929; }
+.capture-selection-count { width:5.5rem; font-variant-numeric:tabular-nums; }
+.capture-hint { color:#adbed5; margin-left:auto; font-size:.8rem; }
+.capture-feed { overflow:auto; height:60vh; min-height:18rem; border:1px solid #30415a; border-radius:8px; background:#0f1929; scrollbar-gutter:stable; overflow-anchor:none; }
 .capture-item { padding:1rem 1.1rem; border-bottom:1px solid #27364d; }
 .capture-item:last-child { border-bottom:0; }
-.capture-item header { font-size:.8rem; color:#c0cee0; }
+.capture-item header { display:grid; grid-template-columns:1rem minmax(4rem,8rem) minmax(6rem,1fr) 6rem auto auto; font-size:.8rem; color:#c0cee0; }
+.capture-item header strong,.capture-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .capture-item header button { padding:.25rem .5rem; font-size:.8rem; }
 .capture-item p,.capture-raw,.capture-part p { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.8; margin:.65rem 0 0; }
+.capture-item p { max-width:76ch; }
 .capture-label { color:#aecaff; }
 .capture-manual { color:#d5b98f; font-size:.75rem; }
 .capture-empty { padding:2rem 1rem; color:#adbed5; }
-.capture-settings { border-left:1px solid #30415a; padding-left:1.2rem; min-width:0; }
-.capture-settings section { margin-bottom:1.5rem; }
+.capture-settings { display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; min-width:0; }
+.capture-settings section { min-width:0; padding-bottom:1rem; border-bottom:1px solid #30415a; }
 .capture-settings h2 { font-size:1rem; margin:0 0 .75rem; }
 .capture-settings label,.capture-settings textarea,.capture-settings select,.capture-settings button { margin-bottom:.65rem; }
 .capture-settings small { color:#afbed3; display:block; line-height:1.6; overflow-wrap:anywhere; }
-.capture-settings details { padding:.65rem 0; border-bottom:1px solid #30415a; }
-summary { cursor:pointer; color:#c5d9f7; }
-.capture-candidate summary { display:flex; justify-content:space-between; gap:.5rem; }
-.capture-candidate summary span { font-size:.75rem; color:#a5b5c9; }
-.capture-candidate p { max-height:8rem; overflow:auto; white-space:pre-wrap; font-size:.85rem; }
+.capture-candidate-preview { height:6rem; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.6; font-size:.85rem; padding:.6rem; background:#0f1929; border-radius:5px; }
+.capture-candidate-controls { height:12rem; overflow:auto; }
+.capture-diagnostics { font-family:monospace; }
 .capture-message { color:#b4e5ca; }
 .capture-warning { color:#f0c98a; }
-.capture-error { color:#ffc3c3; padding:.75rem; border:1px solid #9a5353; border-radius:5px; }
-.capture-dialog { width:min(760px,94vw); max-height:90vh; overflow:auto; padding:1.5rem; display:grid; gap:1rem; background:#152238; color:#e6edf7; border:1px solid #52617c; border-radius:10px; }
+.capture-error { color:#ffc3c3; border-color:#9a5353; }
+.capture-feedback { box-sizing:border-box; position:fixed; right:1.5rem; bottom:1.5rem; z-index:2200; display:flex; align-items:start; gap:1rem; max-width:min(34rem,calc(100vw - 3rem)); max-height:10rem; overflow:auto; padding:1rem; background:#152238; border:1px solid; border-radius:8px; box-shadow:0 8px 24px #0006; overflow-wrap:anywhere; }
+.capture-feedback button { width:2rem; min-width:2rem; padding:.2rem; }
+.capture-dialog { width:min(760px,94vw); max-height:90vh; overflow:auto; padding:1.5rem; display:grid; gap:1rem; background:#152238; color:#e6edf7; border:1px solid #52617c; border-radius:10px; scrollbar-gutter:stable; }
+.capture-dialog { box-sizing:border-box; }
+.capture-dialog textarea { resize:none; }
+.capture-dialog h2,.capture-dialog p { margin:0; }
+.capture-dialog-header { display:flex; align-items:center; justify-content:space-between; gap:1rem; }
+.capture-settings-dialog { height:min(780px,90vh); grid-template-rows:auto minmax(0,1fr); overflow:hidden; }
+.capture-dialog-body { overflow:auto; scrollbar-gutter:stable; padding-right:.5rem; }
+.capture-dialog-body { overscroll-behavior:contain; align-content:start; }
 .modal-backdrop { position:fixed; inset:0; z-index:2000; display:flex; align-items:center; justify-content:center; padding:1rem; background:rgba(0,0,0,.65); }
+.capture-parts { height:16rem; overflow:auto; scrollbar-gutter:stable; }
+.capture-partition-dialog { height:min(850px,90vh); grid-template-rows:auto auto 7rem auto minmax(6rem,1fr) auto auto; overflow:hidden; }
+.capture-partition-dialog .capture-parts { height:100%; }
 .capture-part { padding:.75rem; border:1px solid #41516b; border-radius:5px; display:grid; gap:.5rem; }
+.capture-part + .capture-part { margin-top:.65rem; }
 .capture-part p { margin:0; }
-@media(max-width:850px) { .capture-layout { grid-template-columns:1fr; }.capture-settings { border-left:0; border-top:1px solid #30415a; padding:1rem 0; }.capture-filters { grid-template-columns:1fr; }.capture-header { align-items:flex-start; }.capture-feed { min-height:18rem; }.capture-bulk select { max-width:none; } }
+@media(max-width:650px) {
+    .capture-content-live { display:block; }
+    .capture-filters,.capture-settings { grid-template-columns:1fr; }
+    .capture-header { align-items:flex-start; }
+    .capture-bulk { display:grid; grid-template-columns:1fr 5.5rem; }
+    .capture-hint { grid-column:1 / -1; margin-left:0; }
+    .capture-item header { grid-template-columns:1rem minmax(4rem,6rem) minmax(0,1fr); }
+    .capture-manual { grid-column:2; height:1rem; }
+    .capture-edit { grid-column:2; }
+    .capture-dialog { padding:1rem; }
+    .capture-status { grid-template-columns:minmax(0,1fr) auto; grid-template-rows:repeat(3,1.4rem); height:6.25rem; }
+    .capture-count,.capture-status .capture-warning { grid-column:1 / -1; }
+    .capture-feedback { right:1rem; bottom:1rem; max-width:calc(100vw - 2rem); }
+}

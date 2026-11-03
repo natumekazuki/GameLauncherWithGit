@@ -772,11 +772,14 @@ else
                 <div class="editor-field">
                     <label for="editor-title">タイトル</label>
                     <input id="editor-title" @bind="_editorTitle" @bind:event="oninput" />
-                    @if (_isEditMode && _editingGameId is not null)
-                    {
-                        <CapturePreference GameId="@_editingGameId" />
-                    }
                 </div>
+
+                @if (_isEditMode && _editingGameId is not null)
+                {
+                    <div class="editor-field">
+                        <CapturePreference @ref="_capturePreference" GameId="@_editingGameId" Disabled="@_isSaving" />
+                    </div>
+                }
 
                 <div class="editor-field">
                     <label for="editor-executable-path">実行ファイルパス</label>
@@ -1007,6 +1010,7 @@ else
     private bool _editorHasThumbnail;
     private bool _editorClearThumbnail;
     private string _editorSnapshot = string.Empty;
+    private CapturePreference? _capturePreference;
     private bool _isBranchLoading;
     private bool _isBranchSwitching;
     private bool _isBranchCreating;
@@ -1735,7 +1739,7 @@ else
             return;
         }
 
-        if (_editorSnapshot != GetEditorDraft()
+        if ((_editorSnapshot != GetEditorDraft() || (_isEditMode && _capturePreference?.HasChanges is true))
             && !await JS.InvokeAsync<bool>("confirm", "保存していない編集内容を破棄して閉じますか？"))
         {
             return;
@@ -1801,6 +1805,8 @@ else
                             SetNotification("編集対象のゲームが見つかりません。", false);
                             return;
                         }
+
+                        if (_capturePreference is not null) await _capturePreference.SaveAsync();
 
                         SetNotification($"ゲーム設定を更新しました: {updated.Title}", true);
                     }
