@@ -118,7 +118,7 @@ public sealed class LunaCaptureHost(ILogger<LunaCaptureHost> logger) : ILunaCapt
                     {
                         var path = new StringBuilder(32768); var size = path.Capacity;
                         if (QueryFullProcessImageName(handle, 0, path, ref size))
-                            result.Add(new(process.Id, process.ProcessName, path.ToString()));
+                            result.Add(new(process.Id, process.ProcessName, path.ToString(), process.MainWindowTitle));
                     }
                     finally { CloseHandle(handle); }
                 }

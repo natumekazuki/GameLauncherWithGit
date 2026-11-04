@@ -95,7 +95,7 @@ public sealed partial class SqliteGameLibraryStore
         }
         if (created)
         {
-            foreach (var (name, kind) in new[] { ("セリフ", CaptureKind.Dialogue), ("地の文", CaptureKind.Narration), ("その他", CaptureKind.Other) })
+            foreach (var (name, kind) in new[] { ("セリフ", CaptureKind.Dialogue), ("地の文", CaptureKind.Narration) })
             {
                 await using var label = CaptureCommand(connection, transaction,
                     "INSERT INTO CaptureLabels(CaptureGameId,Name,Kind) VALUES($game,$name,$kind)",
@@ -150,21 +150,6 @@ public sealed partial class SqliteGameLibraryStore
         var result = new List<CaptureLabel>();
         while (await reader.ReadAsync()) result.Add(new(reader.GetInt64(0), profileId, reader.GetString(1), (CaptureKind)reader.GetInt32(2)));
         return result;
-    }
-
-    public async Task<long> SaveCaptureLabelAsync(long profileId, string name, CaptureKind kind, long? labelId = null)
-    {
-        name = name.Trim();
-        if (name.Length == 0 || name.Contains('\r') || name.Contains('\n')) throw new ArgumentException("ラベル名を1行で入力してください。");
-        if (!Enum.IsDefined(kind)) throw new ArgumentException("ラベル種別が不正です。");
-        await EnsureInitializedAsync(default);
-        await using var connection = await OpenConnectionAsync(default);
-        await using var command = CaptureCommand(connection, null, labelId is null
-            ? "INSERT INTO CaptureLabels(CaptureGameId,Name,Kind) VALUES($game,$name,$kind) RETURNING Id"
-            : "UPDATE CaptureLabels SET Name=$name WHERE Id=$id AND CaptureGameId=$game RETURNING Id",
-            ("$game", profileId), ("$name", name), ("$kind", (int)kind), ("$id", labelId));
-        var id = await command.ExecuteScalarAsync();
-        return id is long value ? value : throw new InvalidOperationException("ラベルが見つかりません。");
     }
 
     public async Task<long> BeginCaptureSessionAsync(long profileId)

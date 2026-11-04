@@ -47,7 +47,14 @@ public sealed record CaptureTextItem(long Id, long SessionId, long Sequence, Dat
     public CapturePosition EndPosition => new(SessionId, Sequence, Start + Length);
 }
 public sealed record CaptureCandidate(CaptureSource Source, string Text, CaptureRole Role, long? LabelId);
-public sealed record CaptureProcess(int Id, string Name, string Path);
+public sealed record CaptureProcess(int Id, string Name, string Path, string WindowTitle = "")
+{
+    public bool Matches(string search) => string.IsNullOrWhiteSpace(search)
+        || Name.Contains(search.Trim(), StringComparison.OrdinalIgnoreCase)
+        || Path.Contains(search.Trim(), StringComparison.OrdinalIgnoreCase)
+        || WindowTitle.Contains(search.Trim(), StringComparison.OrdinalIgnoreCase)
+        || Id.ToString().Contains(search.Trim(), StringComparison.Ordinal);
+}
 
 public sealed record CaptureSnapshot
 {
@@ -56,6 +63,9 @@ public sealed record CaptureSnapshot
     public string Status { get; init; } = "未接続";
     public bool NeedsProcess { get; init; }
     public bool Connected { get; init; }
+    public bool Preview { get; init; }
+    public bool Connecting { get; init; }
+    public CaptureProcess? Process { get; init; }
     public long Received { get; init; }
     public long Saved { get; init; }
     public long Lost { get; init; }

@@ -74,16 +74,16 @@ public sealed class ScenarioCaptureTests : IDisposable
 
     // @test-value v2
     // kind = "invariant"
-    // claim = "ラベル改名は過去へ反映し再適用は手動ラベルと話者と分割を維持する"
+    // claim = "保存済みの分類名を保持し再適用は手動分類と話者と分割を維持する"
     // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#修正と再適用" }
-    // fault = "ラベル名をitemへ複製する、または再適用で手動値や境界を置換する"
+    // fault = "保存済みの独自分類名を固定名へ書き換える、または再適用で手動値や境界を置換する"
     // observable = "再読込したitemのラベル名・話者・ID・本文とTXT"
     // observation_boundary = "public-boundary"
     // scope = "SQLite reclassification and TXT"
     // lifecycle = "permanent"
     // @end-test-value
     [Fact]
-    public async Task RenameAndReapplyPreserveManualEdits()
+    public async Task ExistingClassificationAndReapplyPreserveManualEdits()
     {
         var (profile, session) = await StartAsync();
         await _store.AppendCaptureAsync(session, Receive(1, "地の文「発言」"), new() { OutsideIsNarration = true });
@@ -92,7 +92,14 @@ public sealed class ScenarioCaptureTests : IDisposable
         var label = Assert.Single(await _store.GetCaptureLabelsAsync(profile.Id), x => x.Kind == CaptureKind.Dialogue);
         await _store.SetCaptureLabelsAsync(session, [dialogue.Id], label.Id);
         await _store.SetCaptureSpeakerAsync(session, dialogue.Id, "美咲");
-        await _store.SaveCaptureLabelAsync(profile.Id, "会話", CaptureKind.Dialogue, label.Id);
+        await using (var connection = new SqliteConnection($"Data Source={Path.Combine(_directory, "library.db")}"))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE CaptureLabels SET Name='会話' WHERE Id=$id";
+            command.Parameters.AddWithValue("$id", label.Id);
+            await command.ExecuteNonQueryAsync();
+        }
         await _store.ReapplyCaptureRulesAsync(session, items.Select(x => x.Id).ToArray(), new() { SplitDialogue = false });
         var updated = await _store.GetCaptureItemsAsync(session);
         var spoken = Assert.Single(updated, x => x.Id == dialogue.Id);
@@ -196,16 +203,16 @@ public sealed class ScenarioCaptureTests : IDisposable
 
     // @test-value v2
     // kind = "invariant"
-    // claim = "OFF起動は接続と新規履歴を作らずONの候補再選択は同一受信を二重保存しない"
+    // claim = "OFF起動は接続と履歴を作らずテスト受信を破棄し確定後の本文だけを一度保存する"
     // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#受信と寿命" }
-    // fault = "OFFでも本体選択を要求する、または選択前bufferを再選択のたびに保存する"
+    // fault = "OFFでも接続する、テスト本文を確定時に保存する、または用途変更で同一受信を二重保存する"
     // observable = "接続要求数、プレイ回件数、元の受信順で保存された本文と終了後の本体生存"
     // observation_boundary = "public-boundary"
-    // scope = "capture manager lifecycle and finite candidate replay"
+    // scope = "capture manager opt-out, preview and confirmation boundary"
     // lifecycle = "permanent"
     // @end-test-value
     [Fact]
-    public async Task ManagerOptOutAndCandidateReplayDoNotInterfereWithBody()
+    public async Task ManagerOptOutAndPreviewRespectRecordingBoundary()
     {
         var (profile, _) = await StartAsync();
         var sessions = (await _store.GetCaptureSessionsAsync(profile.Id)).Count;
@@ -223,13 +230,19 @@ public sealed class ScenarioCaptureTests : IDisposable
         host.Emit(source, "「選択前」");
         var selected = new CaptureRules { Selections = [new(source.HookCode, source.HookName, source.Context, source.Context2, CaptureRole.Body)] };
         await manager.SaveRulesAsync(selected);
+        await manager.FlushPendingAsync();
+        Assert.Null(manager.Snapshot.SessionId);
+        Assert.True(manager.Snapshot.Preview);
+        Assert.Equal(sessions, (await _store.GetCaptureSessionsAsync(profile.Id)).Count);
+        Assert.Null((await _store.GetCaptureProfilesAsync()).Single().BodyExecutablePath);
+        await manager.ConfirmProcessAsync();
         host.Emit(source, "「選択後」");
         await manager.SaveRulesAsync(new());
         await manager.SaveRulesAsync(selected);
         await manager.FinishAsync();
         var items = await _store.GetCaptureItemsAsync(manager.Snapshot.SessionId!.Value);
-        Assert.Equal(new[] { "「選択前」", "「選択後」" }, items.Select(x => x.Text));
-        Assert.Equal(new long[] { 1, 2 }, items.Select(x => x.Sequence));
+        Assert.Equal(new[] { "「選択後」" }, items.Select(x => x.Text));
+        Assert.Equal(new long[] { 1 }, items.Select(x => x.Sequence));
         Assert.Equal(1, host.Connections); Assert.Equal(1, host.Detaches);
         Assert.NotNull((await _store.GetCaptureSessionsAsync(profile.Id))[0].EndedAt);
         using var body = Process.GetCurrentProcess();
@@ -260,6 +273,7 @@ public sealed class ScenarioCaptureTests : IDisposable
             new(body.HookCode, body.HookName, body.Context, body.Context2, CaptureRole.Body),
             new(name.HookCode, name.HookName, name.Context, name.Context2, CaptureRole.Name)] };
         await manager.SaveRulesAsync(rules);
+        await manager.ConfirmProcessAsync();
         host.Emit(body, "「設定変更前の発言」"); host.Emit(name, "美咲");
         await manager.SaveRulesAsync(rules with { Names = [] });
         var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
@@ -417,6 +431,7 @@ public sealed class ScenarioCaptureTests : IDisposable
         await manager.BeginGameAsync("game"); await manager.SelectProcessAsync(Environment.ProcessId);
         var source = Source with { ProcessId = (uint)Environment.ProcessId };
         await manager.SaveRulesAsync(new() { Selections = [new(source.HookCode, source.HookName, source.Context, source.Context2, CaptureRole.Body)] });
+        await manager.ConfirmProcessAsync();
         manager.StartRange();
         Assert.Throws<InvalidOperationException>(manager.StartRange);
         Assert.Throws<InvalidOperationException>(() => manager.EndRange());
@@ -440,14 +455,116 @@ public sealed class ScenarioCaptureTests : IDisposable
         Assert.Equal(new[] { "先頭の区間", "区間外", "区間内", "終了後", "未完了でも保存する本文" }, (await _store.GetGameCaptureItemsAsync(profile.Id)).Select(x => x.Text));
     }
 
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "接続失敗から再試行できプロセスの選び直しは既存本文と確定済みの紐付けを保つ"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#接続と受信確認" }
+    // fault = "失敗後に再接続できない、テスト先を直ちに記憶する、または切替時に既存本文を消す"
+    // observable = "再接続後のsnapshot、確定前後の本体パス、再読込した全本文と取得回の終了"
+    // observation_boundary = "public-boundary"
+    // scope = "capture process retry, confirmation and session separation"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task ProcessRetryAndReselectionPreserveConfirmedHistory()
+    {
+        var (profile, _) = await StartAsync();
+        var host = new FakeHost { FailNextConnection = true };
+        await using var manager = new ScenarioCaptureService(_store, host, NullLogger<ScenarioCaptureService>.Instance);
+        await manager.BeginGameAsync("game");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => manager.SelectProcessAsync(Environment.ProcessId));
+        Assert.False(manager.Snapshot.Connected);
+        Assert.True(manager.Snapshot.NeedsProcess);
+        Assert.Null((await _store.GetCaptureProfilesAsync()).Single().BodyExecutablePath);
+        await manager.SelectProcessAsync(Environment.ProcessId);
+        var source = Source with { ProcessId = (uint)Environment.ProcessId };
+        host.Emit(source, "テスト中の文章");
+        await manager.SaveRulesAsync(new() { Selections = [new(source.HookCode, source.HookName, source.Context, source.Context2, CaptureRole.Body)] });
+        await manager.ConfirmProcessAsync();
+        host.Emit(source, "「確定した本文」");
+        await manager.FlushPendingAsync();
+        var first = manager.Snapshot.SessionId!.Value;
+        host.Path = "C:\\different-game.exe";
+        await manager.SelectProcessAsync(Environment.ProcessId);
+        Assert.True(manager.Snapshot.Preview);
+        Assert.Null(manager.Snapshot.SessionId);
+        Assert.Equal(Environment.ProcessPath, (await _store.GetCaptureProfilesAsync()).Single().BodyExecutablePath);
+        Assert.NotNull((await _store.GetCaptureSessionsAsync(profile.Id)).Single(x => x.Id == first).EndedAt);
+        host.Emit(source, "切替後のテスト");
+        await manager.ConfirmProcessAsync();
+        host.Emit(source, "「切替後の本文」");
+        await manager.FinishAsync();
+        Assert.Equal(host.Path, (await _store.GetCaptureProfilesAsync()).Single().BodyExecutablePath);
+        Assert.Equal(new[] { "「確定した本文」", "「切替後の本文」" }, (await _store.GetGameCaptureItemsAsync(profile.Id, 0)).Select(x => x.Text));
+        using var process = Process.GetCurrentProcess();
+        Assert.False(process.HasExited);
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "ゲーム本体の検索はウィンドウ名・プロセス名・PID・パスを部分一致で探せる"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#接続と受信確認" }
+    // fault = "プロセス名だけを検索する、または英字の大小で該当候補を落とす"
+    // observable = "各検索語と非該当語に対するprocess検索の一致結果"
+    // observation_boundary = "component-behavior"
+    // scope = "capture process search"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public void ProcessSearchFindsWindowNamePidAndPath()
+    {
+        var process = new CaptureProcess(12345, "story-engine", "C:\\Games\\story.exe", "風待ちの街");
+        foreach (var query in new[] { "風待ち", "STORY-ENGINE", "234", "games\\story", "  風待ち  ", "" })
+            Assert.True(process.Matches(query));
+        Assert.False(process.Matches("another-game"));
+    }
+
+    // @test-value v2
+    // kind = "compatibility"
+    // claim = "固定分類での閲覧とTXTは保存済みの独自分類名と同種別の本文を欠かさない"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#原文と分類" }
+    // fault = "分類絞り込みが最初のラベルIDだけを読み同種別の独自名データを除外する"
+    // observable = "再読込した分類名と本文、種別指定の全件・ページ・TXT、非該当種別の結果"
+    // observation_boundary = "public-boundary"
+    // scope = "existing capture label references and fixed-kind retrieval"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task FixedKindFilterKeepsExistingCustomClassification()
+    {
+        var (profile, session) = await StartAsync();
+        long label;
+        await using (var connection = new SqliteConnection($"Data Source={Path.Combine(_directory, "library.db")}"))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = "INSERT INTO CaptureLabels(CaptureGameId,Name,Kind) VALUES($game,'心の声',0) RETURNING Id";
+            command.Parameters.AddWithValue("$game", profile.Id);
+            label = (long)(await command.ExecuteScalarAsync())!;
+        }
+        await _store.AppendCaptureAsync(session, Receive(1, "「発言」"), new());
+        await _store.AppendCaptureAsync(session, Receive(2, "内心") with { LabelId = label }, new());
+        await _store.AppendCaptureAsync(session, Receive(3, "地の文"), new() { OutsideIsNarration = true });
+        var reopened = new SqliteGameLibraryStore(NullLogger<SqliteGameLibraryStore>.Instance, Path.Combine(_directory, "library.db"));
+        var dialogue = await reopened.GetGameCaptureItemsAsync(profile.Id, 0, kind: CaptureKind.Dialogue);
+        Assert.Equal(new[] { "「発言」", "内心" }, dialogue.Select(x => x.Text));
+        Assert.Equal(new[] { "セリフ", "心の声" }, dialogue.Select(x => x.LabelName));
+        Assert.Equal("内心", Assert.Single(await reopened.GetGameCaptureItemsAsync(profile.Id, 1, 1, kind: CaptureKind.Dialogue)).Text);
+        Assert.Equal("地の文", Assert.Single(await reopened.GetGameCaptureItemsAsync(profile.Id, 0, kind: CaptureKind.Narration)).Text);
+        Assert.Contains("[心の声：話者未確定]", ScenarioTextProcessor.FormatTxt(dialogue));
+        Assert.Equal(3, (await reopened.GetGameCaptureItemsAsync(profile.Id, 0)).Count);
+    }
+
     private sealed class FakeHost : ILunaCaptureHost
     {
         public event Action<CaptureSource, string>? Output;
         public event Action<uint, bool>? ConnectionChanged;
         public int Connections, Detaches;
-        public Task ConnectAsync(int processId) { Connections++; ConnectionChanged?.Invoke((uint)processId, true); return Task.CompletedTask; }
+        public bool FailNextConnection;
+        public string Path = Environment.ProcessPath!;
+        public Task ConnectAsync(int processId) { Connections++; if (FailNextConnection) { FailNextConnection = false; throw new InvalidOperationException("test failure"); } ConnectionChanged?.Invoke((uint)processId, true); return Task.CompletedTask; }
         public void Detach(int processId) { Detaches++; ConnectionChanged?.Invoke((uint)processId, false); }
-        public IReadOnlyList<CaptureProcess> GetProcesses() => [new(Environment.ProcessId, "test-body", Environment.ProcessPath!)];
+        public IReadOnlyList<CaptureProcess> GetProcesses() => [new(Environment.ProcessId, "test-body", Path, "テスト用ゲーム")];
         public void Emit(CaptureSource source, string text) => Output?.Invoke(source, text);
     }
 
@@ -488,7 +605,7 @@ public sealed class ScenarioCaptureTests : IDisposable
         Assert.Equal(game, await upgraded.FindByIdAsync("game"));
         Assert.Equal(links, await upgraded.GetByGameIdAsync("game"));
         Assert.Equal(history, (await upgraded.GetLatestByRepositoryIdsAsync(["repo"], 10))["repo"]);
-        Assert.Equal(3, (await upgraded.GetCaptureLabelsAsync(profile.Id)).Count);
+        Assert.Equal(new[] { CaptureKind.Dialogue, CaptureKind.Narration }, (await upgraded.GetCaptureLabelsAsync(profile.Id)).Select(x => x.Kind));
     }
 
     public void Dispose()
