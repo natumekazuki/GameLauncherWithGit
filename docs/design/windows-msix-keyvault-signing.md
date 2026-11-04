@@ -184,7 +184,8 @@ Add-AppxPackage -Path $msix -ForceApplicationShutdown
    - `<ApplicationDisplayVersion>` を更新する（例: `1.1.3`）。
    - `<ApplicationVersion>` をインクリメントする（例: `5` -> `6`）。
 2. `src/GameLauncherWithGit/Platforms/Windows/Package.appxmanifest`
-   - `<Identity ... Version=\"X.Y.Z.0\" />` を `ApplicationDisplayVersion` と整合させる（例: `1.1.3.0`）。
+   - サイドロード用の `<Identity ... Version=\"X.Y.Z.B\" />` は、先頭3項目を `ApplicationDisplayVersion`、末尾 `B` を `ApplicationVersion` と一致させる（例: 表示 `2.1.0`、build `18` なら `2.1.0.18`）。
+   - 同じ表示番号のプレビュー・正式版も公開ごとにbuild番号を増やす。正式版で末尾を `0` に戻さず、生成済みMSIXの番号が直前の配布版より大きいことを確認する。Gitタグにはプレビュー識別子を付けるが、Windows Identityには数値だけを使う。この規則はGitHubからのサイドロード配布用であり、末尾 `0` が必要なMicrosoft Store提出用ではない。
 3. 整合確認コマンド
 ```powershell
 rg -n "ApplicationDisplayVersion|ApplicationVersion" src/GameLauncherWithGit/GameLauncherWithGit.csproj
@@ -193,3 +194,4 @@ rg -n "<Identity .*Version=" src/GameLauncherWithGit/Platforms/Windows/Package.a
 4. リリース前確認
    - `dotnet build src/GameLauncherWithGit/GameLauncherWithGit.csproj -f net9.0-windows10.0.19041.0 -v minimal`
    - 必要に応じて `scripts/publish-windows-msix.ps1` で生成した MSIX のインストール確認を行う。
+   - MSIXを配布する場合は、パッケージ内のIdentity（名前・発行者・番号・architecture）、署名、Lunaの32/64bit部品とライセンスの同梱を確認する。対応ソース一式も添付し、インストール・実ゲーム等の未確認範囲をリリースノートに残す。

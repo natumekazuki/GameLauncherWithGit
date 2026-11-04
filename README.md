@@ -33,6 +33,13 @@
 
 方針の定義は、Issue や Milestone の更新、push、統合、タグ操作、公開の実行許可を代替しない。
 
+### プレビュー公開
+
+- 正式版に向けた確認用として、作業ブランチの確定コミットに `vX.Y.Z-preview.N`（`N` は1から増加）のタグを付け、同じタグで GitHub Release を Prerelease・非Latestとして公開する。プレビュー公開のための `main` 統合は行わず、正式公開時は上記の手順に従う。
+- 番号更新、対象コミットと配布物の確認、`docs/releases/vX.Y.Z-preview.N.md` への変更・互換性・検証結果・未確認事項の記録は正式版と同じく必要。既知の制限と後追い Issue を明示し、未確認を確認済みとして扱わない。プレビューでも利用中のデータは保護する。
+- アプリの表示番号は数値の `X.Y.Z`、サイドロード MSIX は `X.Y.Z.B` とし、`B` は `ApplicationVersion` に合わせる。各公開で `ApplicationVersion` を増やし、同じ `X.Y.Z` のプレビューから正式版へ移る際も末尾を `0` に戻さない。公開済みタグ・パッケージは差し替えず、修正は新しい番号で出す。
+- MSIX とともに、サブモジュール・ネイティブ依存・ライセンス・ビルド手順を含む対応ソース一式を配布する。GitHub 自動生成のソースZIPだけではサブモジュールの内容を含まないため代用しない。公開操作には対象と範囲への明示承認が必要。
+
 ## Windows での UI 確認
 
 Windows、.NET 9 の MAUI 開発環境、Git 2.38.0 以降が必要です。初回はサブモジュールも取得します。
@@ -65,3 +72,16 @@ dotnet test tests/GameLauncherWithGit.Capture.Tests
 ## ライセンス
 
 本体はGPL-3.0-onlyです。[LICENSE](LICENSE)を参照してください。第三者部品の条件は各依存のlicenseと[Third-party notices](THIRD-PARTY-NOTICES.md)に従います。
+
+## 配布ソースからのビルド
+
+Release に添付する `GameLauncherWithGit-vX.Y.Z[-preview.N]-source.zip` は、本体・`library/` のサブモジュール・`native/vendor/` の MinHook と uchardet を含むソース一式です。Git管理情報と秘密鍵は含みません。GitHub 自動生成のソースZIPとは異なります。
+
+Windows の前提環境を用意して展開先で次を実行します。ネイティブ依存は同梱ソースを使い、NuGet と .NET workload の取得にはネットワークが必要です。
+
+```powershell
+./scripts/build-luna-native.ps1
+dotnet build src/GameLauncherWithGit/GameLauncherWithGit.csproj -f net9.0-windows10.0.19041.0 -c Release
+```
+
+MSIX は `scripts/publish-windows-msix.ps1` で生成できます。署名とバージョンの扱いは [Windows 配布運用](docs/design/windows-msix-keyvault-signing.md)に従い、再配布には自身の署名証明書を使用してください。
