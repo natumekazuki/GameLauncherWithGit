@@ -83,10 +83,10 @@ input[type=checkbox] { width:1rem; height:1rem; margin:0; accent-color:#85b4ff; 
 .capture-samples { flex:1; min-height:0; }
 .capture-sample { padding:.8rem 1rem; border-bottom:1px solid #30415a; }
 .capture-sample p,.capture-preview-item p { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.8; }
-.capture-dialog .capture-name-add { display:inline-flex; gap:.4rem; align-items:center; margin-top:.5rem; padding:.4rem .6rem; font-size:.8rem; }
 .capture-source-details { height:3.75rem; flex-shrink:0; overflow:auto; font-size:.8rem; color:#adbed5; }
 .capture-source-details summary { cursor:pointer; margin-bottom:.3rem; }
-.capture-result-grid { grid-template-columns:minmax(0,.75fr) minmax(0,1.25fr); }
+.capture-result-grid { grid-template-columns:1fr; grid-template-rows:auto minmax(0,1fr); }
+.capture-result-grid .capture-rules { max-width:none; flex-direction:row; flex-wrap:wrap; align-items:center; gap:.75rem 1.5rem; }
 .capture-result-panel { display:flex; flex-direction:column; }
 .capture-result-panel h3 small { font-size:.75rem; font-weight:normal; color:#adbed5; }
 .capture-preview-limit { display:block; height:2rem; flex-shrink:0; margin-top:.5rem; }
@@ -102,7 +102,6 @@ input[type=checkbox] { width:1rem; height:1rem; margin:0; accent-color:#85b4ff; 
 .capture-process-action button { align-self:flex-end; }
 .capture-settings-footer { display:flex; align-items:center; justify-content:space-between; gap:1rem; border-top:1px solid #30415a; padding-top:1rem; min-height:3.75rem; }
 .capture-rules { max-width:42rem; display:flex; flex-direction:column; gap:.75rem; }
-.capture-rules textarea { min-height:12rem; }
 .capture-diagnostics { display:block; font-family:monospace; color:#adbed5; overflow-wrap:anywhere; }
 .capture-message { color:#b4e5ca; }
 .capture-error { color:#ffc3c3; border-color:#9a5353; }

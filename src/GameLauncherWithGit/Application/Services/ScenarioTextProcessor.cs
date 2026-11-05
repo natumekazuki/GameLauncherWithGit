@@ -46,7 +46,7 @@ public static class ScenarioTextProcessor
     }
 
     public static Dictionary<long, string?> MatchSpeakers(IReadOnlyList<CaptureReceived> events,
-        IReadOnlyList<CaptureTextItem> items, IReadOnlyCollection<string> names, DateTimeOffset now)
+        IReadOnlyList<CaptureTextItem> items, DateTimeOffset now)
     {
         var result = new Dictionary<long, string?>();
         var dialogue = items.Where(x => x.Kind == CaptureKind.Dialogue || x.Kind is null).ToArray();
@@ -62,7 +62,7 @@ public static class ScenarioTextProcessor
             if (nameEvent.ReceivedAt.AddSeconds(1) > now
                 || dialogue.Count(x => Math.Abs((x.ReceivedAt - nameEvent.ReceivedAt).TotalSeconds) <= 1) != 1) continue;
             var name = nameEvent.Text.Trim();
-            if (names.Contains(name, StringComparer.Ordinal)) result[item.Id] = name;
+            if (name.Length > 0 && !name.Contains('\r') && !name.Contains('\n')) result[item.Id] = name;
         }
         return result;
     }

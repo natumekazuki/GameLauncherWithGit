@@ -15,6 +15,7 @@ public sealed record CaptureRules
     public CaptureSelection[] Selections { get; init; } = [];
     public bool SplitDialogue { get; init; } = true;
     public bool OutsideIsNarration { get; init; }
+    // Preserve stored user entries when saving settings; speaker matching uses the selected name source.
     public string[] Names { get; init; } = [];
 }
 

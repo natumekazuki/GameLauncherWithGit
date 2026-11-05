@@ -44,7 +44,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
     private readonly CancellationTokenSource _stop = new();
     private readonly Task _writerTask, _resolverTask;
     private sealed record WriteWork(long Session, CaptureReceived? Received, CaptureRules Rules, TaskCompletionSource? Barrier = null);
-    private sealed record SpeakerPending(long Session, long Sequence, DateTimeOffset ReceivedAt, CaptureRules Rules);
+    private sealed record SpeakerPending(long Session, long Sequence, DateTimeOffset ReceivedAt);
 
     public ScenarioCaptureService(IScenarioCaptureStore store, ILunaCaptureHost host, ILogger<ScenarioCaptureService> logger)
     {
@@ -98,7 +98,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
                 items.Add(new(items.Count + 1, 0, received.Sequence, received.ReceivedAt, received.Text,
                     segment.Start, segment.Length, label?.Id, label?.Name, label?.Kind, null, false, false, false));
             }
-        var speakers = ScenarioTextProcessor.MatchSpeakers(events, items, rules.Names, DateTimeOffset.UtcNow);
+        var speakers = ScenarioTextProcessor.MatchSpeakers(events, items, DateTimeOffset.UtcNow);
         return items.Select(item => speakers.TryGetValue(item.Id, out var speaker) ? item with { Speaker = speaker } : item).ToArray();
     }
 
@@ -390,7 +390,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
                             _speakerPending.RemoveAt(0);
                             _logger.LogWarning("Speaker matching limit exceeded; text remains saved with unresolved speaker. session={Session}", work.Session);
                         }
-                        _speakerPending.Add(new(work.Session, received.Sequence, received.ReceivedAt, work.Rules));
+                        _speakerPending.Add(new(work.Session, received.Sequence, received.ReceivedAt));
                     }
                 }
             }
@@ -424,14 +424,14 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
             ready = _speakerPending.Where(x => x.ReceivedAt.AddSeconds(2) <= now).ToArray();
             foreach (var item in ready) _speakerPending.Remove(item);
         }
-        foreach (var group in ready.GroupBy(x => (x.Session, x.Rules)))
+        foreach (var group in ready.GroupBy(x => x.Session))
         {
             try
             {
-                await _store.ResolveCaptureSpeakersAsync(group.Key.Session, group.Key.Rules,
+                await _store.ResolveCaptureSpeakersAsync(group.Key,
                 group.Min(x => x.ReceivedAt), now, group.Select(x => x.Sequence).ToArray());
             }
-            catch (Exception ex) { _logger.LogError(ex, "Capture speaker matching failed. session={Session}", group.Key.Session); }
+            catch (Exception ex) { _logger.LogError(ex, "Capture speaker matching failed. session={Session}", group.Key); }
         }
     }
 

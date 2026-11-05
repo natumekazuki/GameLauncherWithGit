@@ -404,14 +404,14 @@ public sealed partial class SqliteGameLibraryStore
         }
         await transaction.CommitAsync();
         var times = all.Where(x => selected.Contains(x.Id)).Select(x => x.ReceivedAt).ToArray();
-        if (times.Length > 0) await ResolveCaptureSpeakersCoreAsync(sessionId, rules, times.Min(),
+        if (times.Length > 0) await ResolveCaptureSpeakersCoreAsync(sessionId, times.Min(),
             DateTimeOffset.UtcNow > times.Max().AddSeconds(2) ? DateTimeOffset.UtcNow : times.Max().AddSeconds(2), changed);
     }
 
-    public Task ResolveCaptureSpeakersAsync(long sessionId, CaptureRules rules, DateTimeOffset since, DateTimeOffset now,
-        IReadOnlyCollection<long>? sequences = null) => ResolveCaptureSpeakersCoreAsync(sessionId, rules, since, now, null, sequences?.ToHashSet());
+    public Task ResolveCaptureSpeakersAsync(long sessionId, DateTimeOffset since, DateTimeOffset now,
+        IReadOnlyCollection<long>? sequences = null) => ResolveCaptureSpeakersCoreAsync(sessionId, since, now, null, sequences?.ToHashSet());
 
-    private async Task ResolveCaptureSpeakersCoreAsync(long sessionId, CaptureRules rules, DateTimeOffset since,
+    private async Task ResolveCaptureSpeakersCoreAsync(long sessionId, DateTimeOffset since,
         DateTimeOffset now, IReadOnlySet<long>? selected, IReadOnlySet<long>? sequences = null)
     {
         await EnsureInitializedAsync(default);
@@ -438,7 +438,7 @@ public sealed partial class SqliteGameLibraryStore
         {
             var processSequences = process.Select(x => x.Sequence).ToHashSet();
             foreach (var (id, speaker) in ScenarioTextProcessor.MatchSpeakers(process.ToArray(),
-                items.Where(x => processSequences.Contains(x.Sequence)).ToArray(), rules.Names, now))
+                items.Where(x => processSequences.Contains(x.Sequence)).ToArray(), now))
             {
                 if (selected is not null && !selected.Contains(id)) continue;
                 if (sequences is not null && !items.Any(x => x.Id == id && sequences.Contains(x.Sequence))) continue;

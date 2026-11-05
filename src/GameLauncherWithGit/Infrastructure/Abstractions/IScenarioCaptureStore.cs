@@ -20,5 +20,5 @@ public interface IScenarioCaptureStore
     Task SetCaptureSpeakerAsync(long sessionId, long itemId, string? speaker);
     Task SplitCaptureEventAsync(long sessionId, long sequence, IReadOnlyList<int> boundaries, IReadOnlyList<CaptureManualPart>? parts = null);
     Task ReapplyCaptureRulesAsync(long sessionId, IReadOnlyCollection<long> itemIds, CaptureRules rules);
-    Task ResolveCaptureSpeakersAsync(long sessionId, CaptureRules rules, DateTimeOffset since, DateTimeOffset now, IReadOnlyCollection<long>? sequences = null);
+    Task ResolveCaptureSpeakersAsync(long sessionId, DateTimeOffset since, DateTimeOffset now, IReadOnlyCollection<long>? sequences = null);
 }

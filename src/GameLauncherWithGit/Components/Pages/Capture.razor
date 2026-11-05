@@ -222,7 +222,6 @@
                                     <div class="capture-sample" @key="sample.Sequence">
                                         <p>@sample.Text</p>
                                         @if (sample.Truncated) { <small class="capture-warning">先頭1500文字</small> }
-                                        <button class="secondary-button capture-name-add @(current.Role != CaptureRole.Name ? "capture-hidden" : "")" title="話者として認識する名前に追加" aria-label="@($"名前に追加：{sample.Text.Trim()}")" disabled="@(_busy || sample.Truncated || string.IsNullOrWhiteSpace(sample.Text) || sample.Text.Trim().Contains('\n') || sample.Text.Trim().Contains('\r') || HasName(sample.Text))" @onclick="() => AddNameAsync(sample.Text)"><CaptureIcon Name="@(HasName(sample.Text) ? "Check" : "Plus")" />@(HasName(sample.Text) ? "登録済み" : "名前に追加")</button>
                                     </div>
                                 }
                             }
@@ -238,7 +237,6 @@
                     <section class="capture-rules"><h3>自動判定</h3>
                         <label><input type="checkbox" @bind="_split" @bind:after="PreviewRulesAsync" /> 「…」はセリフ</label>
                         <label><input type="checkbox" @bind="_outside" @bind:after="PreviewRulesAsync" disabled="@(!_split)" /> 括弧の外は地の文</label>
-                        <label>名前（1行1名）<textarea rows="7" @bind="_names" @bind:after="PreviewRulesAsync"></textarea></label>
                     </section>
                     @if (_live)
                     {
@@ -331,7 +329,7 @@
     private long _profileId, _rangeId, _bulkLabel;
     private int _processId, _offset;
     private bool _live = true, _following = true, _busy, _loading = true, _split = true, _outside;
-    private string _filter = "all", _names = "", _processSearch = "";
+    private string _filter = "all", _processSearch = "";
     private string? _message, _error;
     private bool _windowsOnly = true;
     private int _settingsTab, _windowCountdown;
@@ -457,7 +455,7 @@
         _ranges = _profile is null ? [] : await Store.GetCaptureRangesAsync(_profile.Id);
         _rangeId = 0; _rangeFirst = _rangeLast = null; _pickingRange = false;
         _offset = 0; _selected.Clear(); _filter = "all";
-        if (_profile is not null) { _split = _profile.Rules.SplitDialogue; _outside = _profile.Rules.OutsideIsNarration; _names = string.Join(Environment.NewLine, _profile.Rules.Names); }
+        if (_profile is not null) { _split = _profile.Rules.SplitDialogue; _outside = _profile.Rules.OutsideIsNarration; }
         await LoadItemsAsync();
     }
     private async Task LoadItemsAsync()
@@ -545,14 +543,6 @@
     private void SetSettingsTab(int tab) { CancelWindowPick(); _settingsTab = tab; _focusSettingsTab = true; }
     private void SelectProcess(int id) { CancelWindowPick(); _processId = id; }
     private void ToggleSourcePause() => _pausedCandidates = _pausedCandidates is null ? _snapshot.Candidates : null;
-    private bool HasName(string text) => _profile?.Rules.Names.Contains(text.Trim(), StringComparer.Ordinal) == true;
-    private Task AddNameAsync(string text) => RunAsync(async () =>
-    {
-        if (_profile is null) return;
-        var names = _names.Split(['\r', '\n'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Append(text.Trim()).Distinct(StringComparer.Ordinal).ToArray();
-        await PersistRulesAsync(_profile.Rules with { Names = names });
-        _names = string.Join(Environment.NewLine, names); _snapshot = CaptureService.Snapshot;
-    });
     private void ChangeProcessMode(ChangeEventArgs e) => _windowsOnly = e.Value?.ToString() == "window";
     private Task ConnectAsync() => RunAsync(async () =>
     {
@@ -561,7 +551,7 @@
         finally
         {
             _snapshot = CaptureService.Snapshot; _candidateKey = ""; _pausedCandidates = null; _sourceSearch = ""; _profile = _snapshot.Profile;
-            if (_profile is not null) { _split = _profile.Rules.SplitDialogue; _outside = _profile.Rules.OutsideIsNarration; _names = string.Join(Environment.NewLine, _profile.Rules.Names); }
+            if (_profile is not null) { _split = _profile.Rules.SplitDialogue; _outside = _profile.Rules.OutsideIsNarration; }
         }
         SetSettingsTab(1);
     });
@@ -600,8 +590,7 @@
     private async Task ApplyRulesAsync()
     {
         if (_profile is null) return;
-        await PersistRulesAsync(_profile.Rules with { SplitDialogue = _split, OutsideIsNarration = _outside,
-            Names = _names.Split(['\r', '\n'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Distinct().ToArray() });
+        await PersistRulesAsync(_profile.Rules with { SplitDialogue = _split, OutsideIsNarration = _outside });
         _snapshot = CaptureService.Snapshot;
     }
     private async Task PersistRulesAsync(CaptureRules rules, CaptureSource? selectedSource = null)

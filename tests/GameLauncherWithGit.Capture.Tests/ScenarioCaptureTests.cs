@@ -136,9 +136,9 @@ public sealed class ScenarioCaptureTests : IDisposable
 
     // @test-value v2
     // kind = "invariant"
-    // claim = "名前の後着を許し曖昧な複数発言へ名前を配らない"
+    // claim = "登録なしで名前取得元の単一行を使い、後着を待ち、空・複数行・曖昧な対応を確定しない"
     // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#原文と分類" }
-    // fault = "直前名だけを貼る、窓が閉じる前に確定する、または同じ名を複数発言に使う"
+    // fault = "登録を要求する、名前以外の取得元を使う、空・複数行を採用する、または同じ名を複数発言に使う"
     // observable = "話者照合結果のID別名前値"
     // observation_boundary = "component-behavior"
     // scope = "speaker matching"
@@ -149,21 +149,24 @@ public sealed class ScenarioCaptureTests : IDisposable
     {
         var time = DateTimeOffset.UtcNow;
         var item = new CaptureTextItem(1, 1, 1, time, "「発言」", 0, 4, 1, "セリフ", CaptureKind.Dialogue, null, false, false, false);
-        CaptureReceived[] events = [Receive(1, item.Text, time: time), Receive(2, "美咲", CaptureRole.Name, time.AddMilliseconds(400))];
-        Assert.Empty(ScenarioTextProcessor.MatchSpeakers(events, [item], ["美咲"], time.AddMilliseconds(500)));
-        Assert.Equal("美咲", ScenarioTextProcessor.MatchSpeakers(events, [item], ["美咲"], time.AddSeconds(3))[1]);
+        CaptureReceived[] events = [Receive(1, item.Text, time: time), Receive(2, " 美咲 ", CaptureRole.Name, time.AddMilliseconds(400))];
+        Assert.Empty(ScenarioTextProcessor.MatchSpeakers(events, [item], time.AddMilliseconds(500)));
+        Assert.Equal("美咲", ScenarioTextProcessor.MatchSpeakers(events, [item], time.AddSeconds(3))[1]);
         var second = item with { Id = 2, Sequence = 3, ReceivedAt = time.AddMilliseconds(700) };
-        var ambiguous = ScenarioTextProcessor.MatchSpeakers(events, [item, second], ["美咲"], time.AddSeconds(3));
+        var ambiguous = ScenarioTextProcessor.MatchSpeakers(events, [item, second], time.AddSeconds(3));
         Assert.Equal(new long[] { 1, 2 }, ambiguous.Keys.Order());
         Assert.All(ambiguous.Values, value => Assert.Null(value));
-        Assert.Null(ScenarioTextProcessor.MatchSpeakers([events[0], events[1] with { Text = "美咲寿季" }], [item], ["美咲", "寿季"], time.AddSeconds(3))[1]);
+        foreach (var text in new[] { " ", "美咲\n寿季", "美咲\r寿季" })
+            Assert.Null(ScenarioTextProcessor.MatchSpeakers([events[0], events[1] with { Text = text }], [item], time.AddSeconds(3))[1]);
+        Assert.Null(ScenarioTextProcessor.MatchSpeakers([events[0], events[1] with { Role = CaptureRole.None }], [item], time.AddSeconds(3))[1]);
+        Assert.Null(ScenarioTextProcessor.MatchSpeakers([.. events, events[1] with { Sequence = 3, Text = "寿季" }], [item], time.AddSeconds(3))[1]);
     }
 
     // @test-value v2
     // kind = "invariant"
     // claim = "明示再適用は選択範囲の自動話者だけを再計算し手動未確定と他範囲を維持する"
     // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#修正と再適用" }
-    // fault = "名前ルール変更を全履歴へ適用する、または手動NULLを自動値で置換する"
+    // fault = "再適用を全履歴へ広げる、または手動NULLを自動値で置換する"
     // observable = "再適用後の選択・非選択itemの話者と手動分割した原文"
     // observation_boundary = "public-boundary"
     // scope = "SQLite selected reapply and manual partition"
@@ -175,25 +178,27 @@ public sealed class ScenarioCaptureTests : IDisposable
         var (profile, session) = await StartAsync();
         var time = DateTimeOffset.UtcNow.AddMinutes(-1);
         await _store.AppendCaptureAsync(session, Receive(1, "「最初」", time: time), new());
-        await _store.AppendCaptureAsync(session, Receive(2, "美咲", CaptureRole.Name, time.AddMilliseconds(200)), new());
         await _store.AppendCaptureAsync(session, Receive(3, "「次」", time: time.AddSeconds(5)), new());
         await _store.AppendCaptureAsync(session, Receive(4, "美咲", CaptureRole.Name, time.AddSeconds(5.2)), new());
-        await _store.ResolveCaptureSpeakersAsync(session, new() { Names = ["美咲"] }, time, DateTimeOffset.UtcNow);
+        await _store.ResolveCaptureSpeakersAsync(session, time, DateTimeOffset.UtcNow);
         var before = await _store.GetCaptureItemsAsync(session);
-        Assert.All(before, x => Assert.Equal("美咲", x.Speaker));
+        Assert.Null(before[0].Speaker);
+        Assert.Equal("美咲", before[1].Speaker);
+        await _store.AppendCaptureAsync(session, Receive(2, "寿季", CaptureRole.Name, time.AddMilliseconds(200)), new());
+        await _store.AppendCaptureAsync(session, Receive(5, "別の名前", CaptureRole.Name, time.AddSeconds(5.3)), new());
         await _store.ReapplyCaptureRulesAsync(session, [before[0].Id], new());
         var after = await _store.GetCaptureItemsAsync(session);
-        Assert.Null(after[0].Speaker);
+        Assert.Equal("寿季", after[0].Speaker);
         Assert.Equal("美咲", after[1].Speaker);
-        await _store.SetCaptureLabelsAsync(session, [after[1].Id], null);
-        await _store.SetCaptureSpeakerAsync(session, after[1].Id, null);
-        await _store.ReapplyCaptureRulesAsync(session, [after[1].Id], new() { Names = ["美咲"] });
-        var intentional = Assert.Single(await _store.GetCaptureItemsAsync(session), x => x.Id == after[1].Id);
+        await _store.SetCaptureLabelsAsync(session, [after[0].Id], null);
+        await _store.SetCaptureSpeakerAsync(session, after[0].Id, null);
+        await _store.ReapplyCaptureRulesAsync(session, [after[0].Id], new());
+        var intentional = Assert.Single(await _store.GetCaptureItemsAsync(session), x => x.Id == after[0].Id);
         Assert.Null(intentional.LabelId); Assert.Null(intentional.Speaker);
         var dialogue = Assert.Single(await _store.GetCaptureLabelsAsync(profile.Id), x => x.Kind == CaptureKind.Dialogue);
         await _store.SplitCaptureEventAsync(session, 3, [1], [new(null, null), new(dialogue.Id, "手動名")]);
         var manual = (await _store.GetCaptureItemsAsync(session)).Where(x => x.Sequence == 3).ToArray();
-        await _store.ReapplyCaptureRulesAsync(session, manual.Select(x => x.Id).ToArray(), new() { SplitDialogue = false, Names = ["美咲"] });
+        await _store.ReapplyCaptureRulesAsync(session, manual.Select(x => x.Id).ToArray(), new() { SplitDialogue = false });
         var final = (await _store.GetCaptureItemsAsync(session)).Where(x => x.Sequence == 3).ToArray();
         Assert.Equal(manual.Select(x => (x.Id, x.Start, x.Length)), final.Select(x => (x.Id, x.Start, x.Length)));
         Assert.Null(final[0].LabelId); Assert.Null(final[0].Speaker);
@@ -253,16 +258,16 @@ public sealed class ScenarioCaptureTests : IDisposable
 
     // @test-value v2
     // kind = "invariant"
-    // claim = "名前ルール変更は判定待ちの既受信本文へ遡及せず受信時ルールで話者を確定する"
-    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#修正と再適用" }
-    // fault = "周期照合が最新の名前一覧で保存済み本文を再評価する"
-    // observable = "ルール変更前に届いた本文と名前が保存時設定で対応した話者"
+    // claim = "名前取得元の指定だけで新しい名前も記録し、受信済み用途と保存済み設定データを保持する"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#原文と分類" }
+    // fault = "登録外の名前を拒否する、用途変更を過去へ遡及する、または設定保存で名前配列を失う"
+    // observable = "別々に受信した発言の話者と再読込した設定の名前配列・取得元"
     // observation_boundary = "public-boundary"
     // scope = "capture manager pending speaker matching"
     // lifecycle = "permanent"
     // @end-test-value
     [Fact]
-    public async Task PendingSpeakerMatchingUsesReceivedRules()
+    public async Task SelectedNameSourceAcceptsNewNamesWithoutRegistration()
     {
         await StartAsync();
         var host = new FakeHost();
@@ -271,13 +276,13 @@ public sealed class ScenarioCaptureTests : IDisposable
         await manager.SelectProcessAsync(Environment.ProcessId);
         var body = Source with { ProcessId = (uint)Environment.ProcessId };
         var name = body with { HookName = "name", Address = 101 };
-        var rules = new CaptureRules { Names = ["美咲"], Selections = [
+        var rules = new CaptureRules { Selections = [
             new(body.HookCode, body.HookName, body.Context, body.Context2, CaptureRole.Body),
             new(name.HookCode, name.HookName, name.Context, name.Context2, CaptureRole.Name)] };
         await manager.SaveRulesAsync(rules);
         await manager.ConfirmProcessAsync();
         host.Emit(body, "「設定変更前の発言」"); host.Emit(name, "美咲");
-        await manager.SaveRulesAsync(rules with { Names = [] });
+        await manager.SaveRulesAsync(rules with { Selections = [] });
         var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
         CaptureTextItem? item;
         using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(100));
@@ -287,6 +292,19 @@ public sealed class ScenarioCaptureTests : IDisposable
             item = (await _store.GetCaptureItemsAsync(manager.Snapshot.SessionId!.Value)).SingleOrDefault();
         } while (item?.Speaker is null && DateTimeOffset.UtcNow < deadline);
         Assert.Equal("美咲", item?.Speaker);
+        var storedRules = rules with { Names = ["保存済みの名前"], OutsideIsNarration = true };
+        await manager.SaveRulesAsync(storedRules);
+        host.Emit(body, "「初登場の発言」"); host.Emit(name, "寿季");
+        deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        do
+        {
+            await timer.WaitForNextTickAsync();
+            item = (await _store.GetCaptureItemsAsync(manager.Snapshot.SessionId!.Value)).LastOrDefault();
+        } while (item?.Speaker != "寿季" && DateTimeOffset.UtcNow < deadline);
+        Assert.Equal(new[] { "美咲", "寿季" }, (await _store.GetCaptureItemsAsync(manager.Snapshot.SessionId!.Value)).Select(x => x.Speaker));
+        var savedRules = Assert.Single(await _store.GetCaptureProfilesAsync()).Rules;
+        Assert.Equal(storedRules.Names, savedRules.Names);
+        Assert.Equal(rules.Selections, savedRules.Selections);
     }
 
     // @test-value v2
@@ -599,7 +617,7 @@ public sealed class ScenarioCaptureTests : IDisposable
 
     // @test-value v2
     // kind = "invariant"
-    // claim = "テスト結果は保持例に現在の用途・分割・固定分類・名前ルールを再計算し正式記録と同じ本文とTXTを生成する"
+    // claim = "テスト結果は現在の用途・分割・固定分類を再計算し、名前登録なしで正式記録と同じ話者・本文・TXTを生成する"
     // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#接続と受信確認" }
     // fault = "試験専用の分類や話者処理を使う、ルール変更前の結果を残す、または試験本文を履歴へ保存する"
     // observable = "snapshotの分割・分類・話者・TXTと同じ入力の正式保存結果、試験中のDB本文件数と確定後の原文"
@@ -624,9 +642,6 @@ public sealed class ScenarioCaptureTests : IDisposable
         host.Emit(source, raw); host.Emit(nameSource, " 美咲 ");
         Assert.Equal(new CaptureKind?[] { CaptureKind.Narration, CaptureKind.Dialogue, CaptureKind.Narration }, manager.Snapshot.PreviewItems.Select(x => x.Kind));
         await Task.Delay(2100);
-        Assert.All(manager.Snapshot.PreviewItems, x => Assert.Null(x.Speaker));
-        rules = rules with { Names = ["美咲"] };
-        await manager.SaveRulesAsync(rules);
         var preview = manager.Snapshot.PreviewItems;
         Assert.Equal(raw, string.Concat(preview.Select(x => x.Text)));
         Assert.Equal("美咲", Assert.Single(preview, x => x.Kind == CaptureKind.Dialogue).Speaker);
@@ -635,7 +650,7 @@ public sealed class ScenarioCaptureTests : IDisposable
         foreach (var candidate in manager.Snapshot.Candidates)
             foreach (var sample in candidate.Samples)
                 await _store.AppendCaptureAsync(oracleSession, new(sample.Sequence, sample.ReceivedAt, candidate.Source, sample.Text, candidate.Role, candidate.LabelId), rules);
-        await _store.ResolveCaptureSpeakersAsync(oracleSession, rules, preview[0].ReceivedAt, DateTimeOffset.UtcNow);
+        await _store.ResolveCaptureSpeakersAsync(oracleSession, preview[0].ReceivedAt, DateTimeOffset.UtcNow);
         Assert.Equal(ScenarioTextProcessor.FormatTxt(await _store.GetCaptureItemsAsync(oracleSession)), ScenarioTextProcessor.FormatTxt(preview));
         await manager.SaveRulesAsync(rules with { Selections = [rules.Selections[0] with { Role = CaptureRole.None }, rules.Selections[1]] });
         Assert.Empty(manager.Snapshot.PreviewItems);
