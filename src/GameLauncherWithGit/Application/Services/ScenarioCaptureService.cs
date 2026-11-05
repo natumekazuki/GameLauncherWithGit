@@ -10,6 +10,8 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
 {
     private const int MaxEvents = 1000;
     private const int MaxBytes = 2 * 1024 * 1024;
+    private const int MaxCandidateSamples = 5;
+    private const int MaxSampleLength = 1500;
     private readonly IScenarioCaptureStore _store;
     private readonly ILunaCaptureHost _host;
     private readonly ILogger<ScenarioCaptureService> _logger;
@@ -27,6 +29,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
     private long _saved;
     private long _lost;
     private CaptureProfile? _profile;
+    private IReadOnlyList<CaptureLabel> _labels = [];
     private long? _session;
     private CapturePosition? _lastBodyPosition, _rangeStart;
     private Process? _body;
@@ -70,12 +73,34 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
                 Saved = _saved,
                 Lost = _lost,
                 Candidates = _candidates.Values.ToArray(),
+                PreviewItems = _preview ? BuildPreviewItems() : [],
                 RangeStart = _rangeStart
             };
         }
     }
 
     public IReadOnlyList<CaptureProcess> GetProcesses() => _host.GetProcesses();
+    public CaptureProcess? GetForegroundProcess() => _host.GetForegroundProcess();
+
+    private CaptureTextItem[] BuildPreviewItems()
+    {
+        if (_profile is null) return [];
+        var rules = _profile.Rules;
+        var events = _candidates.Values.SelectMany(candidate => candidate.Samples.Where(sample => !sample.Truncated).Select(sample =>
+            new CaptureReceived(sample.Sequence, sample.ReceivedAt, candidate.Source, sample.Text, candidate.Role, candidate.LabelId)))
+            .OrderBy(x => x.Sequence).ToArray();
+        var items = new List<CaptureTextItem>();
+        foreach (var received in events.Where(x => x.Role == CaptureRole.Body))
+            foreach (var segment in ScenarioTextProcessor.Split(received.Text, rules))
+            {
+                var label = received.LabelId is { } labelId ? _labels.FirstOrDefault(x => x.Id == labelId)
+                    : _labels.FirstOrDefault(x => x.Kind == segment.Kind);
+                items.Add(new(items.Count + 1, 0, received.Sequence, received.ReceivedAt, received.Text,
+                    segment.Start, segment.Length, label?.Id, label?.Name, label?.Kind, null, false, false, false));
+            }
+        var speakers = ScenarioTextProcessor.MatchSpeakers(events, items, rules.Names, DateTimeOffset.UtcNow);
+        return items.Select(item => speakers.TryGetValue(item.Id, out var speaker) ? item with { Speaker = speaker } : item).ToArray();
+    }
 
     public async Task<bool> BeginGameAsync(string gameId)
     {
@@ -83,11 +108,13 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
         {
             var profile = await _store.GetOrCreateCaptureProfileAsync(gameId);
             if (!profile.Enabled) return false;
+            var labels = await _store.GetCaptureLabelsAsync(profile.Id);
             lock (_gate)
                 if (_active || _finishing) { _logger.LogWarning("Capture is already active; second capture skipped. game={Game}", gameId); return false; }
             lock (_gate)
             {
                 _profile = profile; _session = null; _active = true; _connected = false; _needsProcess = true;
+                _labels = labels;
                 _sequence = _received = _saved = _lost = 0; _status = "ゲーム本体を選択してください";
                 _lastBodyPosition = null; _rangeStart = null; _preview = true; _process = null;
                 _speakerPending.Clear();
@@ -125,6 +152,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
         {
             await FinishAsync();
             profile = (await _store.GetCaptureProfilesAsync()).Single(x => x.Id == profile.Id);
+            var labels = await _store.GetCaptureLabelsAsync(profile.Id);
             lock (_gate)
             {
                 _active = true; _connected = false; _needsProcess = false; _preview = true; _session = null;
@@ -132,6 +160,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
                 _process = null; _lastBodyPosition = null;
                 _buffer.Clear(); _candidates.Clear(); _attempted.Clear(); _currentSelections.Clear(); _bufferBytes = 0;
                 _profile = profile;
+                _labels = labels;
             }
             var candidate = GetProcesses().SingleOrDefault(x => x.Id == id)
                 ?? throw new InvalidOperationException("対象プロセスが見つかりません。");
@@ -182,6 +211,8 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
                 _sequence = _received = _saved = _lost = 0;
                 _lastBodyPosition = new(session, 0, 0); _status = "記録中・受信待ち";
                 _buffer.Clear(); _attempted.Clear(); _bufferBytes = 0;
+                foreach (var key in _candidates.Keys.ToArray())
+                    _candidates[key] = _candidates[key] with { Samples = [] };
             }
         }
         catch { await _store.EndCaptureSessionAsync(session); throw; }
@@ -210,13 +241,20 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
         {
             if (!_active || _body?.Id != source.ProcessId || _profile is null) return;
             _received++;
+            var receivedAt = DateTimeOffset.UtcNow;
             if (_candidates.ContainsKey(source.Key) || _candidates.Count < 256)
-                _candidates[source.Key] = new(source, text.Length > 1500 ? text[..1500] : text, CaptureRole.None, null);
+            {
+                var truncated = text.Length > MaxSampleLength;
+                var sample = new CaptureSample(_received, receivedAt, truncated ? text[..MaxSampleLength] : text, truncated);
+                var samples = _candidates.TryGetValue(source.Key, out var previous) ? previous.Samples : [];
+                _candidates[source.Key] = new(source, CaptureRole.None, null)
+                { Samples = samples.TakeLast(MaxCandidateSamples - 1).Append(sample).ToArray() };
+            }
             RefreshCandidates(_profile.Rules);
             if (_preview) { _status = "テスト受信中（保存しません）"; return; }
             if (_session is null) return;
             var (role, label) = Selection(source, _profile.Rules);
-            var received = new CaptureReceived(++_sequence, DateTimeOffset.UtcNow, source, text, role, label);
+            var received = new CaptureReceived(++_sequence, receivedAt, source, text, role, label);
             var size = text.Length * 2L;
             if (size > MaxBytes) { Lose("receive-size"); return; }
             _buffer.AddLast(received); _bufferBytes += (int)size;
@@ -408,6 +446,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
             body = _body; _body = null; session = _session;
             if (!_status.Contains("失敗")) _status = "取得終了";
             _buffer.Clear(); _bufferBytes = 0;
+            _candidates.Clear();
         }
         try
         {

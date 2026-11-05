@@ -103,6 +103,18 @@ public sealed class LunaCaptureHost(ILogger<LunaCaptureHost> logger) : ILunaCapt
 
     public void Detach(int processId) => _detach?.Invoke((uint)processId);
 
+    public CaptureProcess? GetForegroundProcess()
+    {
+        if (!OperatingSystem.IsWindows()) return null;
+        var window = GetForegroundWindow();
+        if (window == 0 || GetWindowThreadProcessId(window, out var pid) == 0 || pid == Environment.ProcessId) return null;
+        var process = GetProcesses().FirstOrDefault(x => x.Id == pid);
+        if (process is null) return null;
+        var title = new StringBuilder(512);
+        GetWindowText(window, title, title.Capacity);
+        return process with { WindowTitle = title.ToString() };
+    }
+
     public IReadOnlyList<CaptureProcess> GetProcesses()
     {
         if (!OperatingSystem.IsWindows()) return [];
@@ -140,6 +152,10 @@ public sealed class LunaCaptureHost(ILogger<LunaCaptureHost> logger) : ILunaCapt
     }
 
     [DllImport("kernel32.dll", SetLastError = true)] private static extern nint OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, int pid);
+    [DllImport("user32.dll")] private static extern nint GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(nint window, out uint processId);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetWindowTextW")]
+    private static extern int GetWindowText(nint window, StringBuilder text, int maximum);
     [DllImport("kernel32.dll")][return: MarshalAs(UnmanagedType.Bool)] private static extern bool CloseHandle(nint handle);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, EntryPoint = "QueryFullProcessImageNameW")]
     [return: MarshalAs(UnmanagedType.Bool)] private static extern bool QueryFullProcessImageName(nint process, int flags, StringBuilder path, ref int size);

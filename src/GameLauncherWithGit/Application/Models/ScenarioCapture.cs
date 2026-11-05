@@ -46,7 +46,11 @@ public sealed record CaptureTextItem(long Id, long SessionId, long Sequence, Dat
     public CapturePosition StartPosition => new(SessionId, Sequence, Start);
     public CapturePosition EndPosition => new(SessionId, Sequence, Start + Length);
 }
-public sealed record CaptureCandidate(CaptureSource Source, string Text, CaptureRole Role, long? LabelId);
+public sealed record CaptureSample(long Sequence, DateTimeOffset ReceivedAt, string Text, bool Truncated = false);
+public sealed record CaptureCandidate(CaptureSource Source, CaptureRole Role, long? LabelId)
+{
+    public CaptureSample[] Samples { get; init; } = [];
+}
 public sealed record CaptureProcess(int Id, string Name, string Path, string WindowTitle = "")
 {
     public bool Matches(string search) => string.IsNullOrWhiteSpace(search)
@@ -70,5 +74,6 @@ public sealed record CaptureSnapshot
     public long Saved { get; init; }
     public long Lost { get; init; }
     public CaptureCandidate[] Candidates { get; init; } = [];
+    public CaptureTextItem[] PreviewItems { get; init; } = [];
     public CapturePosition? RangeStart { get; init; }
 }

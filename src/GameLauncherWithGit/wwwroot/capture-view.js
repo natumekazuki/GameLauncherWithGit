@@ -18,7 +18,8 @@ export function focusEditor(owner) {
     previousFocus = document.activeElement;
     const dialog = document.getElementById('capture-editor');
     if (!dialog) return;
-    const controls = () => [...dialog.querySelectorAll('button, input, select, textarea, [tabindex="0"]')].filter(x => !x.disabled);
+    const controls = () => [...dialog.querySelectorAll('button, input, select, textarea, [tabindex="0"]')]
+        .filter(x => !x.disabled && x.getClientRects().length > 0 && getComputedStyle(x).visibility !== 'hidden');
     document.querySelector('.capture-page')?.setAttribute('inert', '');
     previousBodyStyle = { overflow: document.body.style.overflow, paddingRight: document.body.style.paddingRight };
     const scrollbar = window.innerWidth - document.documentElement.clientWidth;
@@ -33,6 +34,9 @@ export function focusEditor(owner) {
         if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     };
+}
+export function focusSettingsTab() {
+    document.querySelector('.capture-settings-tabs [aria-pressed="true"]')?.focus({ preventScroll: true });
 }
 export function restoreFocus() {
     document.querySelector('.capture-page')?.removeAttribute('inert');

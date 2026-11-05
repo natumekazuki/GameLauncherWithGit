@@ -236,6 +236,8 @@ public sealed class ScenarioCaptureTests : IDisposable
         Assert.Equal(sessions, (await _store.GetCaptureSessionsAsync(profile.Id)).Count);
         Assert.Null((await _store.GetCaptureProfilesAsync()).Single().BodyExecutablePath);
         await manager.ConfirmProcessAsync();
+        Assert.Empty(manager.Snapshot.PreviewItems);
+        Assert.All(manager.Snapshot.Candidates, candidate => Assert.Empty(candidate.Samples));
         host.Emit(source, "「選択後」");
         await manager.SaveRulesAsync(new());
         await manager.SaveRulesAsync(selected);
@@ -555,6 +557,108 @@ public sealed class ScenarioCaptureTests : IDisposable
         Assert.Equal(3, (await reopened.GetGameCaptureItemsAsync(profile.Id, 0)).Count);
     }
 
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "取得元ごとの受信例は到着順と識別を保ち直近5件・各1500文字・256候補に収まり、切詰め例は判定せず切断で破棄される"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#接続と受信確認" }
+    // fault = "候補更新で並べ替える、取得元間で例を混ぜる、上限なく保持する、切詰め本文を判定する、または切断後もテスト本文を残す"
+    // observable = "snapshotの候補順・各sampleの連番と本文と切詰め表示・切断後の候補"
+    // observation_boundary = "public-boundary"
+    // scope = "capture candidate sample retention"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task CandidateSamplesKeepBoundedRecentCallbacksAndSourceOrder()
+    {
+        await StartAsync();
+        var host = new FakeHost();
+        await using var manager = new ScenarioCaptureService(_store, host, NullLogger<ScenarioCaptureService>.Instance);
+        await manager.BeginGameAsync("game"); await manager.SelectProcessAsync(Environment.ProcessId);
+        var source = Source with { ProcessId = (uint)Environment.ProcessId };
+        var other = source with { Address = source.Address + 1 };
+        host.Emit(source, "最初"); host.Emit(other, "別の取得元");
+        for (var i = 0; i < 6; i++) host.Emit(source, $"受信{i}");
+        var snapshot = manager.Snapshot;
+        Assert.Equal(new[] { source, other }, snapshot.Candidates.Select(x => x.Source));
+        Assert.Equal(new[] { "受信1", "受信2", "受信3", "受信4", "受信5" }, snapshot.Candidates[0].Samples.Select(x => x.Text));
+        Assert.Equal(new long[] { 4, 5, 6, 7, 8 }, snapshot.Candidates[0].Samples.Select(x => x.Sequence));
+        Assert.Equal("別の取得元", Assert.Single(snapshot.Candidates[1].Samples).Text);
+        host.Emit(source, new string('長', 1501));
+        var last = manager.Snapshot.Candidates[0].Samples[^1];
+        Assert.True(last.Truncated); Assert.Equal(1500, last.Text.Length);
+        await manager.SaveRulesAsync(new() { Selections = [new(source.HookCode, source.HookName, source.Context, source.Context2, CaptureRole.Body)] }, source);
+        Assert.NotEmpty(manager.Snapshot.PreviewItems);
+        Assert.DoesNotContain(manager.Snapshot.PreviewItems, item => item.RawText == last.Text);
+        Assert.Equal(snapshot.Candidates[0].Samples[^1].ReceivedAt, manager.Snapshot.Candidates[0].Samples[^2].ReceivedAt);
+        for (var i = 0; i < 260; i++) host.Emit(source with { Address = (ulong)(1000 + i) }, "候補");
+        Assert.Equal(256, manager.Snapshot.Candidates.Length);
+        Assert.All(manager.Snapshot.Candidates, candidate => Assert.InRange(candidate.Samples.Length, 1, 5));
+        await manager.FinishAsync();
+        Assert.Empty(manager.Snapshot.Candidates);
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "テスト結果は保持例に現在の用途・分割・固定分類・名前ルールを再計算し正式記録と同じ本文とTXTを生成する"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#接続と受信確認" }
+    // fault = "試験専用の分類や話者処理を使う、ルール変更前の結果を残す、または試験本文を履歴へ保存する"
+    // observable = "snapshotの分割・分類・話者・TXTと同じ入力の正式保存結果、試験中のDB本文件数と確定後の原文"
+    // observation_boundary = "public-boundary"
+    // scope = "in-memory preview processing and formal recording boundary"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task PreviewRecomputesCurrentRulesUsingFormalTextProcessingWithoutSavingSamples()
+    {
+        var (profile, oracleSession) = await StartAsync();
+        var host = new FakeHost();
+        await using var manager = new ScenarioCaptureService(_store, host, NullLogger<ScenarioCaptureService>.Instance);
+        await manager.BeginGameAsync("game"); await manager.SelectProcessAsync(Environment.ProcessId);
+        var source = Source with { ProcessId = (uint)Environment.ProcessId };
+        var nameSource = source with { Address = 101, HookName = "name" };
+        var rules = new CaptureRules { OutsideIsNarration = true, Selections = [
+            new(source.HookCode, source.HookName, source.Context, source.Context2, CaptureRole.Body),
+            new(nameSource.HookCode, nameSource.HookName, nameSource.Context, nameSource.Context2, CaptureRole.Name)] };
+        await manager.SaveRulesAsync(rules);
+        const string raw = "朝「おはよう」余韻";
+        host.Emit(source, raw); host.Emit(nameSource, " 美咲 ");
+        Assert.Equal(new CaptureKind?[] { CaptureKind.Narration, CaptureKind.Dialogue, CaptureKind.Narration }, manager.Snapshot.PreviewItems.Select(x => x.Kind));
+        await Task.Delay(2100);
+        Assert.All(manager.Snapshot.PreviewItems, x => Assert.Null(x.Speaker));
+        rules = rules with { Names = ["美咲"] };
+        await manager.SaveRulesAsync(rules);
+        var preview = manager.Snapshot.PreviewItems;
+        Assert.Equal(raw, string.Concat(preview.Select(x => x.Text)));
+        Assert.Equal("美咲", Assert.Single(preview, x => x.Kind == CaptureKind.Dialogue).Speaker);
+        Assert.Empty(await _store.GetGameCaptureItemsAsync(profile.Id, 0));
+        Assert.Empty((await _store.GetCaptureProfilesAsync()).Single().Rules.Selections);
+        foreach (var candidate in manager.Snapshot.Candidates)
+            foreach (var sample in candidate.Samples)
+                await _store.AppendCaptureAsync(oracleSession, new(sample.Sequence, sample.ReceivedAt, candidate.Source, sample.Text, candidate.Role, candidate.LabelId), rules);
+        await _store.ResolveCaptureSpeakersAsync(oracleSession, rules, preview[0].ReceivedAt, DateTimeOffset.UtcNow);
+        Assert.Equal(ScenarioTextProcessor.FormatTxt(await _store.GetCaptureItemsAsync(oracleSession)), ScenarioTextProcessor.FormatTxt(preview));
+        await manager.SaveRulesAsync(rules with { Selections = [rules.Selections[0] with { Role = CaptureRole.None }, rules.Selections[1]] });
+        Assert.Empty(manager.Snapshot.PreviewItems);
+        var narration = Assert.Single(await _store.GetCaptureLabelsAsync(profile.Id), x => x.Kind == CaptureKind.Narration);
+        await manager.SaveRulesAsync(rules with { Selections = [rules.Selections[0] with { LabelId = narration.Id }, rules.Selections[1]] });
+        var fixedPreview = manager.Snapshot.PreviewItems;
+        Assert.Equal(new[] { "朝", "「おはよう」", "余韻" }, fixedPreview.Select(x => x.Text));
+        Assert.All(fixedPreview, x => { Assert.Equal(CaptureKind.Narration, x.Kind); Assert.Null(x.Speaker); });
+        await manager.SaveRulesAsync(rules with { SplitDialogue = false });
+        var whole = Assert.Single(manager.Snapshot.PreviewItems);
+        Assert.Equal(raw, whole.Text); Assert.Null(whole.Kind);
+        await manager.ConfirmProcessAsync();
+        Assert.Empty(manager.Snapshot.PreviewItems);
+        Assert.All(manager.Snapshot.Candidates, candidate => Assert.Empty(candidate.Samples));
+        var fullRaw = new string('文', 1600);
+        host.Emit(source, fullRaw);
+        await manager.FlushPendingAsync();
+        var recorded = Assert.Single(await _store.GetCaptureItemsAsync(manager.Snapshot.SessionId!.Value));
+        Assert.Equal(fullRaw, recorded.RawText); Assert.Equal(1, recorded.Sequence);
+        await manager.SelectProcessAsync(Environment.ProcessId);
+        Assert.Empty(manager.Snapshot.Candidates); Assert.Empty(manager.Snapshot.PreviewItems);
+    }
+
     private sealed class FakeHost : ILunaCaptureHost
     {
         public event Action<CaptureSource, string>? Output;
@@ -565,6 +669,7 @@ public sealed class ScenarioCaptureTests : IDisposable
         public Task ConnectAsync(int processId) { Connections++; if (FailNextConnection) { FailNextConnection = false; throw new InvalidOperationException("test failure"); } ConnectionChanged?.Invoke((uint)processId, true); return Task.CompletedTask; }
         public void Detach(int processId) { Detaches++; ConnectionChanged?.Invoke((uint)processId, false); }
         public IReadOnlyList<CaptureProcess> GetProcesses() => [new(Environment.ProcessId, "test-body", Path, "テスト用ゲーム")];
+        public CaptureProcess? GetForegroundProcess() => GetProcesses()[0];
         public void Emit(CaptureSource source, string text) => Output?.Invoke(source, text);
     }
 

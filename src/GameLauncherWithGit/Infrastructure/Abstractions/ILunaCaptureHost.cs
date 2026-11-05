@@ -9,4 +9,5 @@ public interface ILunaCaptureHost
     Task ConnectAsync(int processId);
     void Detach(int processId);
     IReadOnlyList<CaptureProcess> GetProcesses();
+    CaptureProcess? GetForegroundProcess();
 }
