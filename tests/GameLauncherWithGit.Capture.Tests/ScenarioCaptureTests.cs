@@ -676,9 +676,9 @@ public sealed class ScenarioCaptureTests : IDisposable
 
     // @test-value v2
     // kind = "invariant"
-    // claim = "履歴検索は区間内の表示本文と有効話者を大小文字を区別せず照合し、分類条件と組み合わせて一致後にページを切る"
+    // claim = "履歴検索は名前・本文の独立した部分一致と区間・分類をANDで組み合わせ、空条件は制限せず、一致後にページを切る"
     // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#UIとTXT" }
-    // fault = "原文の区間外を検索する、UTF-16位置を文字数で切る、検索語をLIKEとして扱う、または検索前にページを切る"
+    // fault = "名前と本文をORで照合する、非表示の話者・区間外原文を検索する、検索語をLIKEとして扱う、または検索前にページを切る"
     // observable = "検索・区間・分類・ページ指定で再読込した本文とTXT"
     // observation_boundary = "public-boundary"
     // scope = "capture history search and paging"
@@ -698,19 +698,34 @@ public sealed class ScenarioCaptureTests : IDisposable
         foreach (var item in items.Where(x => x.Kind == CaptureKind.Dialogue))
             await _store.SetCaptureSpeakerAsync(session, item.Id, "Alice");
         await _store.SetCaptureSpeakerAsync(session, narration.Id, "Hidden");
+        await _store.AppendCaptureAsync(session, Receive(5, "「ÉCHO%_」"), new());
+        var otherSpeaker = Assert.Single(await _store.GetGameCaptureItemsAsync(profile.Id, 1, latest: true));
+        await _store.SetCaptureSpeakerAsync(session, otherSpeaker.Id, "Bob");
+        await _store.AppendCaptureAsync(session, Receive(6, "ALICE本文だけ"), new());
         var range = await _store.SaveCaptureRangeAsync(profile.Id, "引用内", dialogue.StartPosition with { Offset = dialogue.Start + 1 }, dialogue.EndPosition with { Offset = dialogue.Start + dialogue.Length - 1 });
-        Assert.Equal("ÉCHO%_", Assert.Single(await _store.GetGameCaptureItemsAsync(profile.Id, rangeId: range, search: "écho%_")).Text);
-        Assert.Empty(await _store.GetGameCaptureItemsAsync(profile.Id, rangeId: range, search: "外"));
-        Assert.Empty(await _store.GetGameCaptureItemsAsync(profile.Id, rangeId: range, search: "「"));
-        Assert.Empty(await _store.GetGameCaptureItemsAsync(profile.Id, search: "Hidden"));
-        Assert.Equal(new[] { "「ÉCHO%_」", "未判定%_" }, (await _store.GetGameCaptureItemsAsync(profile.Id, 0, search: "%_")).Select(x => x.Text));
-        Assert.Equal("未判定%_", Assert.Single(await _store.GetGameCaptureItemsAsync(profile.Id, unclassifiedOnly: true, search: "%_")).Text);
-        Assert.Equal("「二番目」", Assert.Single(await _store.GetGameCaptureItemsAsync(profile.Id, 1, 1, kind: CaptureKind.Dialogue, search: "ALICE")).Text);
-        Assert.Equal(new long[] { 2, 3 }, (await _store.GetGameCaptureItemsAsync(profile.Id, 2, latest: true, search: "alice")).Select(x => x.Sequence));
-        var all = await _store.GetGameCaptureItemsAsync(profile.Id, 0, search: "alice");
+        var combined = await _store.GetGameCaptureItemsAsync(profile.Id, rangeId: range, kind: CaptureKind.Dialogue, textSearch: " écho%_ ", speakerSearch: " lic ");
+        Assert.Equal("ÉCHO%_", Assert.Single(combined).Text);
+        Assert.Equal("[セリフ：Alice]\nÉCHO%_", ScenarioTextProcessor.FormatTxt(combined).ReplaceLineEndings("\n").TrimEnd());
+        Assert.Empty(await _store.GetGameCaptureItemsAsync(profile.Id, rangeId: range, textSearch: "外", speakerSearch: "Alice"));
+        Assert.Empty(await _store.GetGameCaptureItemsAsync(profile.Id, rangeId: range, textSearch: "「"));
+        Assert.Empty(await _store.GetGameCaptureItemsAsync(profile.Id, rangeId: range, speakerSearch: "Bob"));
+        Assert.Empty(await _store.GetGameCaptureItemsAsync(profile.Id, textSearch: "存在しない", speakerSearch: "Alice"));
+        Assert.Empty(await _store.GetGameCaptureItemsAsync(profile.Id, textSearch: "ÉCHO", speakerSearch: "存在しない"));
+        Assert.Empty(await _store.GetGameCaptureItemsAsync(profile.Id, speakerSearch: "Hidden"));
+        Assert.Empty(await _store.GetGameCaptureItemsAsync(profile.Id, textSearch: "Bob"));
+        Assert.Equal("ALICE本文だけ", Assert.Single(await _store.GetGameCaptureItemsAsync(profile.Id, textSearch: "alice")).Text);
+        Assert.Equal(new[] { "「ÉCHO%_」", "未判定%_", "「ÉCHO%_」" }, (await _store.GetGameCaptureItemsAsync(profile.Id, 0, textSearch: "%_")).Select(x => x.Text));
+        Assert.Equal("未判定%_", Assert.Single(await _store.GetGameCaptureItemsAsync(profile.Id, unclassifiedOnly: true, textSearch: "%_")).Text);
+        Assert.Equal("「二番目」", Assert.Single(await _store.GetGameCaptureItemsAsync(profile.Id, 1, 1, kind: CaptureKind.Dialogue, speakerSearch: "ALICE")).Text);
+        Assert.Equal("「三番目」", Assert.Single(await _store.GetGameCaptureItemsAsync(profile.Id, 1, 1, textSearch: "番目", speakerSearch: "ALICE")).Text);
+        Assert.Empty(await _store.GetGameCaptureItemsAsync(profile.Id, 1, 2, textSearch: "番目", speakerSearch: "ALICE"));
+        Assert.Equal(new long[] { 2, 3 }, (await _store.GetGameCaptureItemsAsync(profile.Id, 2, latest: true, speakerSearch: "alice")).Select(x => x.Sequence));
+        var all = await _store.GetGameCaptureItemsAsync(profile.Id, 0, textSearch: "  ", speakerSearch: "alice");
         Assert.Equal(3, all.Count);
         Assert.Contains("「三番目」", ScenarioTextProcessor.FormatTxt(all));
-        Assert.Equal(3, (await _store.GetGameCaptureItemsAsync(profile.Id, 0, labelId: dialogue.LabelId, search: "alice")).Count);
+        Assert.Equal(3, (await _store.GetGameCaptureItemsAsync(profile.Id, 0, labelId: dialogue.LabelId, speakerSearch: "alice")).Count);
+        Assert.Empty(await _store.GetGameCaptureItemsAsync(profile.Id, kind: CaptureKind.Narration, speakerSearch: "alice"));
+        Assert.Equal(8, (await _store.GetGameCaptureItemsAsync(profile.Id, 0, textSearch: " ", speakerSearch: "\t")).Count);
     }
 
     // @test-value v2

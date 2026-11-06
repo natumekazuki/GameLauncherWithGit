@@ -66,12 +66,14 @@
             {
                 <div class="capture-history-toolbar">
                     <form class="capture-search" @onsubmit="SearchHistoryAsync" @onsubmit:preventDefault>
-                        <input type="search" aria-label="保存本文・話者を検索" placeholder="本文・話者を検索" @bind="_historySearchInput" disabled="@(_busy || _profileId == 0)" />
+                        <label>名前（部分一致）<input type="search" placeholder="例：美咲" @bind="_speakerSearchInput" @bind:event="oninput" disabled="@(_busy || _profileId == 0)" /></label>
+                        <label>本文（部分一致）<input type="search" placeholder="例：約束" @bind="_textSearchInput" @bind:event="oninput" disabled="@(_busy || _profileId == 0)" /></label>
                         <button type="submit" class="secondary-button capture-icon-button" title="検索" aria-label="検索" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Search" /></button>
-                        <button type="button" class="secondary-button capture-icon-button" title="検索を解除" aria-label="検索を解除" @onclick="ClearHistorySearchAsync" disabled="@(_busy || (_historySearch.Length == 0 && _historySearchInput.Length == 0))"><CaptureIcon Name="Close" /></button>
+                        <button type="button" class="secondary-button capture-icon-button" title="名前・本文の検索を解除（区間・分類は保持）" aria-label="名前・本文の検索を解除" @onclick="ClearHistorySearchAsync" disabled="@(_busy || !HasHistorySearch && _textSearchInput.Length == 0 && _speakerSearchInput.Length == 0)"><CaptureIcon Name="Close" /></button>
                     </form>
                     <button class="secondary-button capture-text-button" @onclick="OpenHistoryManagementAsync" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="History" />履歴管理</button>
                 </div>
+                <p class="capture-search-status" role="status">@(_busy ? "読込中…" : HistorySearchPending ? "検索ボタンで入力した名前・本文を適用します。" : "")</p>
             }
             <div class="capture-tools">
                 <div class="capture-tool-group capture-view-tools">
@@ -413,7 +415,9 @@
     private int _processId, _offset;
     private bool _live = true, _following = true, _busy, _loading = true, _split = true, _outside;
     private string _filter = "all", _processSearch = "";
-    private string _historySearchInput = "", _historySearch = "";
+    private string _textSearchInput = "", _textSearch = "", _speakerSearchInput = "", _speakerSearch = "";
+    private bool HasHistorySearch => _textSearch.Length > 0 || _speakerSearch.Length > 0;
+    private bool HistorySearchPending => _textSearchInput.Trim() != _textSearch || _speakerSearchInput.Trim() != _speakerSearch;
     private bool _hasMore, _focusHistoryContent;
     private enum HistoryDialog { None, Manage, DeleteSelected, Clear, DeleteRange }
     private HistoryDialog _historyDialog;
@@ -476,7 +480,7 @@
     private static string ClassificationChoiceName(CaptureLabel label) => label.Kind is CaptureKind.Dialogue or CaptureKind.Narration ? ClassificationName(label.Kind) : label.Name;
     private string EmptyMessage => _profileId == 0
         ? (_live ? "ゲームなし" : "ゲーム未選択")
-        : _historySearch.Length > 0 || _filter != "all" || _rangeId != 0 ? "条件に一致する本文はありません" : _live ? "本文待ち" : "保存された本文はありません";
+        : HasHistorySearch || _filter != "all" || _rangeId != 0 ? "条件に一致する本文はありません" : _live ? "本文待ち" : "保存された本文はありません";
     private static string CandidatePreview(string text) => string.Concat(text.Take(60)).ReplaceLineEndings(" ");
     private sealed class PartDraft { public string Text { get; set; } = ""; public long Label { get; set; } public string Speaker { get; set; } = ""; }
     protected override async Task OnInitializedAsync()
@@ -549,18 +553,33 @@
         _labels = _profile is null ? [] : await Store.GetCaptureLabelsAsync(_profile.Id);
         _ranges = _profile is null ? [] : await Store.GetCaptureRangesAsync(_profile.Id);
         _rangeId = 0; _rangeFirst = _rangeLast = null; _pickingRange = false;
-        _offset = 0; _selected.Clear(); _filter = "all"; _historySearchInput = _historySearch = "";
+        _offset = 0; _selected.Clear(); _filter = "all";
+        _textSearchInput = _textSearch = _speakerSearchInput = _speakerSearch = "";
         if (_profile is not null) { _split = _profile.Rules.SplitDialogue; _outside = _profile.Rules.OutsideIsNarration; }
         await LoadItemsAsync();
     }
     private async Task LoadItemsAsync()
     {
-        var items = _profileId == 0 ? [] : await Store.GetGameCaptureItemsAsync(_profileId, LatestOrder ? 200 : 201, FollowingView ? 0 : _offset, null, _filter == "none", LatestOrder, _rangeId == 0 ? null : _rangeId, FilterKind, _historySearch);
+        var items = _profileId == 0 ? [] : await QueryItemsAsync(LatestOrder ? 200 : 201, FollowingView ? 0 : _offset, LatestOrder);
         _hasMore = items.Count > 200;
         _items = items.Take(200).ToArray();
     }
-    private Task SearchHistoryAsync() => RunAsync(async () => { _historySearch = _historySearchInput.Trim(); _offset = 0; _selected.Clear(); await LoadItemsAsync(); _scrollToEnd = false; });
-    private Task ClearHistorySearchAsync() { _historySearchInput = ""; return SearchHistoryAsync(); }
+    private Task<IReadOnlyList<CaptureTextItem>> QueryItemsAsync(int limit, int offset = 0, bool latest = false)
+    {
+        // SQLite reads and substring matching must not block the UI while browsing large histories.
+        var profileId = _profileId; var rangeId = _rangeId; var kind = FilterKind; var unclassified = _filter == "none";
+        var text = _textSearch; var speaker = _speakerSearch;
+        Task<IReadOnlyList<CaptureTextItem>> Query() => Store.GetGameCaptureItemsAsync(profileId, limit, offset,
+            unclassifiedOnly: unclassified, latest: latest, rangeId: rangeId == 0 ? null : rangeId, kind: kind,
+            textSearch: text, speakerSearch: speaker);
+        return _live && limit > 0 ? Query() : Task.Run(Query);
+    }
+    private Task SearchHistoryAsync() => RunAsync(async () =>
+    {
+        _textSearch = _textSearchInput.Trim(); _speakerSearch = _speakerSearchInput.Trim();
+        _offset = 0; _selected.Clear(); await LoadItemsAsync(); _scrollToEnd = false;
+    });
+    private Task ClearHistorySearchAsync() { _textSearchInput = _speakerSearchInput = ""; return SearchHistoryAsync(); }
     private Task OpenHistoryManagementAsync() => RunAsync(async () =>
     {
         _historyCounts = await Store.GetCaptureHistoryCountsAsync(_profileId);
@@ -776,7 +795,7 @@
     private Task ExportAsync() => RunAsync(async () =>
     {
         if (_profile is null) return;
-        var items = await Store.GetGameCaptureItemsAsync(_profileId, 0, 0, null, _filter == "none", rangeId: _rangeId == 0 ? null : _rangeId, kind: FilterKind, search: _historySearch);
+        var items = await QueryItemsAsync(0);
         var folder = await Picker.PickFolderPathAsync("TXTの保存先フォルダを選択");
         if (folder is null) return;
         var title = string.Concat((_profile.Title + (_ranges.FirstOrDefault(x => x.Id == _rangeId) is { } range ? "-" + range.Name : "")).Select(x => Path.GetInvalidFileNameChars().Contains(x) ? '_' : x));
