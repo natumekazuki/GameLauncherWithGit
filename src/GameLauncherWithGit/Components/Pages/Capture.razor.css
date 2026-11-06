@@ -24,6 +24,24 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .capture-content { min-width:0; }
 .capture-filters { display:grid; grid-template-columns:1fr 1.3fr 1fr; gap:.75rem; margin-bottom:.75rem; }
 .capture-filters-live { grid-template-columns:1fr 1fr; }
+.capture-history-toolbar,.capture-search,.capture-history-actions { display:flex; align-items:center; gap:.5rem; }
+.capture-history-toolbar { margin-bottom:.75rem; gap:1rem; }
+.capture-search { flex:1; min-width:0; }
+.capture-history-toolbar > button { flex-shrink:0; }
+.capture-history-actions { flex-wrap:wrap; }
+.capture-history-dialog { grid-template-rows:auto minmax(0,1fr) auto; overflow:hidden; }
+.capture-history-body { display:grid; gap:1rem; }
+.capture-history-title { overflow-wrap:anywhere; }
+.capture-history-counts,.capture-muted { color:#adbed5; font-size:.9rem; line-height:1.6; }
+.capture-history-section { display:grid; gap:.75rem; border-top:1px solid #30415a; padding-top:1rem; }
+.capture-history-section h3 { margin:0; font-size:1rem; }
+.capture-history-section > button { justify-self:start; }
+.capture-danger { color:#ffc3c3; border-color:#9a5353; }
+.capture-deletion-preview { max-height:20rem; overflow:auto; border:1px solid #41516b; border-radius:5px; }
+.capture-deletion-preview article { padding:.75rem 1rem; }
+.capture-deletion-preview article + article { border-top:1px solid #30415a; }
+.capture-deletion-preview small { color:#adbed5; }
+.capture-deletion-preview p { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.8; margin-top:.5rem; }
 label { display:flex; flex-direction:column; gap:.3rem; font-size:.9rem; }
 label:has(input[type=checkbox]),.capture-filter { flex-direction:row; align-items:center; }
 .capture-filter { gap:.5rem; min-width:0; color:#adbed5; }
@@ -124,6 +142,9 @@ input[type=checkbox] { width:1rem; height:1rem; margin:0; accent-color:#85b4ff; 
 .capture-part + .capture-part { margin-top:.65rem; }
 .capture-part p { margin:0; }
 @media(max-width:650px) {
+    .capture-history-toolbar { flex-wrap:wrap; gap:.5rem; }
+    .capture-search { flex-basis:100%; }
+    .capture-history-toolbar > button { margin-left:auto; }
     .capture-livebar { gap:.5rem; }
     .capture-range-caption { display:none; }
     .capture-play-range .capture-icon-button { width:2.5rem; height:2.5rem; }

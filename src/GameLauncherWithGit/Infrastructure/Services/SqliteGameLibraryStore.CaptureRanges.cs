@@ -60,7 +60,7 @@ public sealed partial class SqliteGameLibraryStore
     }
 
     public async Task<IReadOnlyList<CaptureTextItem>> GetGameCaptureItemsAsync(long profileId, int limit = 200, int offset = 0,
-        long? labelId = null, bool unclassifiedOnly = false, bool latest = false, long? rangeId = null, CaptureKind? kind = null)
+        long? labelId = null, bool unclassifiedOnly = false, bool latest = false, long? rangeId = null, CaptureKind? kind = null, string? search = null)
     {
         if (limit < 0 || offset < 0) throw new ArgumentOutOfRangeException(nameof(limit));
         var range = rangeId is null ? null : (await GetCaptureRangesAsync(profileId)).SingleOrDefault(x => x.Id == rangeId)
@@ -68,6 +68,7 @@ public sealed partial class SqliteGameLibraryStore
         await EnsureInitializedAsync(default);
         await using var connection = await OpenConnectionAsync(default);
         var order = latest ? " DESC" : "";
+        search = string.IsNullOrWhiteSpace(search) ? null : search.Trim();
         await using var command = CaptureCommand(connection, null, CaptureItemQuery + """
              JOIN CaptureSessions s ON s.Id=i.SessionId
              WHERE s.CaptureGameId=$game AND ($label IS NULL OR l.Id=$label) AND ($unclassified=0 OR l.Id IS NULL)
@@ -78,9 +79,10 @@ public sealed partial class SqliteGameLibraryStore
             ("$game", profileId), ("$label", labelId), ("$unclassified", unclassifiedOnly), ("$kind", kind is null ? null : (int)kind), ("$range", range is null ? 0 : 1),
             ("$ss", range?.Start.SessionId ?? 0), ("$sq", range?.Start.Sequence ?? 0), ("$so", range?.Start.Offset ?? 0),
             ("$es", range?.End.SessionId ?? 0), ("$eq", range?.End.Sequence ?? 0), ("$eo", range?.End.Offset ?? 0),
-            ("$limit", limit == 0 ? -1 : limit), ("$offset", offset));
+            ("$limit", search is not null || limit == 0 ? -1 : limit), ("$offset", search is not null ? 0 : offset));
         await using var reader = await command.ExecuteReaderAsync();
         var items = new List<CaptureTextItem>();
+        var skipped = 0;
         while (await reader.ReadAsync())
         {
             var item = ReadCaptureItem(reader);
@@ -90,7 +92,15 @@ public sealed partial class SqliteGameLibraryStore
                 var to = item.SessionId == range.End.SessionId && item.Sequence == range.End.Sequence ? Math.Min(item.Start + item.Length, range.End.Offset) : item.Start + item.Length;
                 item = item with { Start = from, Length = to - from };
             }
+            if (search is not null)
+            {
+                // Search the displayed UTF-16 slice and effective speaker before paging.
+                if (!item.Text.Contains(search, StringComparison.OrdinalIgnoreCase)
+                    && item.Speaker?.Contains(search, StringComparison.OrdinalIgnoreCase) != true) continue;
+                if (skipped++ < offset) continue;
+            }
             items.Add(item);
+            if (search is not null && limit > 0 && items.Count == limit) break;
         }
         if (latest) items.Reverse();
         return items;

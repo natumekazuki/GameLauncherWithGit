@@ -11,7 +11,13 @@ public interface IScenarioCaptureStore
     Task<long> BeginCaptureSessionAsync(long profileId);
     Task EndCaptureSessionAsync(long sessionId);
     Task<IReadOnlyList<CaptureSession>> GetCaptureSessionsAsync(long profileId);
-    Task<IReadOnlyList<CaptureTextItem>> GetGameCaptureItemsAsync(long profileId, int limit = 200, int offset = 0, long? labelId = null, bool unclassifiedOnly = false, bool latest = false, long? rangeId = null, CaptureKind? kind = null);
+    Task<IReadOnlyList<CaptureTextItem>> GetGameCaptureItemsAsync(long profileId, int limit = 200, int offset = 0, long? labelId = null, bool unclassifiedOnly = false, bool latest = false, long? rangeId = null, CaptureKind? kind = null, string? search = null);
+    Task<IReadOnlyList<CaptureDeletionTarget>> GetCaptureDeletionTargetsAsync(long profileId, IReadOnlyCollection<long> itemIds);
+    Task DeleteCaptureEventsAsync(long profileId, IReadOnlyCollection<CaptureEventKey> events);
+    Task<CaptureHistoryCounts> GetCaptureHistoryCountsAsync(long profileId);
+    Task ClearCaptureHistoryAsync(long profileId);
+    Task RenameCaptureRangeAsync(long profileId, long rangeId, string name);
+    Task DeleteCaptureRangeAsync(long profileId, long rangeId);
     Task<IReadOnlyList<CaptureRange>> GetCaptureRangesAsync(long profileId);
     Task<long> SaveCaptureRangeAsync(long profileId, string name, CapturePosition start, CapturePosition end);
     Task<bool> AppendCaptureAsync(long sessionId, CaptureReceived received, CaptureRules rules);

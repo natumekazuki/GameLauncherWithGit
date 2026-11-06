@@ -674,6 +674,193 @@ public sealed class ScenarioCaptureTests : IDisposable
         Assert.Empty(manager.Snapshot.Candidates); Assert.Empty(manager.Snapshot.PreviewItems);
     }
 
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "履歴検索は区間内の表示本文と有効話者を大小文字を区別せず照合し、分類条件と組み合わせて一致後にページを切る"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#UIとTXT" }
+    // fault = "原文の区間外を検索する、UTF-16位置を文字数で切る、検索語をLIKEとして扱う、または検索前にページを切る"
+    // observable = "検索・区間・分類・ページ指定で再読込した本文とTXT"
+    // observation_boundary = "public-boundary"
+    // scope = "capture history search and paging"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task HistorySearchUsesDisplayedTextAndEffectiveSpeakerBeforePaging()
+    {
+        var (profile, session) = await StartAsync();
+        await _store.AppendCaptureAsync(session, Receive(1, "外🌅「ÉCHO%_」末尾"), new() { OutsideIsNarration = true });
+        await _store.AppendCaptureAsync(session, Receive(2, "「二番目」"), new());
+        await _store.AppendCaptureAsync(session, Receive(3, "「三番目」"), new());
+        await _store.AppendCaptureAsync(session, Receive(4, "未判定%_"), new());
+        var items = await _store.GetGameCaptureItemsAsync(profile.Id, 0);
+        var dialogue = items.Single(x => x.Sequence == 1 && x.Kind == CaptureKind.Dialogue);
+        var narration = items.First(x => x.Kind == CaptureKind.Narration);
+        foreach (var item in items.Where(x => x.Kind == CaptureKind.Dialogue))
+            await _store.SetCaptureSpeakerAsync(session, item.Id, "Alice");
+        await _store.SetCaptureSpeakerAsync(session, narration.Id, "Hidden");
+        var range = await _store.SaveCaptureRangeAsync(profile.Id, "引用内", dialogue.StartPosition with { Offset = dialogue.Start + 1 }, dialogue.EndPosition with { Offset = dialogue.Start + dialogue.Length - 1 });
+        Assert.Equal("ÉCHO%_", Assert.Single(await _store.GetGameCaptureItemsAsync(profile.Id, rangeId: range, search: "écho%_")).Text);
+        Assert.Empty(await _store.GetGameCaptureItemsAsync(profile.Id, rangeId: range, search: "外"));
+        Assert.Empty(await _store.GetGameCaptureItemsAsync(profile.Id, rangeId: range, search: "「"));
+        Assert.Empty(await _store.GetGameCaptureItemsAsync(profile.Id, search: "Hidden"));
+        Assert.Equal(new[] { "「ÉCHO%_」", "未判定%_" }, (await _store.GetGameCaptureItemsAsync(profile.Id, 0, search: "%_")).Select(x => x.Text));
+        Assert.Equal("未判定%_", Assert.Single(await _store.GetGameCaptureItemsAsync(profile.Id, unclassifiedOnly: true, search: "%_")).Text);
+        Assert.Equal("「二番目」", Assert.Single(await _store.GetGameCaptureItemsAsync(profile.Id, 1, 1, kind: CaptureKind.Dialogue, search: "ALICE")).Text);
+        Assert.Equal(new long[] { 2, 3 }, (await _store.GetGameCaptureItemsAsync(profile.Id, 2, latest: true, search: "alice")).Select(x => x.Sequence));
+        var all = await _store.GetGameCaptureItemsAsync(profile.Id, 0, search: "alice");
+        Assert.Equal(3, all.Count);
+        Assert.Contains("「三番目」", ScenarioTextProcessor.FormatTxt(all));
+        Assert.Equal(3, (await _store.GetGameCaptureItemsAsync(profile.Id, 0, labelId: dialogue.LabelId, search: "alice")).Count);
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "選択削除は選択した分割片の原文全体だけを消し、残る本文・名前受信・区間位置を保持する"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#保存と登録削除" }
+    // fault = "選択片だけ消して原文を再適用で復活させる、別原文や名前を消す、または区間を削除する"
+    // observable = "削除確認の原文と分割数、再読込した本文・区間・件数と再適用後の本文"
+    // observation_boundary = "public-boundary"
+    // scope = "capture original-event deletion"
+    // lifecycle = "permanent"
+    // impact = "利用者が消した原文の復活や別本文の消失を防ぐ"
+    // distinction = "既存の分割・再適用testでは原文削除と区間保持を検証できない"
+    // @end-test-value
+    [Fact]
+    public async Task DeletingSelectedPieceRemovesWholeOriginalAndKeepsRangesAndOtherEvents()
+    {
+        var (profile, session) = await StartAsync();
+        const string raw = "朝「会話」余韻";
+        await _store.AppendCaptureAsync(session, Receive(1, raw), new() { OutsideIsNarration = true });
+        await _store.AppendCaptureAsync(session, Receive(2, "残す本文"), new());
+        await _store.AppendCaptureAsync(session, Receive(3, "名前", CaptureRole.Name), new());
+        var items = await _store.GetGameCaptureItemsAsync(profile.Id, 0);
+        var rangeId = await _store.SaveCaptureRangeAsync(profile.Id, "消える区間", items[0].StartPosition, items[2].EndPosition);
+        var range = Assert.Single(await _store.GetCaptureRangesAsync(profile.Id));
+        var target = Assert.Single(await _store.GetCaptureDeletionTargetsAsync(profile.Id, [items[0].Id, items[1].Id, items[1].Id]));
+        Assert.Equal(new CaptureEventKey(session, 1), target.Key);
+        Assert.Equal(raw, target.RawText); Assert.Equal(3, target.ItemCount);
+        await _store.DeleteCaptureEventsAsync(profile.Id, [target.Key, target.Key]);
+        await _store.ReapplyCaptureRulesAsync(session, items.Select(x => x.Id).ToArray(), new() { SplitDialogue = false });
+        var reopened = new SqliteGameLibraryStore(NullLogger<SqliteGameLibraryStore>.Instance, Path.Combine(_directory, "library.db"));
+        Assert.Equal("残す本文", Assert.Single(await reopened.GetGameCaptureItemsAsync(profile.Id, 0)).Text);
+        Assert.Equal(new CaptureHistoryCounts(1, 2, 1), await reopened.GetCaptureHistoryCountsAsync(profile.Id));
+        Assert.Equal(range, Assert.Single(await reopened.GetCaptureRangesAsync(profile.Id)));
+        Assert.Empty(await reopened.GetGameCaptureItemsAsync(profile.Id, rangeId: rangeId));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => reopened.SplitCaptureEventAsync(session, 1, []));
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "履歴全削除は対象ゲームの全受信・区間・取得回・取得元だけを消し設定・分類・ゲーム登録と別ゲーム履歴を保つ"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#保存と登録削除" }
+    // fault = "名前受信や取得元を残す、設定や分類を消す、または別ゲームを削除する"
+    // observable = "全削除前後の履歴件数・取得回・取得元数と設定・分類・登録・別ゲームの公開読出し値"
+    // observation_boundary = "public-boundary"
+    // scope = "profile-scoped full capture history deletion"
+    // lifecycle = "permanent"
+    // impact = "消す対象外の利用者設定と履歴の損失を防ぐ"
+    // distinction = "schema初期化testは削除処理の所有者境界と関連行の除去を通らない"
+    // @end-test-value
+    [Fact]
+    public async Task ClearHistoryKeepsSettingsRegistrationLabelsAndOtherProfile()
+    {
+        var (profile, session) = await StartAsync();
+        profile = profile with { Enabled = false, BodyExecutablePath = "C:\\game.exe", Rules = new() { Names = ["保存名"], SplitDialogue = false } };
+        await _store.SaveCaptureProfileAsync(profile);
+        await _store.AppendCaptureAsync(session, Receive(1, "本文"), new());
+        await _store.AppendCaptureAsync(session, Receive(2, "名前", CaptureRole.Name), new());
+        var item = Assert.Single(await _store.GetGameCaptureItemsAsync(profile.Id));
+        await _store.SaveCaptureRangeAsync(profile.Id, "区間", item.StartPosition, item.EndPosition);
+        var labels = await _store.GetCaptureLabelsAsync(profile.Id);
+        var game = await _store.FindByIdAsync("game");
+        await _store.UpsertAsync(new("other", "別作品", "other.exe", null, null, null, GameCardStatus.Unknown));
+        var other = await _store.GetOrCreateCaptureProfileAsync("other");
+        var otherSession = await _store.BeginCaptureSessionAsync(other.Id);
+        await _store.AppendCaptureAsync(otherSession, Receive(1, "別作品の本文"), new());
+        Assert.Equal(new CaptureHistoryCounts(1, 2, 1), await _store.GetCaptureHistoryCountsAsync(profile.Id));
+        await _store.ClearCaptureHistoryAsync(profile.Id);
+        Assert.Equal(new CaptureHistoryCounts(0, 0, 0), await _store.GetCaptureHistoryCountsAsync(profile.Id));
+        Assert.Empty(await _store.GetCaptureSessionsAsync(profile.Id));
+        Assert.Equal(labels, await _store.GetCaptureLabelsAsync(profile.Id));
+        Assert.Equal(game, await _store.FindByIdAsync("game"));
+        var saved = (await _store.GetCaptureProfilesAsync()).Single(x => x.Id == profile.Id);
+        Assert.Equal(profile.Enabled, saved.Enabled); Assert.Equal(profile.BodyExecutablePath, saved.BodyExecutablePath);
+        Assert.False(saved.Rules.SplitDialogue); Assert.Equal(profile.Rules.Names, saved.Rules.Names);
+        Assert.Equal("別作品の本文", Assert.Single(await _store.GetGameCaptureItemsAsync(other.Id)).Text);
+        await using var connection = new SqliteConnection($"Data Source={Path.Combine(_directory, "library.db")}");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM CaptureSources WHERE SessionId=$session";
+        command.Parameters.AddWithValue("$session", session);
+        Assert.Equal(0L, await command.ExecuteScalarAsync());
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "削除集合に別ゲーム・欠落・名前受信が混ざると全体を拒否し、有効な本文を部分削除しない"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#保存と登録削除" }
+    // fault = "無効なIDを無視する、所有者を検証しない、または先行する有効対象をcommitする"
+    // observable = "確認取得・削除の例外と失敗後の両ゲーム履歴件数・本文"
+    // observation_boundary = "public-boundary"
+    // scope = "capture deletion ownership and transaction atomicity"
+    // lifecycle = "permanent"
+    // risk_tags = ["irreversible-data-loss"]
+    // @end-test-value
+    [Fact]
+    public async Task InvalidDeletionTargetsRejectWholeSelectionWithoutPartialWrites()
+    {
+        var (profile, session) = await StartAsync();
+        await _store.AppendCaptureAsync(session, Receive(1, "対象"), new());
+        await _store.AppendCaptureAsync(session, Receive(2, "名前", CaptureRole.Name), new());
+        var item = Assert.Single(await _store.GetGameCaptureItemsAsync(profile.Id));
+        await _store.UpsertAsync(new("other", "別作品", "other.exe", null, null, null, GameCardStatus.Unknown));
+        var other = await _store.GetOrCreateCaptureProfileAsync("other");
+        var otherSession = await _store.BeginCaptureSessionAsync(other.Id);
+        await _store.AppendCaptureAsync(otherSession, Receive(1, "保護対象"), new());
+        var otherItem = Assert.Single(await _store.GetGameCaptureItemsAsync(other.Id));
+        await Assert.ThrowsAsync<ArgumentException>(() => _store.GetCaptureDeletionTargetsAsync(profile.Id, [item.Id, otherItem.Id]));
+        await Assert.ThrowsAsync<ArgumentException>(() => _store.GetCaptureDeletionTargetsAsync(profile.Id, [item.Id, long.MaxValue]));
+        foreach (var invalid in new[] { new CaptureEventKey(otherSession, 1), new CaptureEventKey(session, 999), new CaptureEventKey(session, 2) })
+        {
+            await Assert.ThrowsAsync<ArgumentException>(() => _store.DeleteCaptureEventsAsync(profile.Id, [new(session, 1), invalid]));
+            Assert.Equal(new CaptureHistoryCounts(1, 2, 0), await _store.GetCaptureHistoryCountsAsync(profile.Id));
+            Assert.Equal("対象", Assert.Single(await _store.GetGameCaptureItemsAsync(profile.Id)).Text);
+            Assert.Equal("保護対象", Assert.Single(await _store.GetGameCaptureItemsAsync(other.Id)).Text);
+        }
+        await Assert.ThrowsAsync<ArgumentException>(() => _store.ClearCaptureHistoryAsync(long.MaxValue));
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "区間の改名・削除は同じゲームの定義だけを変更し、原文と本文を変更しない"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#ゲーム単位の本文と任意区間" }
+    // fault = "別所有者の区間を操作する、不正な名前を保存する、または区間削除で本文を消す"
+    // observable = "区間名・位置と不正操作の例外、操作前後の本文・原文件数"
+    // observation_boundary = "public-boundary"
+    // scope = "capture range definition management"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task RangeRenameAndDeleteOnlyChangeOwnedDefinition()
+    {
+        var (profile, session) = await StartAsync();
+        await _store.AppendCaptureAsync(session, Receive(1, "「本文」"), new());
+        var item = Assert.Single(await _store.GetGameCaptureItemsAsync(profile.Id));
+        var id = await _store.SaveCaptureRangeAsync(profile.Id, "区間", item.StartPosition, item.EndPosition);
+        var original = Assert.Single(await _store.GetCaptureRangesAsync(profile.Id));
+        foreach (var invalid in new[] { " ", "a\nb", "a\rb" })
+            await Assert.ThrowsAsync<ArgumentException>(() => _store.RenameCaptureRangeAsync(profile.Id, id, invalid));
+        await Assert.ThrowsAsync<ArgumentException>(() => _store.RenameCaptureRangeAsync(long.MaxValue, id, "別"));
+        await Assert.ThrowsAsync<ArgumentException>(() => _store.DeleteCaptureRangeAsync(long.MaxValue, id));
+        Assert.Equal(original, Assert.Single(await _store.GetCaptureRangesAsync(profile.Id)));
+        await _store.RenameCaptureRangeAsync(profile.Id, id, "  新しい名前  ");
+        Assert.Equal(original with { Name = "新しい名前" }, Assert.Single(await _store.GetCaptureRangesAsync(profile.Id)));
+        await _store.DeleteCaptureRangeAsync(profile.Id, id);
+        Assert.Empty(await _store.GetCaptureRangesAsync(profile.Id));
+        Assert.Equal(item, Assert.Single(await _store.GetGameCaptureItemsAsync(profile.Id)));
+        Assert.Equal(new CaptureHistoryCounts(1, 1, 0), await _store.GetCaptureHistoryCountsAsync(profile.Id));
+    }
+
     private sealed class FakeHost : ILunaCaptureHost
     {
         public event Action<CaptureSource, string>? Output;

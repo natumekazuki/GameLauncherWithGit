@@ -12,6 +12,11 @@ export function unobserveFeed(element) {
 }
 export function scrollFeed(element, end) { element.scrollTop = end ? element.scrollHeight : 0; }
 export function selectionStart(element) { return element.selectionStart; }
+export function focusEditorContent() {
+    const dialog = document.getElementById('capture-editor');
+    const control = dialog?.querySelector('input:not(:disabled), select:not(:disabled), button:not(:disabled)');
+    control?.focus({ preventScroll: true });
+}
 let previousFocus;
 let previousBodyStyle;
 export function focusEditor(owner) {
@@ -42,7 +47,7 @@ export function restoreFocus() {
     document.querySelector('.capture-page')?.removeAttribute('inert');
     if (previousBodyStyle) Object.assign(document.body.style, previousBodyStyle);
     previousBodyStyle = null;
-    if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
+    if (previousFocus?.isConnected && !previousFocus.disabled) previousFocus.focus({ preventScroll: true });
     else if (previousFocus) document.querySelector('.capture-feed')?.focus({ preventScroll: true });
     previousFocus = null;
 }

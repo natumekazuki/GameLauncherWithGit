@@ -69,6 +69,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
                 Connecting = _connecting,
                 Process = _process,
                 NeedsProcess = _needsProcess,
+                Active = _active || _finishing || _connecting,
                 Received = _received,
                 Saved = _saved,
                 Lost = _lost,

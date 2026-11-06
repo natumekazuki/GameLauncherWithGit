@@ -39,6 +39,9 @@ public sealed record CapturePosition(long SessionId, long Sequence, int Offset) 
 }
 public sealed record CaptureRange(long Id, long CaptureGameId, string Name, CapturePosition Start, CapturePosition End);
 public sealed record CaptureRangeSelection(long CaptureGameId, CapturePosition Start, CapturePosition End);
+public sealed record CaptureEventKey(long SessionId, long Sequence);
+public sealed record CaptureDeletionTarget(CaptureEventKey Key, string RawText, int ItemCount);
+public sealed record CaptureHistoryCounts(int Items, int Events, int Ranges);
 public sealed record CaptureTextItem(long Id, long SessionId, long Sequence, DateTimeOffset ReceivedAt,
     string RawText, int Start, int Length, long? LabelId, string? LabelName, CaptureKind? Kind,
     string? Speaker, bool ManualLabel, bool ManualSpeaker, bool ManualBoundaries)
@@ -67,6 +70,7 @@ public sealed record CaptureSnapshot
     public long? SessionId { get; init; }
     public string Status { get; init; } = "未接続";
     public bool NeedsProcess { get; init; }
+    public bool Active { get; init; }
     public bool Connected { get; init; }
     public bool Preview { get; init; }
     public bool Connecting { get; init; }

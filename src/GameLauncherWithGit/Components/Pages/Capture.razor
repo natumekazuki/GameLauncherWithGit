@@ -62,6 +62,17 @@
                     <option value="dialogue">セリフ</option><option value="narration">地の文</option>
                 </select></label>
             </div>
+            @if (!_live)
+            {
+                <div class="capture-history-toolbar">
+                    <form class="capture-search" @onsubmit="SearchHistoryAsync" @onsubmit:preventDefault>
+                        <input type="search" aria-label="保存本文・話者を検索" placeholder="本文・話者を検索" @bind="_historySearchInput" disabled="@(_busy || _profileId == 0)" />
+                        <button type="submit" class="secondary-button capture-icon-button" title="検索" aria-label="検索" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Search" /></button>
+                        <button type="button" class="secondary-button capture-icon-button" title="検索を解除" aria-label="検索を解除" @onclick="ClearHistorySearchAsync" disabled="@(_busy || (_historySearch.Length == 0 && _historySearchInput.Length == 0))"><CaptureIcon Name="Close" /></button>
+                    </form>
+                    <button class="secondary-button capture-text-button" @onclick="OpenHistoryManagementAsync" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="History" />履歴管理</button>
+                </div>
+            }
             <div class="capture-tools">
                 <div class="capture-tool-group capture-view-tools">
                     @if (LatestOrder)
@@ -72,7 +83,7 @@
                     {
                         <button class="secondary-button capture-icon-button" title="前の200件" aria-label="前の200件" @onclick="PreviousAsync" disabled="@(_busy || _offset == 0)"><CaptureIcon Name="Previous" /></button>
                         <span class="capture-page-count">@(_items.Count == 0 ? "0" : $"{_offset + 1}–{_offset + _items.Count}")</span>
-                        <button class="secondary-button capture-icon-button" title="次の200件" aria-label="次の200件" @onclick="NextAsync" disabled="@(_busy || _items.Count < 200)"><CaptureIcon Name="Next" /></button>
+                        <button class="secondary-button capture-icon-button" title="次の200件" aria-label="次の200件" @onclick="NextAsync" disabled="@(_busy || !_hasMore)"><CaptureIcon Name="Next" /></button>
                         <button class="secondary-button capture-icon-button" title="更新" aria-label="更新" @onclick="RefreshAsync" disabled="@_busy"><CaptureIcon Name="Refresh" /></button>
                     }
                 </div>
@@ -86,6 +97,10 @@
                     <span class="capture-selection-count" aria-label="@($"{_selected.Count}件選択")">@_selected.Count</span>
                     <button class="secondary-button capture-icon-button" title="一括修正" aria-label="一括修正" @onclick="OpenBulk" disabled="@(_busy || _selected.Count == 0)"><CaptureIcon Name="BulkEdit" /></button>
                     <button class="secondary-button capture-icon-button" title="選択解除" aria-label="選択解除" @onclick="ClearSelection" disabled="@(_busy || _selected.Count == 0)"><CaptureIcon Name="ClearSelection" /></button>
+                    @if (!_live)
+                    {
+                        <button class="secondary-button capture-icon-button" title="選択した本文の原文を削除" aria-label="選択した本文の原文を削除" @onclick="OpenSelectedDeletionAsync" disabled="@(_busy || _selected.Count == 0)"><CaptureIcon Name="Trash" /></button>
+                    }
                 </div>
                 <div class="capture-tool-group capture-utilities">
                     <button class="secondary-button capture-icon-button" title="抽出設定" aria-label="抽出設定" @onclick="OpenSettings" disabled="@_busy"><CaptureIcon Name="Settings" /></button>
@@ -133,6 +148,74 @@
         </section>
     }
 </section>
+
+@if (_historyDialog != HistoryDialog.None)
+{
+    <div class="modal-backdrop"><section id="capture-editor" class="capture-dialog capture-history-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-history-title">
+        <header class="capture-dialog-header"><h2 id="capture-history-title">@HistoryDialogTitle</h2><button class="secondary-button capture-icon-button" title="閉じる" aria-label="閉じる" @onclick="CloseEditors" disabled="@_busy"><CaptureIcon Name="Close" /></button></header>
+        <div class="capture-dialog-body capture-history-body">
+            <strong class="capture-history-title">@_profile?.Title</strong>
+            @if (_historyDialog == HistoryDialog.Manage)
+            {
+                <p class="capture-history-counts">本文 @_historyCounts.Items 件 · 原文 @_historyCounts.Events 件 · 区間 @_historyCounts.Ranges 件</p>
+                <section class="capture-history-section">
+                    <h3>区間</h3>
+                    @if (_ranges.Count == 0) { <p class="capture-muted">保存した区間はありません。</p> }
+                    else
+                    {
+                        <select aria-label="管理する区間" @bind="_managedRangeId" @bind:after="LoadManagedRangeName" disabled="@_busy">
+                            @foreach (var range in _ranges) { <option value="@range.Id">@RangeName(range)</option> }
+                        </select>
+                        <label>区間名<input @bind="_managedRangeName" disabled="@_busy" /></label>
+                        <div class="capture-history-actions">
+                            <button class="secondary-button capture-text-button" @onclick="RenameRangeAsync" disabled="@_busy"><CaptureIcon Name="Check" />名前を保存</button>
+                            <button class="secondary-button capture-text-button" @onclick="() => SetHistoryDialog(HistoryDialog.DeleteRange)" disabled="@_busy"><CaptureIcon Name="Trash" />区間を削除</button>
+                        </div>
+                    }
+                </section>
+                <section class="capture-history-section">
+                    <h3>ゲームの全履歴</h3>
+                    <p class="capture-muted">本文・名前の原文・区間を消去します。ゲーム登録と抽出設定は残ります。</p>
+                    <button class="secondary-button capture-text-button capture-danger" @onclick="PrepareClearHistoryAsync" disabled="@(_busy || (_historyCounts.Events == 0 && _historyCounts.Ranges == 0))"><CaptureIcon Name="Trash" />全履歴を消去…</button>
+                </section>
+            }
+            else if (_historyDialog == HistoryDialog.DeleteSelected)
+            {
+                <p>選択した本文を含む @_deletionTargets.Count 件の原文（本文 @(_deletionTargets.Sum(x => x.ItemCount)) 件）を削除します。</p>
+                <p class="capture-warning">同じ原文から分割された本文も、検索・分類の条件に関係なく削除します。元に戻せません。</p>
+                <div class="capture-deletion-preview" aria-label="削除する原文">
+                    @foreach (var target in _deletionTargets) { <article><small>本文 @target.ItemCount 件</small><p>@target.RawText</p></article> }
+                </div>
+                <p class="capture-muted">区間の位置は残り、削除した本文だけが区間表示から除かれます。</p>
+            }
+            else if (_historyDialog == HistoryDialog.Clear)
+            {
+                <p>このゲームの本文 @_historyCounts.Items 件、原文 @_historyCounts.Events 件（名前の受信を含む）、区間 @_historyCounts.Ranges 件をすべて消去します。</p>
+                <p class="capture-warning">検索・分類・選択中の区間に関係なく、このゲームの全履歴が対象です。元に戻せません。</p>
+                <p>ゲーム登録・セーブデータ・抽出設定・他のゲームの履歴は変更しません。</p>
+            }
+            else if (_historyDialog == HistoryDialog.DeleteRange)
+            {
+                <p>区間「@ManagedRangeDisplayName」を削除します。</p>
+                <p>区間の名前と範囲だけを削除し、本文は残ります。区間の削除は元に戻せません。</p>
+            }
+            @if (_historyDialog is HistoryDialog.DeleteSelected or HistoryDialog.Clear && HistoryCaptureActive)
+            {
+                <div class="capture-history-section" role="status">
+                    <p>このゲームは取得中です。削除するには取得を停止してください。ゲーム自体は終了しません。</p>
+                    <button class="secondary-button capture-text-button" @onclick="StopHistoryCaptureAsync" disabled="@_busy"><CaptureIcon Name="Stop" />取得を停止</button>
+                </div>
+            }
+        </div>
+        <footer class="capture-dialog-actions">
+            <button class="secondary-button" @onclick="CloseEditors" disabled="@_busy">@(_historyDialog == HistoryDialog.Manage ? "閉じる" : "キャンセル")</button>
+            @if (_historyDialog != HistoryDialog.Manage)
+            {
+                <button class="secondary-button capture-text-button capture-danger" @onclick="ConfirmHistoryDeletionAsync" disabled="@(_busy || (_historyDialog != HistoryDialog.DeleteRange && HistoryCaptureActive))"><CaptureIcon Name="Trash" />@(_historyDialog == HistoryDialog.Clear ? "全履歴を消去" : "削除する")</button>
+            }
+        </footer>
+    </section></div>
+}
 
 @if (_message is not null || _error is not null)
 {
@@ -330,6 +413,17 @@
     private int _processId, _offset;
     private bool _live = true, _following = true, _busy, _loading = true, _split = true, _outside;
     private string _filter = "all", _processSearch = "";
+    private string _historySearchInput = "", _historySearch = "";
+    private bool _hasMore, _focusHistoryContent;
+    private enum HistoryDialog { None, Manage, DeleteSelected, Clear, DeleteRange }
+    private HistoryDialog _historyDialog;
+    private CaptureHistoryCounts _historyCounts = new(0, 0, 0);
+    private IReadOnlyList<CaptureDeletionTarget> _deletionTargets = [];
+    private long _managedRangeId;
+    private string _managedRangeName = "";
+    private bool HistoryCaptureActive => CaptureService.Snapshot is { Active: true, Profile: { } profile } && profile.Id == _profileId;
+    private string ManagedRangeDisplayName => _ranges.FirstOrDefault(x => x.Id == _managedRangeId) is { } range ? RangeName(range) : "";
+    private string HistoryDialogTitle => _historyDialog switch { HistoryDialog.Manage => "履歴管理", HistoryDialog.DeleteSelected => "原文を削除", HistoryDialog.Clear => "全履歴を消去", _ => "区間を削除" };
     private string? _message, _error;
     private bool _windowsOnly = true;
     private int _settingsTab, _windowCountdown;
@@ -354,7 +448,7 @@
     private CaptureTextItem? _rangeFirst, _rangeLast;
     private CaptureRangeSelection? _rangeSelection;
     private string _rangeName = "";
-    private bool EditorOpen => _settingsOpen || _bulkOpen || _edit is not null || _partition is not null || _rangeSelection is not null;
+    private bool EditorOpen => _settingsOpen || _bulkOpen || _edit is not null || _partition is not null || _rangeSelection is not null || _historyDialog != HistoryDialog.None;
     private bool FollowingView => _live && _rangeId == 0 && !_pickingRange;
     private bool LatestOrder => _live && _rangeId == 0;
     private bool CanEdit => _rangeId == 0 && !_pickingRange;
@@ -382,7 +476,7 @@
     private static string ClassificationChoiceName(CaptureLabel label) => label.Kind is CaptureKind.Dialogue or CaptureKind.Narration ? ClassificationName(label.Kind) : label.Name;
     private string EmptyMessage => _profileId == 0
         ? (_live ? "ゲームなし" : "ゲーム未選択")
-        : _live && _filter == "all" ? "本文待ち" : "本文なし";
+        : _historySearch.Length > 0 || _filter != "all" || _rangeId != 0 ? "条件に一致する本文はありません" : _live ? "本文待ち" : "保存された本文はありません";
     private static string CandidatePreview(string text) => string.Concat(text.Take(60)).ReplaceLineEndings(" ");
     private sealed class PartDraft { public string Text { get; set; } = ""; public long Label { get; set; } public string Speaker { get; set; } = ""; }
     protected override async Task OnInitializedAsync()
@@ -412,6 +506,7 @@
         if (_scrollToEnd is { } end) { _scrollToEnd = null; await _module.InvokeVoidAsync("scrollFeed", _feed, end); }
         if (_focusEditor) { _focusEditor = false; await _module.InvokeVoidAsync("focusEditor", _self); }
         if (_focusSettingsTab) { _focusSettingsTab = false; if (_settingsOpen) await _module.InvokeVoidAsync("focusSettingsTab"); }
+        if (_focusHistoryContent) { _focusHistoryContent = false; await _module.InvokeVoidAsync("focusEditorContent"); }
         if (_restoreFocus) { _restoreFocus = false; await _module.InvokeVoidAsync("restoreFocus"); }
     }
     private async Task PollAsync()
@@ -454,14 +549,69 @@
         _labels = _profile is null ? [] : await Store.GetCaptureLabelsAsync(_profile.Id);
         _ranges = _profile is null ? [] : await Store.GetCaptureRangesAsync(_profile.Id);
         _rangeId = 0; _rangeFirst = _rangeLast = null; _pickingRange = false;
-        _offset = 0; _selected.Clear(); _filter = "all";
+        _offset = 0; _selected.Clear(); _filter = "all"; _historySearchInput = _historySearch = "";
         if (_profile is not null) { _split = _profile.Rules.SplitDialogue; _outside = _profile.Rules.OutsideIsNarration; }
         await LoadItemsAsync();
     }
     private async Task LoadItemsAsync()
     {
-        _items = _profileId == 0 ? [] : await Store.GetGameCaptureItemsAsync(_profileId, 200, FollowingView ? 0 : _offset, null, _filter == "none", LatestOrder, _rangeId == 0 ? null : _rangeId, FilterKind);
+        var items = _profileId == 0 ? [] : await Store.GetGameCaptureItemsAsync(_profileId, LatestOrder ? 200 : 201, FollowingView ? 0 : _offset, null, _filter == "none", LatestOrder, _rangeId == 0 ? null : _rangeId, FilterKind, _historySearch);
+        _hasMore = items.Count > 200;
+        _items = items.Take(200).ToArray();
     }
+    private Task SearchHistoryAsync() => RunAsync(async () => { _historySearch = _historySearchInput.Trim(); _offset = 0; _selected.Clear(); await LoadItemsAsync(); _scrollToEnd = false; });
+    private Task ClearHistorySearchAsync() { _historySearchInput = ""; return SearchHistoryAsync(); }
+    private Task OpenHistoryManagementAsync() => RunAsync(async () =>
+    {
+        _historyCounts = await Store.GetCaptureHistoryCountsAsync(_profileId);
+        _ranges = await Store.GetCaptureRangesAsync(_profileId);
+        _managedRangeId = _ranges.Any(x => x.Id == _rangeId) ? _rangeId : _ranges.FirstOrDefault()?.Id ?? 0;
+        LoadManagedRangeName(); _historyDialog = HistoryDialog.Manage; _focusEditor = true;
+    });
+    private void LoadManagedRangeName() => _managedRangeName = _ranges.FirstOrDefault(x => x.Id == _managedRangeId)?.Name ?? "";
+    private void SetHistoryDialog(HistoryDialog dialog) { _historyDialog = dialog; _focusHistoryContent = true; }
+    private Task RenameRangeAsync() => RunAsync(async () =>
+    {
+        await Store.RenameCaptureRangeAsync(_profileId, _managedRangeId, _managedRangeName);
+        _ranges = await Store.GetCaptureRangesAsync(_profileId); LoadManagedRangeName();
+    }, "区間名を保存しました。");
+    private Task PrepareClearHistoryAsync() => RunAsync(async () =>
+    {
+        _historyCounts = await Store.GetCaptureHistoryCountsAsync(_profileId); SetHistoryDialog(HistoryDialog.Clear);
+    });
+    private Task OpenSelectedDeletionAsync() => RunAsync(async () =>
+    {
+        _deletionTargets = await Store.GetCaptureDeletionTargetsAsync(_profileId, _selected.ToArray());
+        _historyDialog = HistoryDialog.DeleteSelected; _focusEditor = true;
+    });
+    private Task StopHistoryCaptureAsync() => RunAsync(async () =>
+    {
+        if (!HistoryCaptureActive) return;
+        await CaptureService.FinishAsync(); _snapshot = CaptureService.Snapshot;
+        _historyCounts = await Store.GetCaptureHistoryCountsAsync(_profileId);
+        _focusHistoryContent = true;
+    }, "取得を停止しました。ゲームは実行中のままです。");
+    private Task ConfirmHistoryDeletionAsync() => RunAsync(async () =>
+    {
+        if (_historyDialog != HistoryDialog.DeleteRange && HistoryCaptureActive)
+            throw new InvalidOperationException("取得を停止してから削除してください。");
+        switch (_historyDialog)
+        {
+            case HistoryDialog.DeleteSelected:
+                await Store.DeleteCaptureEventsAsync(_profileId, _deletionTargets.Select(x => x.Key).ToArray());
+                _message = $"原文 {_deletionTargets.Count} 件を削除しました。"; break;
+            case HistoryDialog.Clear:
+                await Store.ClearCaptureHistoryAsync(_profileId); _rangeId = 0;
+                _message = "全履歴を消去しました。ゲーム登録と抽出設定は保持しています。"; break;
+            case HistoryDialog.DeleteRange:
+                await Store.DeleteCaptureRangeAsync(_profileId, _managedRangeId);
+                if (_rangeId == _managedRangeId) _rangeId = 0;
+                _message = "区間を削除しました。本文は保持しています。"; break;
+            default: return;
+        }
+        _ranges = await Store.GetCaptureRangesAsync(_profileId);
+        _offset = 0; _selected.Clear(); ClearTextRange(); CloseEditors(); await LoadItemsAsync(); _scrollToEnd = false;
+    });
     private Task ChangeProfileAsync(ChangeEventArgs e) => RunAsync(async () => { _profileId = long.Parse(e.Value!.ToString()!); await LoadProfileAsync(); _scrollToEnd = false; });
     private Task ChangeRangeAsync() => RunAsync(async () => { _offset = 0; _selected.Clear(); await LoadItemsAsync(); _scrollToEnd = FollowingView && _following; });
     private Task FilterAsync() => RunAsync(async () => { _offset = 0; _selected.Clear(); await LoadItemsAsync(); _scrollToEnd = FollowingView && _following; });
@@ -621,12 +771,12 @@
     private Task AddBoundaryAsync() => RunAsync(async () => { if (_partition is null || _module is null) return; var position = await _module.InvokeAsync<int>("selectionStart", _rawInput); var next = _boundaries.Append(position).Distinct().Order().ToArray(); ScenarioTextProcessor.ValidateBoundaries(_partition.RawText, next); _boundaries.Clear(); _boundaries.AddRange(next); RebuildParts(); });
     private void RemoveBoundary(int index) { _boundaries.RemoveAt(index); RebuildParts(); }
     private Task SavePartitionAsync() => RunAsync(async () => { if (_partition is null) return; await Store.SplitCaptureEventAsync(_partition.SessionId, _partition.Sequence, _boundaries.ToArray(), _parts.Select(x => new CaptureManualPart(x.Label == 0 ? null : x.Label, IsNarration(x.Label) ? null : string.IsNullOrWhiteSpace(x.Speaker) ? null : x.Speaker.Trim())).ToArray()); CloseEditors(); _selected.Clear(); await LoadItemsAsync(); }, "分割を保存しました。");
-    private void CloseEditors() { CancelWindowPick(); _pausedCandidates = null; _edit = null; _partition = null; _settingsOpen = false; _bulkOpen = false; _rangeSelection = null; _restoreFocus = true; }
+    private void CloseEditors() { CancelWindowPick(); _pausedCandidates = null; _edit = null; _partition = null; _settingsOpen = false; _bulkOpen = false; _rangeSelection = null; _historyDialog = HistoryDialog.None; _deletionTargets = []; _restoreFocus = true; }
     [JSInvokable] public void CloseEditorFromKeyboard() { if (!_busy) { CloseEditors(); StateHasChanged(); } }
     private Task ExportAsync() => RunAsync(async () =>
     {
         if (_profile is null) return;
-        var items = await Store.GetGameCaptureItemsAsync(_profileId, 0, 0, null, _filter == "none", rangeId: _rangeId == 0 ? null : _rangeId, kind: FilterKind);
+        var items = await Store.GetGameCaptureItemsAsync(_profileId, 0, 0, null, _filter == "none", rangeId: _rangeId == 0 ? null : _rangeId, kind: FilterKind, search: _historySearch);
         var folder = await Picker.PickFolderPathAsync("TXTの保存先フォルダを選択");
         if (folder is null) return;
         var title = string.Concat((_profile.Title + (_ranges.FirstOrDefault(x => x.Id == _rangeId) is { } range ? "-" + range.Name : "")).Select(x => Path.GetInvalidFileNameChars().Contains(x) ? '_' : x));
