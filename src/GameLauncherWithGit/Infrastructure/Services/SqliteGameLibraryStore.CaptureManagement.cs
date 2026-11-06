@@ -32,10 +32,18 @@ public sealed partial class SqliteGameLibraryStore
 
     public async Task DeleteCaptureEventsAsync(long profileId, IReadOnlyCollection<CaptureEventKey> events)
     {
+        await _screenshotFilesLock.WaitAsync();
+        try { await DeleteCaptureEventsCoreAsync(profileId, events); }
+        finally { _screenshotFilesLock.Release(); }
+    }
+
+    private async Task DeleteCaptureEventsCoreAsync(long profileId, IReadOnlyCollection<CaptureEventKey> events)
+    {
         if (events.Count == 0) throw new ArgumentException("削除する原文を選んでください。");
         await EnsureInitializedAsync(default);
         await using var connection = await OpenConnectionAsync(default);
         await using var transaction = connection.BeginTransaction();
+        var imageCandidates = await ScreenshotCandidatesAsync(connection, transaction, profileId);
         foreach (var key in events.Distinct())
         {
             await using var find = CaptureCommand(connection, transaction, """
@@ -50,7 +58,9 @@ public sealed partial class SqliteGameLibraryStore
                 """, ("$session", key.SessionId), ("$sequence", key.Sequence));
             await delete.ExecuteNonQueryAsync();
         }
+        var removedImages = await RemoveUnreferencedScreenshotsAsync(connection, transaction, imageCandidates);
         await transaction.CommitAsync();
+        foreach (var id in removedImages) File.Delete(ScreenshotPath(id));
     }
 
     public async Task<CaptureHistoryCounts> GetCaptureHistoryCountsAsync(long profileId)
@@ -70,9 +80,17 @@ public sealed partial class SqliteGameLibraryStore
 
     public async Task ClearCaptureHistoryAsync(long profileId)
     {
+        await _screenshotFilesLock.WaitAsync();
+        try { await ClearCaptureHistoryCoreAsync(profileId); }
+        finally { _screenshotFilesLock.Release(); }
+    }
+
+    private async Task ClearCaptureHistoryCoreAsync(long profileId)
+    {
         await EnsureInitializedAsync(default);
         await using var connection = await OpenConnectionAsync(default);
         await using var transaction = connection.BeginTransaction();
+        var imageCandidates = await ScreenshotCandidatesAsync(connection, transaction, profileId);
         await using var find = CaptureCommand(connection, transaction, "SELECT EXISTS(SELECT 1 FROM CaptureGames WHERE Id=$game)", ("$game", profileId));
         if ((long)(await find.ExecuteScalarAsync())! == 0) throw new ArgumentException("ゲームの履歴が見つかりません。");
         await using var command = CaptureCommand(connection, transaction, """
@@ -83,7 +101,9 @@ public sealed partial class SqliteGameLibraryStore
             DELETE FROM CaptureSessions WHERE CaptureGameId=$game;
             """, ("$game", profileId));
         await command.ExecuteNonQueryAsync();
+        var removedImages = await RemoveUnreferencedScreenshotsAsync(connection, transaction, imageCandidates);
         await transaction.CommitAsync();
+        foreach (var id in removedImages) File.Delete(ScreenshotPath(id));
     }
 
     public async Task RenameCaptureRangeAsync(long profileId, long rangeId, string name)

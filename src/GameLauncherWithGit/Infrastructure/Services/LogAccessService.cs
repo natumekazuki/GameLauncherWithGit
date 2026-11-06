@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using GameLauncherWithGit.Application.Abstractions;
 using GameLauncherWithGit.Application.Models;
+using GameLauncherWithGit.Application.Services;
 using GameLauncherWithGit.Infrastructure.Abstractions;
 using GameLauncherWithGit.Infrastructure.Models;
 using Microsoft.Extensions.Logging;
@@ -41,7 +42,7 @@ public sealed class LogAccessService : ILogAccessService
 		_appSettingsService = appSettingsService;
 		_logDispatcher = logDispatcher;
 		_logger = logger;
-		_logsDirectoryPath = Path.Combine(FileSystem.AppDataDirectory, LogsDirectoryName);
+		_logsDirectoryPath = Path.Combine(AppDataPaths.Directory, LogsDirectoryName);
 		_structuredLogPath = Path.Combine(_logsDirectoryPath, StructuredLogFileName);
 		_logStoreReader = new FileLogStoreReader(_structuredLogPath);
 		_resource = BuildResource();

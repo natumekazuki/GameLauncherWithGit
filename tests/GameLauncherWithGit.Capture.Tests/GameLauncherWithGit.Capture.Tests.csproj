@@ -14,7 +14,9 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="../../src/GameLauncherWithGit/Application/Models/ScenarioCapture.cs" Link="ScenarioCapture.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Application/Models/Scenario*.cs" Link="%(Filename)%(Extension)" />
+    <Compile Include="../../src/GameLauncherWithGit/Application/Models/AppSettings.cs" Link="AppSettings.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Application/Abstractions/IAppSettingsService.cs" Link="IAppSettingsService.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Application/Models/GameCard*.cs" Link="%(Filename)%(Extension)" />
     <Compile Include="../../src/GameLauncherWithGit/Application/Models/GameSaveLinkItem.cs" Link="GameSaveLinkItem.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Application/Models/RepositorySyncHistory*.cs" Link="%(Filename)%(Extension)" />
@@ -25,6 +27,7 @@
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/ISaveLinkStore.cs" Link="ISaveLinkStore.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/IRepositorySyncHistoryStore.cs" Link="IRepositorySyncHistoryStore.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/IScenarioCaptureStore.cs" Link="IScenarioCaptureStore.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/IScenarioScreenshot*.cs" Link="%(Filename)%(Extension)" />
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/ILunaCaptureHost.cs" Link="ILunaCaptureHost.cs" />
   </ItemGroup>
 </Project>

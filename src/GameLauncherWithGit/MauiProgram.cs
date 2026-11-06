@@ -13,7 +13,7 @@ public static class MauiProgram
 	public static MauiApp CreateMauiApp()
 	{
 		var builder = MauiApp.CreateBuilder();
-		var logsDirectoryPath = Path.Combine(FileSystem.AppDataDirectory, "logs");
+		var logsDirectoryPath = Path.Combine(AppDataPaths.Directory, "logs");
 		var structuredLogPath = Path.Combine(logsDirectoryPath, "app-events.jsonl");
 
 		builder
@@ -44,10 +44,13 @@ public static class MauiProgram
 		builder.Services.AddSingleton<IRepositoryStateStore, RepositoryStateStore>();
 		builder.Services.AddSingleton(serviceProvider => new SqliteGameLibraryStore(
 			serviceProvider.GetRequiredService<ILogger<SqliteGameLibraryStore>>(),
-			Path.Combine(FileSystem.AppDataDirectory, "game-library.db")));
+			Path.Combine(AppDataPaths.Directory, "game-library.db")));
 		builder.Services.AddSingleton<IScenarioCaptureStore>(serviceProvider => serviceProvider.GetRequiredService<SqliteGameLibraryStore>());
 		builder.Services.AddSingleton<ILunaCaptureHost, LunaCaptureHost>();
 		builder.Services.AddSingleton<ScenarioCaptureService>();
+		builder.Services.AddSingleton<IScenarioScreenshotStore>(serviceProvider => serviceProvider.GetRequiredService<SqliteGameLibraryStore>());
+		builder.Services.AddSingleton<IScenarioScreenshotPlatform, ScenarioScreenshotPlatform>();
+		builder.Services.AddSingleton<ScenarioScreenshotService>();
 		builder.Services.AddSingleton<IGameLibraryStore>(serviceProvider => serviceProvider.GetRequiredService<SqliteGameLibraryStore>());
 		builder.Services.AddSingleton<IRepositorySyncHistoryStore>(serviceProvider => serviceProvider.GetRequiredService<SqliteGameLibraryStore>());
 		builder.Services.AddSingleton<ISaveLinkStore>(serviceProvider => serviceProvider.GetRequiredService<SqliteGameLibraryStore>());

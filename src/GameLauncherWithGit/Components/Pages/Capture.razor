@@ -6,6 +6,8 @@
 @using System.Text
 @implements IAsyncDisposable
 @inject IScenarioCaptureStore Store
+@inject IScenarioScreenshotStore ScreenshotStore
+@inject ScenarioScreenshotService Screenshots
 @inject ScenarioCaptureService CaptureService
 @inject IPathPickerService Picker
 @inject IJSRuntime JS
@@ -105,10 +107,13 @@
                     }
                 </div>
                 <div class="capture-tool-group capture-utilities">
+                    <button class="secondary-button capture-icon-button" title="スクリーンショット設定" aria-label="スクリーンショット設定" @onclick="OpenScreenshotSettings" disabled="@_busy"><CaptureIcon Name="Camera" /></button>
                     <button class="secondary-button capture-icon-button" title="抽出設定" aria-label="抽出設定" @onclick="OpenSettings" disabled="@_busy"><CaptureIcon Name="Settings" /></button>
                     <button class="secondary-button capture-icon-button" title="TXT出力（条件の全件）" aria-label="条件の全件をTXT出力" @onclick="ExportAsync" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Export" /></button>
+                    <button class="secondary-button capture-icon-button" title="ZIP出力（条件の全件・画像付き）" aria-label="条件の全件を画像付きZIP出力" @onclick="ExportArchiveAsync" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Archive" /></button>
                 </div>
             </div>
+            <div class="capture-screenshot-status" role="status" aria-busy="@(Screenshots.Snapshot.Busy ? "true" : "false")"><CaptureIcon Name="Camera" /><span title="@Screenshots.Snapshot.Status">@Screenshots.Snapshot.Status</span><span class="capture-screenshot-count" title="アプリ起動中の撮影保存の成功回数（同一画像の再利用を含む）" aria-label="@($"アプリ起動中の撮影保存の成功回数 {Screenshots.Snapshot.SavedCount}回、同一画像の再利用を含む")">@Screenshots.Snapshot.SavedCount</span></div>
             <div class="capture-range-summary" role="status" aria-label="@TextRangeSummary" title="@TextRangeSummary">
                 @if (_pickingRange)
                 {
@@ -132,6 +137,7 @@
                                 }
                             </strong>
                             <span class="capture-manual @(item.ManualLabel || item.ManualSpeaker || item.ManualBoundaries ? "" : "capture-hidden")" title="手動修正" aria-label="手動修正"><CaptureIcon Name="Edit" /></span>
+                            <button class="secondary-button capture-icon-button" title="この本文を受信した頃のシーン" aria-label="この本文を受信した頃のシーンを見る" @onclick="() => OpenScreenshotsAsync(item)" disabled="@_busy"><CaptureIcon Name="Image" /></button>
                             @if (_pickingRange)
                             {
                                 <button class="secondary-button capture-icon-button" title="ここから" aria-label="ここから" aria-pressed="@(item.StartPosition == _rangeFirst?.StartPosition ? "true" : "false")" @onclick="() => PickRangeStart(item)" disabled="@_busy"><CaptureIcon Name="Start" /></button>
@@ -150,6 +156,32 @@
         </section>
     }
 </section>
+
+@if (_screenshotSettingsOpen)
+{
+    <div class="modal-backdrop"><section id="capture-editor" class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-screenshot-settings-title">
+        <header class="capture-dialog-header"><h2 id="capture-screenshot-settings-title">スクリーンショット設定</h2><button class="secondary-button capture-icon-button" title="閉じる" aria-label="閉じる" @onclick="CloseEditors"><CaptureIcon Name="Close" /></button></header>
+        <div class="capture-dialog-body"><ScenarioScreenshotSettings /></div>
+    </section></div>
+}
+@if (_screenshotItem is not null)
+{
+    <div class="modal-backdrop"><section id="capture-editor" class="capture-dialog capture-gallery-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-gallery-title" aria-busy="@(_busy ? "true" : "false")">
+        <header class="capture-dialog-header"><h2 id="capture-gallery-title">この本文を受信した頃のシーン</h2><button class="secondary-button capture-icon-button" title="閉じる" aria-label="閉じる" @onclick="CloseEditors" disabled="@_busy"><CaptureIcon Name="Close" /></button></header>
+        <p class="capture-gallery-text">@_screenshotItem.Text</p>
+        <div class="capture-gallery-stage" tabindex="0" aria-label="撮影したシーン">
+            @if (_busy) { <p role="status">画像を読込中…</p> }
+            else if (_galleryError is not null) { <p role="alert" class="capture-error">@_galleryError</p> }
+            else if (_eventScreenshots.Count == 0) { <p class="capture-muted">この本文に関連付けられた画像はありません。</p> }
+            else if (_galleryImage is not null) { <img src="@_galleryImage" alt="この本文を受信した頃に撮影したゲーム画面" @onerror="ScreenshotDecodeFailed" /> }
+        </div>
+        <div class="capture-gallery-navigation">
+            <button class="secondary-button capture-icon-button" title="前の画像" aria-label="前の画像" @onclick="() => ChangeScreenshotAsync(-1)" disabled="@(_busy || _galleryIndex == 0)"><CaptureIcon Name="Previous" /></button>
+            <span>@(_eventScreenshots.Count == 0 ? "0枚" : $"{_galleryIndex + 1} / {_eventScreenshots.Count}枚")</span>
+            <button class="secondary-button capture-icon-button" title="次の画像" aria-label="次の画像" @onclick="() => ChangeScreenshotAsync(1)" disabled="@(_busy || _galleryIndex + 1 >= _eventScreenshots.Count)"><CaptureIcon Name="Next" /></button>
+        </div>
+    </section></div>
+}
 
 @if (_historyDialog != HistoryDialog.None)
 {
@@ -405,6 +437,11 @@
 
 @code {
     private CaptureSnapshot _snapshot = new();
+    private bool _screenshotSettingsOpen;
+    private CaptureTextItem? _screenshotItem;
+    private IReadOnlyList<ScenarioScreenshot> _eventScreenshots = [];
+    private int _galleryIndex;
+    private string? _galleryImage, _galleryError;
     private IReadOnlyList<CaptureProfile> _profiles = [];
     private IReadOnlyList<CaptureRange> _ranges = [];
     private IReadOnlyList<CaptureLabel> _labels = [];
@@ -452,7 +489,7 @@
     private CaptureTextItem? _rangeFirst, _rangeLast;
     private CaptureRangeSelection? _rangeSelection;
     private string _rangeName = "";
-    private bool EditorOpen => _settingsOpen || _bulkOpen || _edit is not null || _partition is not null || _rangeSelection is not null || _historyDialog != HistoryDialog.None;
+    private bool EditorOpen => _screenshotSettingsOpen || _screenshotItem is not null || _settingsOpen || _bulkOpen || _edit is not null || _partition is not null || _rangeSelection is not null || _historyDialog != HistoryDialog.None;
     private bool FollowingView => _live && _rangeId == 0 && !_pickingRange;
     private bool LatestOrder => _live && _rangeId == 0;
     private bool CanEdit => _rangeId == 0 && !_pickingRange;
@@ -790,8 +827,45 @@
     private Task AddBoundaryAsync() => RunAsync(async () => { if (_partition is null || _module is null) return; var position = await _module.InvokeAsync<int>("selectionStart", _rawInput); var next = _boundaries.Append(position).Distinct().Order().ToArray(); ScenarioTextProcessor.ValidateBoundaries(_partition.RawText, next); _boundaries.Clear(); _boundaries.AddRange(next); RebuildParts(); });
     private void RemoveBoundary(int index) { _boundaries.RemoveAt(index); RebuildParts(); }
     private Task SavePartitionAsync() => RunAsync(async () => { if (_partition is null) return; await Store.SplitCaptureEventAsync(_partition.SessionId, _partition.Sequence, _boundaries.ToArray(), _parts.Select(x => new CaptureManualPart(x.Label == 0 ? null : x.Label, IsNarration(x.Label) ? null : string.IsNullOrWhiteSpace(x.Speaker) ? null : x.Speaker.Trim())).ToArray()); CloseEditors(); _selected.Clear(); await LoadItemsAsync(); }, "分割を保存しました。");
-    private void CloseEditors() { CancelWindowPick(); _pausedCandidates = null; _edit = null; _partition = null; _settingsOpen = false; _bulkOpen = false; _rangeSelection = null; _historyDialog = HistoryDialog.None; _deletionTargets = []; _restoreFocus = true; }
+    private void CloseEditors() { CancelWindowPick(); _screenshotSettingsOpen = false; _screenshotItem = null; _eventScreenshots = []; _galleryImage = _galleryError = null; _pausedCandidates = null; _edit = null; _partition = null; _settingsOpen = false; _bulkOpen = false; _rangeSelection = null; _historyDialog = HistoryDialog.None; _deletionTargets = []; _restoreFocus = true; }
     [JSInvokable] public void CloseEditorFromKeyboard() { if (!_busy) { CloseEditors(); StateHasChanged(); } }
+    private void OpenScreenshotSettings() { _screenshotSettingsOpen = true; _focusEditor = true; }
+    private Task OpenScreenshotsAsync(CaptureTextItem item) => RunAsync(async () =>
+    {
+        _screenshotItem = item; _following = false; _focusEditor = true;
+        _galleryIndex = 0; _galleryImage = _galleryError = null; _eventScreenshots = [];
+        try
+        {
+            _eventScreenshots = await ScreenshotStore.GetEventScreenshotsAsync(_profileId, new(item.SessionId, item.Sequence));
+            await LoadScreenshotImageAsync();
+        }
+        catch (Exception ex) { _galleryError = $"画像を読み込めませんでした：{ex.Message}"; }
+    });
+    private Task ChangeScreenshotAsync(int direction) => RunAsync(async () =>
+    {
+        _galleryIndex = Math.Clamp(_galleryIndex + direction, 0, Math.Max(0, _eventScreenshots.Count - 1));
+        await LoadScreenshotImageAsync();
+    });
+    private async Task LoadScreenshotImageAsync()
+    {
+        _galleryImage = _galleryError = null;
+        if (_eventScreenshots.Count == 0) return;
+        try { _galleryImage = "data:image/png;base64," + Convert.ToBase64String(await File.ReadAllBytesAsync(_eventScreenshots[_galleryIndex].FilePath, _stop.Token)); }
+        catch (Exception ex) { _galleryError = $"画像を読み込めませんでした：{ex.Message}"; }
+    }
+    private void ScreenshotDecodeFailed() { _galleryImage = null; _galleryError = "画像を表示できませんでした。画像ファイルが破損している可能性があります。"; }
+    private Task ExportArchiveAsync() => RunAsync(async () =>
+    {
+        if (_profile is null) return;
+        var profileId = _profileId;
+        var selection = new ScenarioArchiveSelection(RangeId: _rangeId == 0 ? null : _rangeId, UnclassifiedOnly: _filter == "none", Kind: FilterKind, TextSearch: _textSearch, SpeakerSearch: _speakerSearch);
+        var folder = await Picker.PickFolderPathAsync("ZIPの保存先フォルダを選択");
+        if (folder is null) return;
+        var title = string.Concat((_profile.Title + (_ranges.FirstOrDefault(x => x.Id == _rangeId) is { } range ? "-" + range.Name : "")).Select(x => Path.GetInvalidFileNameChars().Contains(x) ? '_' : x));
+        var path = Path.Combine(folder, $"{title}-{DateTime.Now:yyyyMMdd-HHmmss-fff}.zip");
+        await Task.Run(() => ScreenshotStore.ExportScenarioArchiveAsync(profileId, selection, path));
+        _message = $"ZIPを保存しました：{Path.GetFileName(path)}";
+    });
     private Task ExportAsync() => RunAsync(async () =>
     {
         if (_profile is null) return;

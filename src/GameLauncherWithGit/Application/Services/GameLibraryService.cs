@@ -28,7 +28,7 @@ public sealed class GameLibraryService : IGameLibraryService
 		_thumbnailService = thumbnailService;
 		_logger = logger;
 		_managedThumbnailDirectoryPath = Path.GetFullPath(
-			Path.Combine(FileSystem.AppDataDirectory, "thumbnails"));
+			Path.Combine(AppDataPaths.Directory, "thumbnails"));
 	}
 
 	public async Task<GameCardItem> CreateAsync(GameEditInput input, CancellationToken cancellationToken = default)

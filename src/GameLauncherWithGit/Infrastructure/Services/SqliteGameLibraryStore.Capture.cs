@@ -60,6 +60,14 @@ public sealed partial class SqliteGameLibraryStore
                 StartSessionId INTEGER NOT NULL REFERENCES CaptureSessions(Id), StartSequence INTEGER NOT NULL, StartOffset INTEGER NOT NULL,
                 EndSessionId INTEGER NOT NULL REFERENCES CaptureSessions(Id), EndSequence INTEGER NOT NULL, EndOffset INTEGER NOT NULL);
             CREATE INDEX IF NOT EXISTS IX_CaptureRanges_Game ON CaptureRanges(CaptureGameId,Id);
+            CREATE TABLE IF NOT EXISTS CaptureImages (
+                Id TEXT PRIMARY KEY, PixelHash TEXT NOT NULL UNIQUE,
+                Width INTEGER NOT NULL, Height INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS CaptureEventImages (
+                SessionId INTEGER NOT NULL, ReceiveSequence INTEGER NOT NULL,
+                ImageId TEXT NOT NULL REFERENCES CaptureImages(Id), CapturedAt TEXT NOT NULL,
+                PRIMARY KEY(SessionId,ReceiveSequence,ImageId),
+                FOREIGN KEY(SessionId,ReceiveSequence) REFERENCES CaptureEvents(SessionId,ReceiveSequence) ON DELETE CASCADE);
             """;
         await command.ExecuteNonQueryAsync(cancellationToken);
     }

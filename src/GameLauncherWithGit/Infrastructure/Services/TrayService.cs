@@ -314,6 +314,7 @@ public sealed class TrayService : ITrayService, IDisposable
 	{
 		try
 		{
+			await _serviceProvider.GetRequiredService<ScenarioScreenshotService>().DisposeAsync();
 			await Task.Run(() => _serviceProvider.GetRequiredService<ScenarioCaptureService>().FinishAsync()).WaitAsync(TimeSpan.FromSeconds(3));
 		}
 		catch (Exception ex)

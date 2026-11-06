@@ -1,0 +1,67 @@
+@using GameLauncherWithGit.Application.Models
+@using GameLauncherWithGit.Application.Services
+@inject ScenarioScreenshotService Screenshots
+
+<div class="screenshot-settings">
+    <section>
+        <h3>撮影ショートカット</h3>
+        <form @onsubmit="SaveHotkeyAsync" @onsubmit:preventDefault>
+            <div class="screenshot-hotkey">
+                <label><input type="checkbox" @bind="_ctrl" disabled="@_busy" />Ctrl</label>
+                <label><input type="checkbox" @bind="_alt" disabled="@_busy" />Alt</label>
+                <label><input type="checkbox" @bind="_shift" disabled="@_busy" />Shift</label>
+                <select aria-label="撮影キー" @bind="_key" disabled="@_busy">
+                    @foreach (var key in Keys) { <option value="@key.Value">@key.Name</option> }
+                </select>
+                <button type="submit" class="launch-button screenshot-icon" title="ショートカットを保存" aria-label="ショートカットを保存" disabled="@(_busy || !(_ctrl || _alt || _shift))"><CaptureIcon Name="Check" /></button>
+            </div>
+            <p class="screenshot-feedback" role="status">@(_error ?? _message ?? (!(_ctrl || _alt || _shift) ? "Ctrl・Alt・Shiftのいずれかを選択してください。" : ""))</p>
+        </form>
+        <p class="screenshot-note">Ctrlで文章をスキップするゲームがあります。ゲーム操作と競合しない組み合わせを選んでください。</p>
+    </section>
+    <section>
+        <div class="screenshot-window-heading"><h3>撮影ウィンドウ</h3><button class="secondary-button screenshot-icon" title="ウィンドウ一覧を更新" aria-label="ウィンドウ一覧を更新" @onclick="RefreshWindows" disabled="@_busy"><CaptureIcon Name="Refresh" /></button></div>
+        <p class="screenshot-current" title="@CurrentWindow">@CurrentWindow</p>
+        <div class="screenshot-windows" aria-label="撮影ウィンドウ候補">
+            <button class="secondary-button screenshot-window" aria-pressed="@(!Screenshots.Snapshot.ManualWindow ? "true" : "false")" @onclick="() => SelectWindow(null)" disabled="@_busy"><strong>自動選択</strong><span>本文の取得先にウィンドウが1つある場合</span></button>
+            @foreach (var window in _windows)
+            {
+                <button class="secondary-button screenshot-window" aria-pressed="@(Screenshots.Snapshot.ManualWindow && Screenshots.Snapshot.Window?.Handle == window.Handle ? "true" : "false")" @onclick="() => SelectWindow(window)" disabled="@_busy"><strong>@window.Title</strong><span>@window.ProcessName · PID @window.ProcessId</span></button>
+            }
+        </div>
+        <p class="screenshot-note">撮影先だけを変更します。ゲームを最前面にしてショートカットを押すと、枠を除いた画面を保存します。</p>
+    </section>
+</div>
+
+@code {
+    private bool _ctrl, _alt, _shift, _busy;
+    private uint _key;
+    private string? _error, _message;
+    private IReadOnlyList<CaptureWindow> _windows = [];
+    private static readonly (uint Value, string Name)[] Keys = Enumerable.Range('A', 26).Concat(Enumerable.Range('0', 10)).Select(x => ((uint)x, ((char)x).ToString())).Concat(Enumerable.Range(1, 11).Select(x => ((uint)(0x6F + x), $"F{x}"))).ToArray();
+    private string CurrentWindow => Screenshots.Snapshot.Window is { } window ? $"{window.Title} · {window.ProcessName} · PID {window.ProcessId}" : Screenshots.Snapshot.ManualWindow ? "撮影先未選択" : "本文の取得先から撮影時に自動選択";
+    protected override void OnInitialized()
+    {
+        var hotkey = Screenshots.Snapshot.Hotkey;
+        _ctrl = (hotkey.Modifiers & 2) != 0; _alt = (hotkey.Modifiers & 1) != 0; _shift = (hotkey.Modifiers & 4) != 0; _key = hotkey.VirtualKey;
+        RefreshWindows();
+    }
+    private void RefreshWindows()
+    {
+        try { _windows = Screenshots.GetWindows(); _error = null; }
+        catch (Exception ex) { _error = ex.Message; }
+    }
+    private void SelectWindow(CaptureWindow? window)
+    {
+        try { Screenshots.SelectWindow(window); _error = null; _message = "撮影先を変更しました。"; }
+        catch (Exception ex) { _error = ex.Message; }
+    }
+    private async Task SaveHotkeyAsync()
+    {
+        if (_busy || !(_ctrl || _alt || _shift)) return;
+        _busy = true; _error = _message = null;
+        try { await Screenshots.ConfigureHotkeyAsync(new((_ctrl ? 2u : 0) | (_alt ? 1u : 0) | (_shift ? 4u : 0), _key)); _message = "ショートカットを保存しました。"; }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+}

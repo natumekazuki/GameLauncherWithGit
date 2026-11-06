@@ -24,7 +24,7 @@ public sealed class AppSettingsService : IAppSettingsService
 	public AppSettingsService(ILogger<AppSettingsService> logger)
 	{
 		_logger = logger;
-		_settingsFilePath = Path.Combine(FileSystem.AppDataDirectory, SettingsFileName);
+		_settingsFilePath = Path.Combine(AppDataPaths.Directory, SettingsFileName);
 	}
 
 	public AppSettings Get()

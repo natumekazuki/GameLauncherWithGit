@@ -15,7 +15,7 @@ public partial class App : Microsoft.Maui.Controls.Application
 	private readonly IAppSettingsService _appSettings;
 	private CancellationTokenSource? _windowSizeSaveCancellation;
 
-	public App(IAppSettingsService appSettings)
+	public App(IAppSettingsService appSettings, GameLauncherWithGit.Application.Services.ScenarioScreenshotService screenshots)
 	{
 		_appSettings = appSettings;
 		InitializeComponent();
@@ -91,7 +91,7 @@ public partial class App : Microsoft.Maui.Controls.Application
 
 	private static void EnsureSingleInstance()
 	{
-		if (!OperatingSystem.IsWindows())
+		if (!OperatingSystem.IsWindows() || GameLauncherWithGit.Application.Services.AppDataPaths.IsIsolated)
 		{
 			return;
 		}

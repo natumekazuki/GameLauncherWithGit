@@ -46,6 +46,20 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
     private sealed record WriteWork(long Session, CaptureReceived? Received, CaptureRules Rules, TaskCompletionSource? Barrier = null);
     private sealed record SpeakerPending(long Session, long Sequence, DateTimeOffset ReceivedAt);
 
+    public event Action? StateChanged;
+
+    public (ScreenshotTarget Target, int ProcessId) FreezeScreenshotTarget()
+    {
+        lock (_gate)
+        {
+            if (!_active || _finishing || !_connected || _preview || _profile is null || _process is null
+                || _session is not { } session || _lastBodyPosition is not { Sequence: > 0 } position
+                || position.SessionId != session)
+                throw new InvalidOperationException("正式記録を開始し、本文を受信してから撮影してください。");
+            return (new(_profile.Id, new(session, position.Sequence)), _process.Id);
+        }
+    }
+
     public ScenarioCaptureService(IScenarioCaptureStore store, ILunaCaptureHost host, ILogger<ScenarioCaptureService> logger)
     {
         _store = store; _host = host; _logger = logger;
@@ -67,6 +81,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
                 Connected = _connected,
                 Preview = _preview,
                 Connecting = _connecting,
+                Recording = _active && !_finishing && _connected && !_preview && _session is not null,
                 Process = _process,
                 NeedsProcess = _needsProcess,
                 Active = _active || _finishing || _connecting,
@@ -185,7 +200,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
             lock (_gate) { _needsProcess = true; _status = "接続失敗・選び直して再試行できます"; }
             throw;
         }
-        finally { lock (_gate) _connecting = false; }
+        finally { lock (_gate) _connecting = false; StateChanged?.Invoke(); }
     }
 
     public async Task ConfirmProcessAsync()
@@ -215,6 +230,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
                 foreach (var key in _candidates.Keys.ToArray())
                     _candidates[key] = _candidates[key] with { Samples = [] };
             }
+            StateChanged?.Invoke();
         }
         catch { await _store.EndCaptureSessionAsync(session); throw; }
     }
@@ -284,7 +300,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
         var size = received.Text.Length * 2;
         if (_pendingBytes + size > MaxBytes || !_writes.Writer.TryWrite(new(session, received, rules))) { Lose("save-queue"); return; }
         _pendingBytes += size;
-        if (received.Role == CaptureRole.Body && received.Text.Length > 0)
+        if (received.Role == CaptureRole.Body && !string.IsNullOrWhiteSpace(received.Text))
         {
             var position = new CapturePosition(session, received.Sequence, received.Text.Length);
             if (_lastBodyPosition is null || position.CompareTo(_lastBodyPosition) > 0) _lastBodyPosition = position;
@@ -449,6 +465,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
             _buffer.Clear(); _bufferBytes = 0;
             _candidates.Clear();
         }
+        StateChanged?.Invoke();
         try
         {
             if (body is not null)

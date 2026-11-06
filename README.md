@@ -50,10 +50,14 @@ Windows、.NET 9 の MAUI 開発環境、Git 2.38.0 以降が必要です。初�
 git submodule update --init --recursive
 ./scripts/build-luna-native.ps1
 dotnet build src/GameLauncherWithGit/GameLauncherWithGit.csproj -f net9.0-windows10.0.19041.0
+$env:GAMELAUNCHER_DATA_DIRECTORY = Join-Path ([System.IO.Path]::GetTempPath()) ("GameLauncherWithGit-ui-" + [guid]::NewGuid().ToString("N"))
+$env:WEBVIEW2_USER_DATA_FOLDER = Join-Path $env:GAMELAUNCHER_DATA_DIRECTORY "webview2"
 dotnet run --project src/GameLauncherWithGit/GameLauncherWithGit.csproj -f net9.0-windows10.0.19041.0 --no-build
 ```
 
-起動時には、その Windows ユーザーの登録済みリポジトリを監視・同期します。確認には既存データのない別の Windows ユーザープロファイルや仮想環境を使い、実際のセーブデータやリモートを登録しないでください。
+`GAMELAUNCHER_DATA_DIRECTORY` に絶対パスを指定すると、DB・設定・サムネイル・ログの保存先をそのディレクトリへ切り替えます。指定が不正な場合は起動に失敗し、通常の保存先へは戻りません。既存データのコピーや移行は行いません。上の例は毎回空の検証用ディレクトリを使い、WebView2 のデータも分離します。検証プロセスは設定したシェルから起動してください。このモードでは通常起動の単一起動制御を使わないため、同じ検証ディレクトリで複数起動しないでください。
+
+未指定時は従来の保存先を使い、起動時に登録済みリポジトリを監視・同期します。検証用ディレクトリへ実データを持ち込まず、実際のセーブデータやリモートを登録しないでください。Windows の自動起動設定はプロファイル分離の対象外なので、検証中は変更しないでください。
 
 「新規追加」でタイトルだけを入力して保存すると、リポジトリや実行ファイルを使わず一覧の表示を確認できます。環境設定、ゲーム編集、通知などを開き、必要な状態へスクロールしたうえで Windows の画面キャプチャ機能を使って撮影できます。共有前にパスや個人情報が画像に含まれていないことを確認してください。
 
@@ -64,6 +68,10 @@ dotnet run --project src/GameLauncherWithGit/GameLauncherWithGit.csproj -f net9.
 保存履歴では名前・本文それぞれの部分一致と分類・区間を組み合わせ、すべての条件に一致する本文を閲覧・TXT出力できます。名前・本文は検索ボタンまたはEnterで適用し、空欄は条件にしません。本文を選んでゴミ箱を押すと、同じ受信原文から分割された本文も含めた削除内容を確認できます。「履歴管理」では区間の改名・削除と、抽出設定を残すゲーム単位の全履歴消去を行えます。区間だけを削除しても本文は残ります。本文・全履歴の削除は取得停止後に確定し、元に戻せません。
 
 取得はベストエフォートで、OCR・翻訳・全作品対応・欠落救済は提供しません。信頼できるゲームだけへ接続してください。動作・データ・安全境界の詳細は[シナリオ抽出設計](docs/design/scenario-extraction.md)、依存と配布条件は[Third-party notices](THIRD-PARTY-NOTICES.md)を参照してください。
+
+正式記録中はゲームを最前面にし、`Alt+Shift+S`でタイトルバーと枠を除いたスクリーンショットを保存できます。カメラの設定アイコンからキーと撮影ウィンドウを変更できます。Ctrlはゲームのスキップ操作と重なることがあるため、ゲームや他アプリで使わない組合せを選んでください。撮影対象は本文の取得先から自動選択し、別ウィンドウを選んでも本文の取得先は変わりません。画像は撮影時に最後に受け付けた本文へ紐づき、各本文の画像アイコンから確認できます。厳密な行同期ではなく、その付近のシーンとして利用します。
+
+ZIPアイコンから、現在の区間・分類・名前・本文の条件に一致する全本文と関連画像を出力できます。ZIPには`manifest.json`、`texts.jsonl`、`images/`を含み、同じ画像は1ファイルにまとめます。画像はPNGで保存し、本文の削除時は他の本文から使われていない画像だけを削除します。ゲーム登録を削除しても履歴と画像は残ります。
 
 保存処理と分類のtestは実ユーザーDBを使わず実行できます。
 

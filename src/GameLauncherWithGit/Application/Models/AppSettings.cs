@@ -11,7 +11,9 @@ public sealed record AppSettings(
 	bool ShowCardTitle = true,
 	bool ShowCardSyncStatus = true,
 	int WindowWidth = AppSettings.DefaultWindowWidth,
-	int WindowHeight = AppSettings.DefaultWindowHeight)
+	int WindowHeight = AppSettings.DefaultWindowHeight,
+	uint ScreenshotModifiers = 5,
+	uint ScreenshotVirtualKey = 0x53)
 {
 	public const int GameCardSizePercentMin = 10;
 	public const int GameCardSizePercentMax = 500;
