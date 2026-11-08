@@ -37,7 +37,10 @@ public sealed record CapturePosition(long SessionId, long Sequence, int Offset) 
         : SessionId != other.SessionId ? SessionId.CompareTo(other.SessionId)
         : Sequence != other.Sequence ? Sequence.CompareTo(other.Sequence) : Offset.CompareTo(other.Offset);
 }
-public sealed record CaptureRange(long Id, long CaptureGameId, string Name, CapturePosition Start, CapturePosition End);
+public sealed record CaptureRange(long Id, long CaptureGameId, string Name, CapturePosition Start, CapturePosition End)
+{
+    public string[] Tags { get; init; } = [];
+}
 public sealed record CaptureRangeSelection(long CaptureGameId, CapturePosition Start, CapturePosition End);
 public sealed record CaptureEventKey(long SessionId, long Sequence);
 public sealed record CaptureDeletionTarget(CaptureEventKey Key, string RawText, int ItemCount);

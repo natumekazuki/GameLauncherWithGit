@@ -18,10 +18,11 @@ public interface IScenarioCaptureStore
     Task<CaptureDeletionResult> DeleteCaptureEventsAsync(long profileId, IReadOnlyCollection<CaptureEventKey> events);
     Task<CaptureHistoryCounts> GetCaptureHistoryCountsAsync(long profileId);
     Task<CaptureDeletionResult> ClearCaptureHistoryAsync(long profileId);
-    Task RenameCaptureRangeAsync(long profileId, long rangeId, string name);
+    Task UpdateCaptureRangeAsync(long profileId, long rangeId, string name, IReadOnlyCollection<string> tags);
     Task DeleteCaptureRangeAsync(long profileId, long rangeId);
     Task<IReadOnlyList<CaptureRange>> GetCaptureRangesAsync(long profileId);
-    Task<long> SaveCaptureRangeAsync(long profileId, string name, CapturePosition start, CapturePosition end);
+    Task<long> SaveCaptureRangeAsync(long profileId, string name, CapturePosition start, CapturePosition end, IReadOnlyCollection<string>? tags = null);
+    Task<IReadOnlyList<CaptureTextItem>> GetCaptureExportItemsAsync(long profileId, ScenarioArchiveSelection selection);
     Task<bool> AppendCaptureAsync(long sessionId, CaptureReceived received, CaptureRules rules);
     Task<IReadOnlyList<CaptureTextItem>> GetCaptureItemsAsync(long sessionId, int limit = 200, int offset = 0, long? labelId = null, bool unclassifiedOnly = false, bool latest = false);
     Task SetCaptureLabelsAsync(long sessionId, IReadOnlyCollection<long> itemIds, long? labelId);

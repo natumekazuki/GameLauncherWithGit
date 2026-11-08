@@ -36,6 +36,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .capture-history-body { display:grid; gap:1rem; }
 .capture-history-title { overflow-wrap:anywhere; }
 .capture-history-counts,.capture-muted { color:#adbed5; font-size:.9rem; line-height:1.6; }
+.capture-export-scope { overflow-wrap:anywhere; color:#adbed5; line-height:1.6; }
 .capture-history-section { display:grid; gap:.75rem; border-top:1px solid #30415a; padding-top:1rem; }
 .capture-history-section h3 { margin:0; font-size:1rem; }
 .capture-history-section > button { justify-self:start; }

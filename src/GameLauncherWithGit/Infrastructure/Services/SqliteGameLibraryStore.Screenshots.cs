@@ -201,42 +201,9 @@ public sealed partial class SqliteGameLibraryStore
         await using var transaction = connection.BeginTransaction(deferred: true);
         await using var gameQuery = CaptureCommand(connection, transaction, "SELECT Title FROM CaptureGames WHERE Id=$game", ("$game", captureGameId));
         var title = await gameQuery.ExecuteScalarAsync() as string ?? throw new ArgumentException("ゲームの履歴が見つかりません。");
-        CaptureRange? range = null;
-        if (selection.RangeId is { } rangeId)
-        {
-            await using var rangeQuery = CaptureCommand(connection, transaction, """
-                SELECT Name,StartSessionId,StartSequence,StartOffset,EndSessionId,EndSequence,EndOffset
-                FROM CaptureRanges WHERE Id=$id AND CaptureGameId=$game
-                """, ("$id", rangeId), ("$game", captureGameId));
-            await using var reader = await rangeQuery.ExecuteReaderAsync();
-            if (!await reader.ReadAsync()) throw new ArgumentException("このゲームの区間を選んでください。");
-            range = new(rangeId, captureGameId, reader.GetString(0), new(reader.GetInt64(1), reader.GetInt64(2), reader.GetInt32(3)),
-                new(reader.GetInt64(4), reader.GetInt64(5), reader.GetInt32(6)));
-        }
-        var items = new List<CaptureTextItem>();
-        await using (var command = CaptureCommand(connection, transaction, CaptureItemQuery + """
-             JOIN CaptureSessions s ON s.Id=i.SessionId WHERE s.CaptureGameId=$game
-             AND ($label IS NULL OR l.Id=$label) AND ($unclassified=0 OR l.Id IS NULL) AND ($kind IS NULL OR l.Kind=$kind)
-             ORDER BY i.SessionId,i.ReceiveSequence,i.StartUtf16
-            """, ("$game", captureGameId), ("$label", selection.LabelId), ("$unclassified", selection.UnclassifiedOnly),
-            ("$kind", selection.Kind is null ? null : (int)selection.Kind)))
-        {
-            await using var reader = await command.ExecuteReaderAsync();
-            while (await reader.ReadAsync())
-            {
-                var item = ReadCaptureItem(reader);
-                if (range is not null)
-                {
-                    if (item.EndPosition.CompareTo(range.Start) <= 0 || item.StartPosition.CompareTo(range.End) >= 0) continue;
-                    var from = item.SessionId == range.Start.SessionId && item.Sequence == range.Start.Sequence ? Math.Max(item.Start, range.Start.Offset) : item.Start;
-                    var to = item.SessionId == range.End.SessionId && item.Sequence == range.End.Sequence ? Math.Min(item.Start + item.Length, range.End.Offset) : item.Start + item.Length;
-                    item = item with { Start = from, Length = to - from };
-                }
-                if (!string.IsNullOrWhiteSpace(selection.TextSearch) && !item.Text.Contains(selection.TextSearch.Trim(), StringComparison.OrdinalIgnoreCase)) continue;
-                if (!string.IsNullOrWhiteSpace(selection.SpeakerSearch) && item.Speaker?.Contains(selection.SpeakerSearch.Trim(), StringComparison.OrdinalIgnoreCase) != true) continue;
-                items.Add(item);
-            }
-        }
+        var ranges = await ReadCaptureRangesAsync(connection, transaction, captureGameId);
+        var items = await ReadCaptureExportItemsAsync(connection, transaction, captureGameId, selection, ranges);
+        var range = ranges.SingleOrDefault(x => x.Id == selection.RangeId);
         var images = new Dictionary<string, ScenarioScreenshot>();
         var rows = new List<object>();
         foreach (var group in items.GroupBy(x => new CaptureEventKey(x.SessionId, x.Sequence)))
@@ -262,7 +229,8 @@ public sealed partial class SqliteGameLibraryStore
                     await using (var manifest = zip.CreateEntry("manifest.json").Open())
                         await JsonSerializer.SerializeAsync(manifest, new { format = "GameLauncherWithGit.scenario", schemaVersion = 1, exportedAt = DateTimeOffset.UtcNow,
                             identifierScope = "archive", game = new { captureGameId = captureGameId.ToString(), title },
-                            selection = new { scope = range is null ? "game" : "range", range, selection.LabelId, selection.UnclassifiedOnly, kind = selection.Kind?.ToString(), selection.TextSearch, selection.SpeakerSearch },
+                            selection = new { scope = range is null ? "game" : "range", range, selection.LabelId, selection.UnclassifiedOnly, kind = selection.Kind?.ToString(), selection.TextSearch, selection.SpeakerSearch,
+                                includeTags = NormalizeCaptureTags(selection.IncludeTags), excludeTags = NormalizeCaptureTags(selection.ExcludeTags) },
                             textFile = "texts.jsonl", textIndexUnit = "utf16_code_unit", imageHashAlgorithm = ImageHashAlgorithm,
                             images = images.Values.Select(x => new { id = x.ImageId, path = $"images/{x.ImageId}.png", mediaType = "image/png", width = x.Width, height = x.Height, pixelHash = x.PixelHash }) }, JsonOptions);
                     await using (var writer = new StreamWriter(zip.CreateEntry("texts.jsonl").Open(), new UTF8Encoding(false)))

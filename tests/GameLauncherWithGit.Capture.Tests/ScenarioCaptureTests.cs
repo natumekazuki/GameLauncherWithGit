@@ -914,11 +914,11 @@ public sealed class ScenarioCaptureTests : IDisposable
         var id = await _store.SaveCaptureRangeAsync(profile.Id, "区間", item.StartPosition, item.EndPosition);
         var original = Assert.Single(await _store.GetCaptureRangesAsync(profile.Id));
         foreach (var invalid in new[] { " ", "a\nb", "a\rb" })
-            await Assert.ThrowsAsync<ArgumentException>(() => _store.RenameCaptureRangeAsync(profile.Id, id, invalid));
-        await Assert.ThrowsAsync<ArgumentException>(() => _store.RenameCaptureRangeAsync(long.MaxValue, id, "別"));
+            await Assert.ThrowsAsync<ArgumentException>(() => _store.UpdateCaptureRangeAsync(profile.Id, id, invalid, []));
+        await Assert.ThrowsAsync<ArgumentException>(() => _store.UpdateCaptureRangeAsync(long.MaxValue, id, "別", []));
         await Assert.ThrowsAsync<ArgumentException>(() => _store.DeleteCaptureRangeAsync(long.MaxValue, id));
         Assert.Equal(original, Assert.Single(await _store.GetCaptureRangesAsync(profile.Id)));
-        await _store.RenameCaptureRangeAsync(profile.Id, id, "  新しい名前  ");
+        await _store.UpdateCaptureRangeAsync(profile.Id, id, "  新しい名前  ", []);
         Assert.Equal(original with { Name = "新しい名前" }, Assert.Single(await _store.GetCaptureRangesAsync(profile.Id)));
         await _store.DeleteCaptureRangeAsync(profile.Id, id);
         Assert.Empty(await _store.GetCaptureRangesAsync(profile.Id));

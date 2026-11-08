@@ -109,8 +109,8 @@
                 <div class="capture-tool-group capture-utilities">
                     <button class="secondary-button capture-icon-button" title="スクリーンショット設定" aria-label="スクリーンショット設定" @onclick="OpenScreenshotSettings" disabled="@_busy"><CaptureIcon Name="Camera" /></button>
                     <button class="secondary-button capture-icon-button" title="抽出設定" aria-label="抽出設定" @onclick="OpenSettings" disabled="@_busy"><CaptureIcon Name="Settings" /></button>
-                    <button class="secondary-button capture-icon-button" title="TXT出力（条件の全件）" aria-label="条件の全件をTXT出力" @onclick="ExportAsync" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Export" /></button>
-                    <button class="secondary-button capture-icon-button" title="ZIP出力（条件の全件・画像付き）" aria-label="条件の全件を画像付きZIP出力" @onclick="ExportArchiveAsync" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Archive" /></button>
+                    <button class="secondary-button capture-icon-button" title="TXT出力（条件の全件）" aria-label="条件の全件をTXT出力" @onclick="() => OpenExportAsync(false)" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Export" /></button>
+                    <button class="secondary-button capture-icon-button" title="ZIP出力（条件の全件・画像付き）" aria-label="条件の全件を画像付きZIP出力" @onclick="() => OpenExportAsync(true)" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Archive" /></button>
                 </div>
             </div>
             <div class="capture-screenshot-status" role="status" aria-busy="@(Screenshots.Snapshot.Busy ? "true" : "false")"><CaptureIcon Name="Camera" /><span title="@Screenshots.Snapshot.Status">@Screenshots.Snapshot.Status</span><span class="capture-screenshot-count" title="アプリ起動中の撮影保存の成功回数（同一画像の再利用を含む）" aria-label="@($"アプリ起動中の撮影保存の成功回数 {Screenshots.Snapshot.SavedCount}回、同一画像の再利用を含む")">@Screenshots.Snapshot.SavedCount</span></div>
@@ -213,8 +213,9 @@
                             @foreach (var range in _ranges) { <option value="@range.Id">@RangeName(range)</option> }
                         </select>
                         <label>区間名<input @bind="_managedRangeName" disabled="@_busy" /></label>
+                        <CaptureTagsEditor Label="区間タグ" @bind-Tags="_managedRangeTags" AvailableTags="AvailableRangeTags" Disabled="_busy" />
                         <div class="capture-history-actions">
-                            <button class="secondary-button capture-text-button" @onclick="RenameRangeAsync" disabled="@_busy"><CaptureIcon Name="Check" />名前を保存</button>
+                            <button class="secondary-button capture-text-button" @onclick="SaveManagedRangeAsync" disabled="@_busy"><CaptureIcon Name="Check" />名前とタグを保存</button>
                             <button class="secondary-button capture-text-button" @onclick="() => SetHistoryDialog(HistoryDialog.DeleteRange)" disabled="@_busy"><CaptureIcon Name="Trash" />区間を削除</button>
                         </div>
                     }
@@ -286,6 +287,7 @@
     <div class="modal-backdrop"><section id="capture-editor" class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-range-title">
         <header class="capture-dialog-header"><h2 id="capture-range-title">区間</h2><button class="secondary-button capture-icon-button" title="キャンセル" aria-label="キャンセル" @onclick="CloseEditors" disabled="@_busy"><CaptureIcon Name="Close" /></button></header>
         <label>名前<input @bind="_rangeName" /></label>
+        <CaptureTagsEditor Label="区間タグ" @bind-Tags="_rangeTags" AvailableTags="AvailableRangeTags" Disabled="_busy" />
         <div class="capture-dialog-actions"><button class="launch-button capture-icon-button" title="保存" aria-label="保存" @onclick="SaveRangeAsync" disabled="@_busy"><CaptureIcon Name="Check" /></button></div>
     </section></div>
 }
@@ -457,6 +459,22 @@
     </section></div>
 }
 
+@if (_exportOpen)
+{
+    <div class="modal-backdrop"><section id="capture-editor" class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-export-title">
+        <header class="capture-dialog-header"><h2 id="capture-export-title">@(_exportArchive ? "画像付きZIP出力" : "TXT出力")</h2><button class="secondary-button capture-icon-button" title="キャンセル" aria-label="キャンセル" @onclick="CloseEditors" disabled="@_busy"><CaptureIcon Name="Close" /></button></header>
+        <p class="capture-export-scope">@ExportScope</p>
+        @if (AvailableRangeTags.Length > 0)
+        {
+            <CaptureTagsEditor Label="このタグの区間だけ含める" @bind-Tags="_exportIncludeTags" AvailableTags="AvailableRangeTags" AllowCreate="false" Disabled="_busy" />
+            <CaptureTagsEditor Label="このタグの区間を除外" @bind-Tags="_exportExcludeTags" AvailableTags="AvailableRangeTags" AllowCreate="false" Disabled="_busy" />
+            <p class="capture-muted">各欄はいずれかのタグに一致する区間が対象。重なる部分は除外を優先します。</p>
+        }
+        else { <p class="capture-muted">このゲームにはタグ付きの区間がありません。</p> }
+        <div class="capture-dialog-actions"><button class="launch-button capture-text-button" @onclick="SaveExportAsync" disabled="@_busy"><CaptureIcon Name="Export" />@(_busy ? "出力中…" : "出力する")</button></div>
+    </section></div>
+}
+
 @code {
     private CaptureSnapshot _snapshot = new();
     private bool _screenshotSettingsOpen;
@@ -488,6 +506,12 @@
     private IReadOnlyList<CaptureDeletionTarget> _deletionTargets = [];
     private long _managedRangeId;
     private string _managedRangeName = "";
+    private string[] _managedRangeTags = [], _rangeTags = [], _exportIncludeTags = [], _exportExcludeTags = [];
+    private bool _exportOpen, _exportArchive;
+    private string[] AvailableRangeTags => _ranges.SelectMany(x => x.Tags).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+    private string ExportScope => string.Join(" · ", new[] { _profile?.Title ?? "", _ranges.FirstOrDefault(x => x.Id == _rangeId) is { } range ? RangeName(range) : "ゲーム全体", _filter switch { "dialogue" => "セリフ", "narration" => "地の文", "none" => "未判定", _ => "分類すべて" } }
+        .Concat(_speakerSearch.Length > 0 ? [$"名前：{_speakerSearch}"] : Array.Empty<string>())
+        .Concat(_textSearch.Length > 0 ? [$"本文：{_textSearch}"] : Array.Empty<string>()));
     private bool HistoryCaptureActive => CaptureService.Snapshot is { Active: true, Profile: { } profile } && profile.Id == _profileId;
     private string ManagedRangeDisplayName => _ranges.FirstOrDefault(x => x.Id == _managedRangeId) is { } range ? RangeName(range) : "";
     private string HistoryDialogTitle => _historyDialog switch { HistoryDialog.Manage => "履歴管理", HistoryDialog.DeleteSelected => "原文を削除", HistoryDialog.Clear => "全履歴を消去", _ => "区間を削除" };
@@ -515,7 +539,7 @@
     private CaptureTextItem? _rangeFirst, _rangeLast;
     private CaptureRangeSelection? _rangeSelection;
     private string _rangeName = "";
-    private bool EditorOpen => _screenshotSettingsOpen || _screenshotItem is not null || _settingsOpen || _bulkOpen || _edit is not null || _partition is not null || _rangeSelection is not null || _historyDialog != HistoryDialog.None;
+    private bool EditorOpen => _exportOpen || _screenshotSettingsOpen || _screenshotItem is not null || _settingsOpen || _bulkOpen || _edit is not null || _partition is not null || _rangeSelection is not null || _historyDialog != HistoryDialog.None;
     private bool FollowingView => _live && _rangeId == 0 && !_pickingRange;
     private bool LatestOrder => _live && _rangeId == 0;
     private bool CanEdit => _rangeId == 0 && !_pickingRange;
@@ -620,6 +644,7 @@
         _rangeId = 0; _rangeFirst = _rangeLast = null; _pickingRange = false;
         _offset = 0; _selected.Clear(); _filter = "all";
         _textSearchInput = _textSearch = _speakerSearchInput = _speakerSearch = "";
+        _exportIncludeTags = _exportExcludeTags = [];
         if (_profile is not null) { _split = _profile.Rules.SplitDialogue; _outside = _profile.Rules.OutsideIsNarration; }
         await LoadItemsAsync();
     }
@@ -670,13 +695,18 @@
         _managedRangeId = _ranges.Any(x => x.Id == _rangeId) ? _rangeId : _ranges.FirstOrDefault()?.Id ?? 0;
         LoadManagedRangeName(); _historyDialog = HistoryDialog.Manage; _focusEditor = true;
     });
-    private void LoadManagedRangeName() => _managedRangeName = _ranges.FirstOrDefault(x => x.Id == _managedRangeId)?.Name ?? "";
-    private void SetHistoryDialog(HistoryDialog dialog) { _historyDialog = dialog; _focusHistoryContent = true; }
-    private Task RenameRangeAsync() => RunAsync(async () =>
+    private void LoadManagedRangeName()
     {
-        await Store.RenameCaptureRangeAsync(_profileId, _managedRangeId, _managedRangeName);
+        var range = _ranges.FirstOrDefault(x => x.Id == _managedRangeId);
+        _managedRangeName = range?.Name ?? "";
+        _managedRangeTags = range?.Tags.ToArray() ?? [];
+    }
+    private void SetHistoryDialog(HistoryDialog dialog) { _historyDialog = dialog; _focusHistoryContent = true; }
+    private Task SaveManagedRangeAsync() => RunAsync(async () =>
+    {
+        await Store.UpdateCaptureRangeAsync(_profileId, _managedRangeId, _managedRangeName, _managedRangeTags);
         _ranges = await Store.GetCaptureRangesAsync(_profileId); LoadManagedRangeName();
-    }, "区間名を保存しました。");
+    }, "区間の名前とタグを保存しました。");
     private Task PrepareClearHistoryAsync() => RunAsync(async () =>
     {
         _historyCounts = await Store.GetCaptureHistoryCountsAsync(_profileId); SetHistoryDialog(HistoryDialog.Clear);
@@ -730,7 +760,7 @@
     private Task ShowLiveAsync() => RunAsync(async () => { _snapshot = CaptureService.Snapshot; _live = true; _following = true; _profileId = _snapshot.Profile?.Id ?? 0; _profiles = await Store.GetCaptureProfilesAsync(); await LoadProfileAsync(); _scrollToEnd = true; });
     private Task FollowAsync() => RunAsync(async () => { _following = true; await LoadItemsAsync(); _scrollToEnd = true; });
     private Task StartLiveRangeAsync() => RunAsync(() => { CaptureService.StartRange(); _snapshot = CaptureService.Snapshot; return Task.CompletedTask; });
-    private Task EndLiveRangeAsync() => RunAsync(() => { _rangeSelection = CaptureService.EndRange(); _snapshot = CaptureService.Snapshot; _rangeName = ""; _focusEditor = true; return Task.CompletedTask; });
+    private Task EndLiveRangeAsync() => RunAsync(() => { _rangeSelection = CaptureService.EndRange(); _snapshot = CaptureService.Snapshot; _rangeName = ""; _rangeTags = []; _focusEditor = true; return Task.CompletedTask; });
     private void CancelLiveRange() { CaptureService.CancelRange(); _snapshot = CaptureService.Snapshot; }
     private Task ToggleTextRange() => RunAsync(async () =>
     {
@@ -752,13 +782,13 @@
     private void OpenTextRange()
     {
         if (!TextRangeValid) return;
-        _rangeSelection = new(_profileId, _rangeFirst!.StartPosition, _rangeLast!.EndPosition); _rangeName = ""; _focusEditor = true;
+        _rangeSelection = new(_profileId, _rangeFirst!.StartPosition, _rangeLast!.EndPosition); _rangeName = ""; _rangeTags = []; _focusEditor = true;
     }
     private Task SaveRangeAsync() => RunAsync(async () =>
     {
         if (_rangeSelection is null) return;
         await CaptureService.FlushPendingAsync();
-        await Store.SaveCaptureRangeAsync(_rangeSelection.CaptureGameId, _rangeName, _rangeSelection.Start, _rangeSelection.End);
+        await Store.SaveCaptureRangeAsync(_rangeSelection.CaptureGameId, _rangeName, _rangeSelection.Start, _rangeSelection.End, _rangeTags);
         if (_profileId == _rangeSelection.CaptureGameId) _ranges = await Store.GetCaptureRangesAsync(_profileId);
         CloseEditors(); ClearTextRange(); _offset = 0; await LoadItemsAsync();
     }, "区間を保存しました。");
@@ -879,7 +909,7 @@
     private Task AddBoundaryAsync() => RunAsync(async () => { if (_partition is null || _module is null) return; var position = await _module.InvokeAsync<int>("selectionStart", _rawInput); var next = _boundaries.Append(position).Distinct().Order().ToArray(); ScenarioTextProcessor.ValidateBoundaries(_partition.RawText, next); _boundaries.Clear(); _boundaries.AddRange(next); RebuildParts(); });
     private void RemoveBoundary(int index) { _boundaries.RemoveAt(index); RebuildParts(); }
     private Task SavePartitionAsync() => RunAsync(async () => { if (_partition is null) return; await Store.SplitCaptureEventAsync(_partition.SessionId, _partition.Sequence, _boundaries.ToArray(), _parts.Select(x => new CaptureManualPart(x.Label == 0 ? null : x.Label, IsNarration(x.Label) ? null : string.IsNullOrWhiteSpace(x.Speaker) ? null : x.Speaker.Trim())).ToArray()); CloseEditors(); _selected.Clear(); await LoadItemsAsync(); }, "分割を保存しました。");
-    private void CloseEditors() { CancelWindowPick(); _screenshotSettingsOpen = false; _screenshotItem = null; _eventScreenshots = []; _galleryImage = _galleryError = null; _pausedCandidates = null; _edit = null; _partition = null; _settingsOpen = false; _bulkOpen = false; _rangeSelection = null; _historyDialog = HistoryDialog.None; _deletionTargets = []; _restoreFocus = true; }
+    private void CloseEditors() { CancelWindowPick(); _exportOpen = false; _screenshotSettingsOpen = false; _screenshotItem = null; _eventScreenshots = []; _galleryImage = _galleryError = null; _pausedCandidates = null; _edit = null; _partition = null; _settingsOpen = false; _bulkOpen = false; _rangeSelection = null; _historyDialog = HistoryDialog.None; _deletionTargets = []; _restoreFocus = true; }
     [JSInvokable] public void CloseEditorFromKeyboard() { if (!_busy) { CloseEditors(); StateHasChanged(); } }
     private void OpenScreenshotSettings() { _screenshotSettingsOpen = true; _focusEditor = true; }
     private Task OpenScreenshotsAsync(CaptureTextItem item) => RunAsync(async () =>
@@ -906,30 +936,37 @@
         catch (Exception ex) { _galleryError = $"画像を読み込めませんでした：{ex.Message}"; }
     }
     private void ScreenshotDecodeFailed() { _galleryImage = null; _galleryError = "画像を表示できませんでした。画像ファイルが破損している可能性があります。"; }
-    private Task ExportArchiveAsync() => RunAsync(async () =>
+    private Task OpenExportAsync(bool archive) => RunAsync(async () =>
+    {
+        if (_profile is null) return;
+        _ranges = await Store.GetCaptureRangesAsync(_profileId);
+        _exportIncludeTags = _exportIncludeTags.Intersect(AvailableRangeTags, StringComparer.Ordinal).ToArray();
+        _exportExcludeTags = _exportExcludeTags.Intersect(AvailableRangeTags, StringComparer.Ordinal).ToArray();
+        _exportArchive = archive; _exportOpen = true; _focusEditor = true;
+    });
+    private Task SaveExportAsync() => RunAsync(async () =>
     {
         if (_profile is null) return;
         var profileId = _profileId;
-        var selection = new ScenarioArchiveSelection(RangeId: _rangeId == 0 ? null : _rangeId, UnclassifiedOnly: _filter == "none", Kind: FilterKind, TextSearch: _textSearch, SpeakerSearch: _speakerSearch);
-        var folder = await Picker.PickFolderPathAsync("ZIPの保存先フォルダを選択");
+        var archive = _exportArchive;
+        var selection = new ScenarioArchiveSelection(RangeId: _rangeId == 0 ? null : _rangeId,
+            UnclassifiedOnly: _filter == "none", Kind: FilterKind, TextSearch: _textSearch, SpeakerSearch: _speakerSearch,
+            IncludeTags: _exportIncludeTags.ToArray(), ExcludeTags: _exportExcludeTags.ToArray());
+        var format = archive ? "ZIP" : "TXT";
+        var folder = await Picker.PickFolderPathAsync($"{format}の保存先フォルダを選択");
         if (folder is null) return;
         var title = string.Concat((_profile.Title + (_ranges.FirstOrDefault(x => x.Id == _rangeId) is { } range ? "-" + range.Name : "")).Select(x => Path.GetInvalidFileNameChars().Contains(x) ? '_' : x));
-        var path = Path.Combine(folder, $"{title}-{DateTime.Now:yyyyMMdd-HHmmss-fff}.zip");
-        await Task.Run(() => ScreenshotStore.ExportScenarioArchiveAsync(profileId, selection, path));
-        _message = $"ZIPを保存しました：{Path.GetFileName(path)}";
-    });
-    private Task ExportAsync() => RunAsync(async () =>
-    {
-        if (_profile is null) return;
-        var items = await QueryItemsAsync(0);
-        var folder = await Picker.PickFolderPathAsync("TXTの保存先フォルダを選択");
-        if (folder is null) return;
-        var title = string.Concat((_profile.Title + (_ranges.FirstOrDefault(x => x.Id == _rangeId) is { } range ? "-" + range.Name : "")).Select(x => Path.GetInvalidFileNameChars().Contains(x) ? '_' : x));
-        var path = Path.Combine(folder, $"{title}-{DateTime.Now:yyyyMMdd-HHmmss-fff}.txt");
-        await using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write);
-        await using var writer = new StreamWriter(file, new UTF8Encoding(false));
-        await writer.WriteAsync(ScenarioTextProcessor.FormatTxt(items));
-        await writer.FlushAsync(); _message = $"TXTを保存しました：{Path.GetFileName(path)}";
+        var path = Path.Combine(folder, $"{title}-{DateTime.Now:yyyyMMdd-HHmmss-fff}.{(archive ? "zip" : "txt")}");
+        if (archive) await Task.Run(() => ScreenshotStore.ExportScenarioArchiveAsync(profileId, selection, path));
+        else
+        {
+            var items = await Task.Run(() => Store.GetCaptureExportItemsAsync(profileId, selection));
+            await using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write);
+            await using var writer = new StreamWriter(file, new UTF8Encoding(false));
+            await writer.WriteAsync(ScenarioTextProcessor.FormatTxt(items));
+            await writer.FlushAsync();
+        }
+        CloseEditors(); _message = $"{format}を保存しました：{Path.GetFileName(path)}";
     });
     public async ValueTask DisposeAsync()
     {

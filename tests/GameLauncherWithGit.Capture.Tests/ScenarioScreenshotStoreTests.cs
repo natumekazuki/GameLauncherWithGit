@@ -404,6 +404,141 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         Assert.Empty(Directory.GetFiles(_directory, "*.tmp"));
     }
 
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "区間タグは自由な単一行を正規化して複数保持し更新は名前とタグを同時に変更しゲーム間を越えない"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#区間タグと出力条件" }
+    // fault = "重複タグや空タグを保存する、更新失敗で名前だけ変える、他ゲームのタグを読み書きする、削除後にタグを残す"
+    // observable = "公開取得した区間名とタグ、入力例外、削除後のタグ行数と他ゲームの区間"
+    // observation_boundary = "public-boundary"
+    // scope = "range tag persistence and ownership"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task RangeTagsPersistUpdateAtomicallyAndFollowRangeLifetime()
+    {
+        var (game, session) = await StartAsync();
+        var (other, otherSession) = await StartAsync("other");
+        await Append(session, 1, "本文");
+        await Append(otherSession, 1, "別本文");
+        var id = await _store.SaveCaptureRangeAsync(game, "区間", new(session, 1, 0), new(session, 1, 2), [" 重要 ", "重要", "Tag", "tag"]);
+        var otherId = await _store.SaveCaptureRangeAsync(other, "別区間", new(otherSession, 1, 0), new(otherSession, 1, 3), ["重要"]);
+        Assert.Equal(new[] { "Tag", "tag", "重要" }, Assert.Single(await _store.GetCaptureRangesAsync(game)).Tags);
+        var reopened = new SqliteGameLibraryStore(NullLogger<SqliteGameLibraryStore>.Instance, Path.Combine(_directory, "library.db"));
+        Assert.Equal(new[] { "Tag", "tag", "重要" }, Assert.Single(await reopened.GetCaptureRangesAsync(game)).Tags);
+        foreach (var invalid in new[] { " ", "a\nb", "a\rb" })
+            await Assert.ThrowsAsync<ArgumentException>(() => _store.UpdateCaptureRangeAsync(game, id, "変更", [invalid]));
+        await Assert.ThrowsAsync<ArgumentException>(() => _store.UpdateCaptureRangeAsync(game, otherId, "変更", ["別"]));
+        Assert.Equal("区間", Assert.Single(await _store.GetCaptureRangesAsync(game)).Name);
+        await _store.UpdateCaptureRangeAsync(game, id, "変更", ["再利用", "重要"]);
+        var updated = Assert.Single(await _store.GetCaptureRangesAsync(game));
+        Assert.Equal("変更", updated.Name);
+        Assert.Equal(new[] { "再利用", "重要" }, updated.Tags);
+        await using (var failingConnection = new SqliteConnection($"Data Source={Path.Combine(_directory, "library.db")}"))
+        {
+            await failingConnection.OpenAsync();
+            await using var trigger = failingConnection.CreateCommand();
+            trigger.CommandText = "CREATE TRIGGER fail_tag BEFORE INSERT ON CaptureRangeTags WHEN NEW.Tag='失敗' BEGIN SELECT RAISE(ABORT,'tag failure'); END";
+            await trigger.ExecuteNonQueryAsync();
+            await Assert.ThrowsAsync<SqliteException>(() => _store.UpdateCaptureRangeAsync(game, id, "不成立", ["失敗"]));
+        }
+        var retained = Assert.Single(await _store.GetCaptureRangesAsync(game));
+        Assert.Equal(updated.Name, retained.Name);
+        Assert.Equal(updated.Tags, retained.Tags);
+        await _store.UpdateCaptureRangeAsync(game, id, "タグなし", []);
+        Assert.Empty(Assert.Single(await _store.GetCaptureRangesAsync(game)).Tags);
+        await _store.UpdateCaptureRangeAsync(game, id, "削除", ["重要"]);
+        await _store.DeleteCaptureRangeAsync(game, id);
+        Assert.Empty(await _store.GetCaptureRangesAsync(game));
+        Assert.Equal(new[] { "重要" }, Assert.Single(await _store.GetCaptureRangesAsync(other)).Tags);
+        await _store.ClearCaptureHistoryAsync(other);
+        await using var connection = new SqliteConnection($"Data Source={Path.Combine(_directory, "library.db")}");
+        await connection.OpenAsync();
+        await using var query = connection.CreateCommand();
+        query.CommandText = "SELECT COUNT(*) FROM CaptureRangeTags";
+        Assert.Equal(0L, await query.ExecuteScalarAsync());
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "タグ包含の和集合から除外を引いた原文位置を重複なく出力し区間・検索は切取後の本文へ適用する"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#区間タグと出力条件" }
+    // fault = "重複区間を二重出力する、部分除外で全itemを落とす、除外文字で検索一致する、再分割でタグ位置がずれる"
+    // observable = "公開export取得の本文・UTF-16位置とTXT全文、交差条件による空結果"
+    // observation_boundary = "public-boundary"
+    // scope = "tag interval algebra and post-slice search"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task ExportTagIntervalsMergeSubtractAndSearchAfterClipping()
+    {
+        var (game, session) = await StartAsync();
+        await Append(session, 1, "abcdefghij");
+        var second = await _store.BeginCaptureSessionAsync(game);
+        await Append(second, 1, "klmnop");
+        await _store.SaveCaptureRangeAsync(game, "一", new(session, 1, 1), new(session, 1, 8), ["A"]);
+        await _store.SaveCaptureRangeAsync(game, "重複", new(session, 1, 5), new(second, 1, 4), ["B"]);
+        await _store.SaveCaptureRangeAsync(game, "除外", new(session, 1, 3), new(session, 1, 6), ["X", "A"]);
+        await _store.SaveCaptureRangeAsync(game, "後除外", new(second, 1, 1), new(second, 1, 3), ["Y"]);
+        var selection = new ScenarioArchiveSelection(IncludeTags: ["A", "B"], ExcludeTags: ["X", "Y"]);
+        var items = await _store.GetCaptureExportItemsAsync(game, selection);
+        Assert.Equal(new[] { "bc", "ghij", "k", "n" }, items.Select(x => x.Text));
+        Assert.Equal(new[] { 1, 6, 0, 3 }, items.Select(x => x.Start));
+        var txt = GameLauncherWithGit.Application.Services.ScenarioTextProcessor.FormatTxt(items).ReplaceLineEndings("\n");
+        Assert.Equal("[未判定]\nbc\n\n[未判定]\nghij\n\n[未判定]\nk\n\n[未判定]\nn\n", txt);
+        Assert.Empty(await _store.GetCaptureExportItemsAsync(game, selection with { TextSearch = "def" }));
+        Assert.Empty(await _store.GetCaptureExportItemsAsync(game, selection with { TextSearch = "bcg" }));
+        Assert.Equal("ghij", Assert.Single(await _store.GetCaptureExportItemsAsync(game, selection with { TextSearch = "GHI" })).Text);
+        var baseRange = await _store.SaveCaptureRangeAsync(game, "狭い", new(session, 1, 2), new(session, 1, 7));
+        Assert.Equal(new[] { "c", "g" }, (await _store.GetCaptureExportItemsAsync(game, selection with { RangeId = baseRange })).Select(x => x.Text));
+        Assert.Equal(new[] { "abc", "ghij", "k", "nop" }, (await _store.GetCaptureExportItemsAsync(game, new(ExcludeTags: ["X", "Y"]))).Select(x => x.Text));
+        await _store.SplitCaptureEventAsync(session, 1, [2, 7]);
+        Assert.Equal("bcghijkn", string.Concat((await _store.GetCaptureExportItemsAsync(game, selection)).Select(x => x.Text)));
+        Assert.Empty(await _store.GetCaptureExportItemsAsync(game, selection with { IncludeTags = ["missing"] }));
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "画像付きZIPはTXTと同じタグ切取本文と残ったイベントの画像だけを収録しタグ条件を記録する"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#区間タグと出力条件" }
+    // fault = "ZIPだけタグ条件を無視する、除外専用イベントの画像や原文を収録する、条件をmanifestから欠落させる"
+    // observable = "実ZIPのtexts.jsonl本文とmanifest条件と画像entry集合、空選択ZIP"
+    // observation_boundary = "consumer"
+    // scope = "tag-filtered archive artifacts"
+    // lifecycle = "permanent"
+    // impact = "除外指定した本文や画像の意図しない持出しを防ぐ"
+    // distinction = "型やTXT取得testでは実ZIPの収録画像・JSON漏出を確認できない"
+    // @end-test-value
+    [Fact]
+    public async Task ArchiveUsesTagSlicesAndOnlyRemainingEventImages()
+    {
+        var (game, session) = await StartAsync();
+        await Append(session, 1, "前秘密後");
+        await Append(session, 2, "全秘密");
+        var kept = await _store.SaveScreenshotAsync(new(game, new(session, 1)), Image(), Time);
+        var hidden = await _store.SaveScreenshotAsync(new(game, new(session, 2)), Image('b'), Time);
+        await _store.SaveCaptureRangeAsync(game, "対象", new(session, 1, 0), new(session, 2, 3), ["出力"]);
+        await _store.SaveCaptureRangeAsync(game, "部分", new(session, 1, 1), new(session, 1, 3), ["除外"]);
+        await _store.SaveCaptureRangeAsync(game, "全体", new(session, 2, 0), new(session, 2, 3), ["除外"]);
+        var selection = new ScenarioArchiveSelection(IncludeTags: ["出力"], ExcludeTags: ["除外"]);
+        await _store.ExportScenarioArchiveAsync(game, selection, Output("tags"));
+        using (var zip = ZipFile.OpenRead(Output("tags")))
+        {
+            var row = Assert.Single(await Rows(zip));
+            Assert.Equal(new[] { "前", "後" }, row.GetProperty("segments").EnumerateArray().Select(x => x.GetProperty("text").GetString()));
+            Assert.False(row.TryGetProperty("rawText", out _));
+            Assert.NotNull(zip.GetEntry($"images/{kept.ImageId}.png"));
+            Assert.Null(zip.GetEntry($"images/{hidden.ImageId}.png"));
+            using var manifest = await JsonDocument.ParseAsync(zip.GetEntry("manifest.json")!.Open());
+            Assert.Equal("出力", manifest.RootElement.GetProperty("selection").GetProperty("includeTags")[0].GetString());
+            Assert.Equal("除外", manifest.RootElement.GetProperty("selection").GetProperty("excludeTags")[0].GetString());
+        }
+        await _store.ExportScenarioArchiveAsync(game, selection with { IncludeTags = ["なし"] }, Output("empty-tags"));
+        using var empty = ZipFile.OpenRead(Output("empty-tags"));
+        Assert.Empty(await Rows(empty));
+        Assert.DoesNotContain(empty.Entries, x => x.FullName.StartsWith("images/", StringComparison.Ordinal));
+    }
+
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();

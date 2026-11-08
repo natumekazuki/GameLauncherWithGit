@@ -104,15 +104,19 @@ public sealed partial class SqliteGameLibraryStore
         return new(await CleanupUnreferencedScreenshotsCoreAsync(connection, candidates));
     }
 
-    public async Task RenameCaptureRangeAsync(long profileId, long rangeId, string name)
+    public async Task UpdateCaptureRangeAsync(long profileId, long rangeId, string name, IReadOnlyCollection<string> tags)
     {
+        var normalizedTags = NormalizeCaptureTags(tags);
         name = name.Trim();
         if (name.Length == 0 || name.IndexOfAny(['\r', '\n']) >= 0) throw new ArgumentException("区間名を1行で入力してください。");
         await EnsureInitializedAsync(default);
         await using var connection = await OpenConnectionAsync(default);
-        await using var command = CaptureCommand(connection, null,
+        await using var transaction = connection.BeginTransaction();
+        await using var command = CaptureCommand(connection, transaction,
             "UPDATE CaptureRanges SET Name=$name WHERE Id=$id AND CaptureGameId=$game", ("$name", name), ("$id", rangeId), ("$game", profileId));
         if (await command.ExecuteNonQueryAsync() != 1) throw new ArgumentException("このゲームの区間を選んでください。");
+        await WriteCaptureTagsAsync(connection, transaction, rangeId, normalizedTags);
+        await transaction.CommitAsync();
     }
 
     public async Task DeleteCaptureRangeAsync(long profileId, long rangeId)

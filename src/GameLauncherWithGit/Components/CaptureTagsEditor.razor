@@ -1,0 +1,48 @@
+<fieldset class="capture-tags" disabled="@Disabled">
+    <legend>@Label</legend>
+    @if (Tags.Length > 0)
+    {
+        <div class="capture-tag-list" aria-label="@($"{Label}の選択済みタグ")">
+            @foreach (var tag in Tags)
+            {
+                <button type="button" class="secondary-button capture-tag" aria-label="@($"{Label}から「{tag}」を外す")" @onclick="() => RemoveAsync(tag)">@tag <span aria-hidden="true">×</span></button>
+            }
+        </div>
+    }
+    <div class="capture-tag-input">
+        @if (AllowCreate)
+        {
+            <input aria-label="@($"{Label}のタグ名")" placeholder="タグ名を入力・既存タグも選択可" list="@_listId" @bind="_draft" @bind:event="oninput" @onkeydown="OnKeyDownAsync" />
+            <datalist id="@_listId">@foreach (var tag in Choices) { <option value="@tag"></option> }</datalist>
+        }
+        else
+        {
+            <select aria-label="@($"{Label}のタグを選択")" @bind="_draft">
+                <option value="">タグを選択</option>
+                @foreach (var tag in Choices) { <option value="@tag">@tag</option> }
+            </select>
+        }
+        <button type="button" class="secondary-button" aria-label="@($"{Label}にタグを追加")" @onclick="AddAsync" disabled="@string.IsNullOrWhiteSpace(_draft)">追加</button>
+    </div>
+</fieldset>
+
+@code {
+    [Parameter] public string Label { get; set; } = "タグ";
+    [Parameter] public string[] Tags { get; set; } = [];
+    [Parameter] public EventCallback<string[]> TagsChanged { get; set; }
+    [Parameter] public IReadOnlyList<string> AvailableTags { get; set; } = [];
+    [Parameter] public bool AllowCreate { get; set; } = true;
+    [Parameter] public bool Disabled { get; set; }
+    private string _draft = "";
+    private readonly string _listId = "capture-tags-" + Guid.NewGuid().ToString("N");
+    private IEnumerable<string> Choices => AvailableTags.Where(x => !Tags.Contains(x, StringComparer.Ordinal));
+    private Task OnKeyDownAsync(KeyboardEventArgs args) => args.Key == "Enter" ? AddAsync() : Task.CompletedTask;
+    private async Task AddAsync()
+    {
+        var tag = _draft.Trim();
+        if (Disabled || tag.Length == 0) return;
+        if (!Tags.Contains(tag, StringComparer.Ordinal)) await TagsChanged.InvokeAsync([.. Tags, tag]);
+        _draft = "";
+    }
+    private Task RemoveAsync(string tag) => TagsChanged.InvokeAsync(Tags.Where(x => x != tag).ToArray());
+}
