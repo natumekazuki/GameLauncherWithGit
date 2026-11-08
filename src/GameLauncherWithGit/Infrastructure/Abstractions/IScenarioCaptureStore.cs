@@ -13,9 +13,9 @@ public interface IScenarioCaptureStore
     Task<IReadOnlyList<CaptureSession>> GetCaptureSessionsAsync(long profileId);
     Task<IReadOnlyList<CaptureTextItem>> GetGameCaptureItemsAsync(long profileId, int limit = 200, int offset = 0, long? labelId = null, bool unclassifiedOnly = false, bool latest = false, long? rangeId = null, CaptureKind? kind = null, string? textSearch = null, string? speakerSearch = null);
     Task<IReadOnlyList<CaptureDeletionTarget>> GetCaptureDeletionTargetsAsync(long profileId, IReadOnlyCollection<long> itemIds);
-    Task DeleteCaptureEventsAsync(long profileId, IReadOnlyCollection<CaptureEventKey> events);
+    Task<CaptureDeletionResult> DeleteCaptureEventsAsync(long profileId, IReadOnlyCollection<CaptureEventKey> events);
     Task<CaptureHistoryCounts> GetCaptureHistoryCountsAsync(long profileId);
-    Task ClearCaptureHistoryAsync(long profileId);
+    Task<CaptureDeletionResult> ClearCaptureHistoryAsync(long profileId);
     Task RenameCaptureRangeAsync(long profileId, long rangeId, string name);
     Task DeleteCaptureRangeAsync(long profileId, long rangeId);
     Task<IReadOnlyList<CaptureRange>> GetCaptureRangesAsync(long profileId);

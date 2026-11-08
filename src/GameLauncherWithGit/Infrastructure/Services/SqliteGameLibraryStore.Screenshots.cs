@@ -12,20 +12,20 @@ public sealed partial class SqliteGameLibraryStore
     private readonly SemaphoreSlim _screenshotFilesLock = new(1, 1);
     private string ScreenshotPath(string id) => Path.Combine(Path.GetDirectoryName(Path.GetFullPath(_databasePath))!, "scenario-images", id + ".png");
 
-    public async Task<ScenarioScreenshot> SaveScreenshotAsync(ScreenshotTarget target, ScreenshotImageData image, DateTimeOffset capturedAt)
+    public async Task<ScenarioScreenshot> SaveScreenshotAsync(ScreenshotTarget target, ScreenshotImageData image, DateTimeOffset capturedAt, CancellationToken cancellationToken = default)
     {
-        await _screenshotFilesLock.WaitAsync();
-        try { return await SaveScreenshotCoreAsync(target, image, capturedAt); }
+        await _screenshotFilesLock.WaitAsync(cancellationToken);
+        try { return await SaveScreenshotCoreAsync(target, image, capturedAt, cancellationToken); }
         finally { _screenshotFilesLock.Release(); }
     }
 
-    private async Task<ScenarioScreenshot> SaveScreenshotCoreAsync(ScreenshotTarget target, ScreenshotImageData image, DateTimeOffset capturedAt)
+    private async Task<ScenarioScreenshot> SaveScreenshotCoreAsync(ScreenshotTarget target, ScreenshotImageData image, DateTimeOffset capturedAt, CancellationToken cancellationToken)
     {
         if (image.Width <= 0 || image.Height <= 0 || image.Png.Length == 0
             || image.PixelHash.Length != 64 || !image.PixelHash.All(Uri.IsHexDigit))
             throw new ArgumentException("画像データが不正です。");
-        await EnsureInitializedAsync(default);
-        await using var connection = await OpenConnectionAsync(default);
+        await EnsureInitializedAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
         var proposedId = Guid.NewGuid().ToString("N");
         var proposedPath = ScreenshotPath(proposedId);
         Directory.CreateDirectory(Path.GetDirectoryName(proposedPath)!);
@@ -37,8 +37,9 @@ public sealed partial class SqliteGameLibraryStore
             await using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
                 temporaryCreated = true;
-                await output.WriteAsync(image.Png);
+                await output.WriteAsync(image.Png, cancellationToken);
             }
+            cancellationToken.ThrowIfCancellationRequested();
             await using var transaction = connection.BeginTransaction();
             await using (var owner = CaptureCommand(connection, transaction, """
             SELECT e.RawText FROM CaptureEvents e JOIN CaptureSessions s ON s.Id=e.SessionId
@@ -65,12 +66,14 @@ public sealed partial class SqliteGameLibraryStore
             }
             else if (!File.Exists(ScreenshotPath(id)))
                 throw new FileNotFoundException("保存済みの画像ファイルが見つかりません。", ScreenshotPath(id));
+            cancellationToken.ThrowIfCancellationRequested();
             await using var link = CaptureCommand(connection, transaction, """
                 INSERT INTO CaptureEventImages(SessionId,ReceiveSequence,ImageId,CapturedAt) VALUES($session,$sequence,$image,$time)
                 ON CONFLICT(SessionId,ReceiveSequence,ImageId) DO NOTHING
                 """, ("$session", target.Event.SessionId), ("$sequence", target.Event.Sequence), ("$image", id), ("$time", capturedAt.ToString("O")));
             await link.ExecuteNonQueryAsync();
             var result = (await ReadEventScreenshotsAsync(connection, transaction, target.Event)).Single(x => x.ImageId == id);
+            cancellationToken.ThrowIfCancellationRequested();
             await transaction.CommitAsync();
             createdPath = null;
             return result;
@@ -106,27 +109,81 @@ public sealed partial class SqliteGameLibraryStore
         return result;
     }
 
-    private static async Task<List<string>> ScreenshotCandidatesAsync(SqliteConnection connection, SqliteTransaction transaction, long gameId)
+    public async Task<IReadOnlyDictionary<CaptureEventKey, int>> GetScreenshotCountsAsync(long captureGameId, IReadOnlyCollection<CaptureEventKey> events)
     {
-        await using var command = CaptureCommand(connection, transaction, """
-            SELECT DISTINCT l.ImageId FROM CaptureEventImages l JOIN CaptureSessions s ON s.Id=l.SessionId WHERE s.CaptureGameId=$game
-            """, ("$game", gameId));
+        var keys = events.Distinct().ToArray();
+        var counts = new Dictionary<CaptureEventKey, int>();
+        if (keys.Length == 0) return counts;
+        await EnsureInitializedAsync(default);
+        await using var connection = await OpenConnectionAsync(default);
+        await using var command = connection.CreateCommand();
+        var values = new List<string>();
+        for (var i = 0; i < keys.Length; i++)
+        {
+            values.Add($"($session{i},$sequence{i})");
+            command.Parameters.AddWithValue($"$session{i}", keys[i].SessionId);
+            command.Parameters.AddWithValue($"$sequence{i}", keys[i].Sequence);
+        }
+        command.CommandText = $"""
+            WITH requested(SessionId,ReceiveSequence) AS (VALUES {string.Join(",", values)})
+            SELECT r.SessionId,r.ReceiveSequence,s.CaptureGameId,COUNT(l.ImageId)
+            FROM requested r LEFT JOIN CaptureSessions s ON s.Id=r.SessionId
+            LEFT JOIN CaptureEventImages l ON l.SessionId=r.SessionId AND l.ReceiveSequence=r.ReceiveSequence
+            GROUP BY r.SessionId,r.ReceiveSequence,s.CaptureGameId
+            """;
         await using var reader = await command.ExecuteReaderAsync();
-        var ids = new List<string>();
-        while (await reader.ReadAsync()) ids.Add(reader.GetString(0));
-        return ids;
+        while (await reader.ReadAsync())
+        {
+            if (reader.IsDBNull(2) || reader.GetInt64(2) != captureGameId)
+                throw new ArgumentException("このゲームの本文を選んでください。");
+            counts.Add(new(reader.GetInt64(0), reader.GetInt64(1)), reader.GetInt32(3));
+        }
+        return counts;
     }
 
-    private static async Task<List<string>> RemoveUnreferencedScreenshotsAsync(SqliteConnection connection, SqliteTransaction transaction, List<string> candidates)
+    public async Task<ScreenshotCleanupResult> CleanupUnreferencedScreenshotsAsync()
     {
-        var removed = new List<string>();
+        await _screenshotFilesLock.WaitAsync();
+        try
+        {
+            await EnsureInitializedAsync(default);
+            await using var connection = await OpenConnectionAsync(default);
+            var candidates = await ReadUnreferencedScreenshotsAsync(connection, null);
+            return await CleanupUnreferencedScreenshotsCoreAsync(connection, candidates);
+        }
+        finally { _screenshotFilesLock.Release(); }
+    }
+
+    private static async Task<List<string>> ReadUnreferencedScreenshotsAsync(SqliteConnection connection, SqliteTransaction? transaction)
+    {
+        var candidates = new List<string>();
+        await using (var query = CaptureCommand(connection, transaction,
+            "SELECT Id FROM CaptureImages WHERE NOT EXISTS(SELECT 1 FROM CaptureEventImages WHERE ImageId=CaptureImages.Id)"))
+        {
+            await using var reader = await query.ExecuteReaderAsync();
+            while (await reader.ReadAsync()) candidates.Add(reader.GetString(0));
+        }
+        return candidates;
+    }
+
+    private async Task<ScreenshotCleanupResult> CleanupUnreferencedScreenshotsCoreAsync(SqliteConnection connection, List<string> candidates)
+    {
+        var failures = new List<string>();
         foreach (var id in candidates)
         {
-            await using var command = CaptureCommand(connection, transaction,
-                "DELETE FROM CaptureImages WHERE Id=$id AND NOT EXISTS(SELECT 1 FROM CaptureEventImages WHERE ImageId=$id)", ("$id", id));
-            if (await command.ExecuteNonQueryAsync() == 1) removed.Add(id);
+            try
+            {
+                File.Delete(ScreenshotPath(id));
+                await using var command = CaptureCommand(connection, null,
+                    "DELETE FROM CaptureImages WHERE Id=$id AND NOT EXISTS(SELECT 1 FROM CaptureEventImages WHERE ImageId=$id)", ("$id", id));
+                await command.ExecuteNonQueryAsync();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException)
+            {
+                failures.Add(ex.Message);
+            }
         }
-        return removed;
+        return new(failures.Count, failures);
     }
 
     public async Task ExportScenarioArchiveAsync(long captureGameId, ScenarioArchiveSelection selection, string outputPath)

@@ -114,15 +114,150 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         var shared = await _store.SaveScreenshotAsync(new(game, new(session, 1)), Image(), Time);
         var privateImage = await _store.SaveScreenshotAsync(new(game, new(session, 1)), Image('b'), Time);
         await _store.SaveScreenshotAsync(new(other, new(otherSession, 1)), Image(), Time);
-        await _store.DeleteCaptureEventsAsync(game, [new(session, 1)]);
+        Assert.Equal(0, (await _store.DeleteCaptureEventsAsync(game, [new(session, 1)])).ScreenshotCleanup.RemainingImageCount);
         Assert.True(File.Exists(shared.FilePath));
         Assert.False(File.Exists(privateImage.FilePath));
         Assert.Single(await _store.GetEventScreenshotsAsync(other, new(otherSession, 1)));
-        await _store.ClearCaptureHistoryAsync(other);
+        Assert.Equal(0, (await _store.ClearCaptureHistoryAsync(other)).ScreenshotCleanup.RemainingImageCount);
         Assert.False(File.Exists(shared.FilePath));
         await Append(session, 2);
         var fresh = await _store.SaveScreenshotAsync(new(game, new(session, 2)), Image(), Time);
         Assert.NotEqual(shared.ImageId, fresh.ImageId);
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "PNG削除失敗でも本文削除は確定し未回収画像を再撮影で共有でき明示再試行で回収できる"
+    // oracle = { type = "contract", ref = "https://github.com/natumekazuki/GameLauncherWithGit/issues/25" }
+    // fault = "画像削除失敗を本文削除失敗にする、metadataを先に消す、または再利用中PNGを回収する"
+    // observable = "本文件数、削除結果の残件と理由、再撮影画像ID、retry後のPNG存在"
+    // observation_boundary = "public-boundary"
+    // scope = "committed history deletion and retryable image cleanup"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedCleanupKeepsCommittedDeletionAndSupportsReuseAndRetry(bool clearHistory)
+    {
+        var (game, session) = await StartAsync();
+        var (other, otherSession) = await StartAsync("other");
+        await Append(session, 1);
+        await Append(otherSession, 1);
+        var image = await _store.SaveScreenshotAsync(new(game, new(session, 1)), Image(), Time);
+        using (var locked = new FileStream(image.FilePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            var result = clearHistory
+                ? await _store.ClearCaptureHistoryAsync(game)
+                : await _store.DeleteCaptureEventsAsync(game, [new(session, 1)]);
+            Assert.Empty(await _store.GetGameCaptureItemsAsync(game));
+            Assert.Equal(1, result.ScreenshotCleanup.RemainingImageCount);
+            Assert.NotEmpty(result.ScreenshotCleanup.FailureReasons);
+            Assert.Equal(1, (await _store.CleanupUnreferencedScreenshotsAsync()).RemainingImageCount);
+            var reused = await _store.SaveScreenshotAsync(new(other, new(otherSession, 1)), Image(), Time);
+            Assert.Equal(image.ImageId, reused.ImageId);
+        }
+        Assert.Equal(0, (await _store.CleanupUnreferencedScreenshotsAsync()).RemainingImageCount);
+        Assert.True(File.Exists(image.FilePath));
+        Assert.Single(await _store.GetEventScreenshotsAsync(other, new(otherSession, 1)));
+        using (var locked = new FileStream(image.FilePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            Assert.Equal(1, (await _store.ClearCaptureHistoryAsync(other)).ScreenshotCleanup.RemainingImageCount);
+        var cleanup = await _store.CleanupUnreferencedScreenshotsAsync();
+        Assert.Equal(0, cleanup.RemainingImageCount);
+        Assert.Empty(cleanup.FailureReasons);
+        Assert.False(File.Exists(image.FilePath));
+        Assert.Equal(0, (await _store.CleanupUnreferencedScreenshotsAsync()).RemainingImageCount);
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "本文削除transactionの途中で対象不一致またはDB失敗となった場合は本文と画像をすべて保持する"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#保存と登録削除" }
+    // fault = "DB削除失敗前の本文やPNGを確定削除してしまう"
+    // observable = "削除例外、本文件数、添付とPNGの内容"
+    // observation_boundary = "public-boundary"
+    // scope = "capture deletion transaction rollback"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FailedDeletionRollsBackBeforeImageCleanup(bool databaseFailure)
+    {
+        var (game, session) = await StartAsync();
+        await Append(session, 1);
+        var image = await _store.SaveScreenshotAsync(new(game, new(session, 1)), Image(), Time);
+        if (databaseFailure)
+        {
+            await using var connection = new SqliteConnection($"Data Source={Path.Combine(_directory, "library.db")}");
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = "CREATE TRIGGER fail_event_delete BEFORE DELETE ON CaptureEvents BEGIN SELECT RAISE(ABORT,'injected delete failure'); END";
+            await command.ExecuteNonQueryAsync();
+            await Assert.ThrowsAsync<SqliteException>(() => _store.DeleteCaptureEventsAsync(game, [new(session, 1)]));
+        }
+        else
+            await Assert.ThrowsAsync<ArgumentException>(() => _store.DeleteCaptureEventsAsync(game, [new(session, 1), new(session, 99)]));
+        Assert.Single(await _store.GetGameCaptureItemsAsync(game));
+        Assert.Single(await _store.GetEventScreenshotsAsync(game, new(session, 1)));
+        Assert.Equal(Png, await File.ReadAllBytesAsync(image.FilePath));
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "表示ページの原文キー集合に対し重複をまとめ画像枚数とゼロ件を返し別所有者は拒否する"
+    // oracle = { type = "contract", ref = "https://github.com/natumekazuki/GameLauncherWithGit/issues/28" }
+    // fault = "同じ原文を重複加算する、未添付行を落とす、または別ゲームの画像件数を返す"
+    // observable = "200原文の件数辞書と所有者不一致の例外"
+    // observation_boundary = "public-boundary"
+    // scope = "batched screenshot counts for visible history"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task CountsVisibleEventImagesIncludingZeroAndRejectsOtherOwner()
+    {
+        var (game, session) = await StartAsync();
+        var (other, otherSession) = await StartAsync("other");
+        for (var i = 1; i <= 200; i++) await Append(session, i);
+        await Append(otherSession, 1);
+        await _store.SaveScreenshotAsync(new(game, new(session, 1)), Image(), Time);
+        await _store.SaveScreenshotAsync(new(game, new(session, 1)), Image('b'), Time);
+        await _store.SaveScreenshotAsync(new(game, new(session, 2)), Image(), Time);
+        await _store.SaveScreenshotAsync(new(other, new(otherSession, 1)), Image('c'), Time);
+        var keys = Enumerable.Range(1, 200).Select(x => new CaptureEventKey(session, x)).Append(new(session, 1)).ToArray();
+        var counts = await _store.GetScreenshotCountsAsync(game, keys);
+        Assert.Equal(200, counts.Count);
+        Assert.Equal(2, counts[new(session, 1)]);
+        Assert.Equal(1, counts[new(session, 2)]);
+        Assert.All(counts.Where(x => x.Key.Sequence > 2), x => Assert.Equal(0, x.Value));
+        Assert.Empty(await _store.GetScreenshotCountsAsync(game, []));
+        await Assert.ThrowsAsync<ArgumentException>(() => _store.GetScreenshotCountsAsync(game, [new(session, 1), new(otherSession, 1)]));
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "中止済みの撮影保存は既存本文を保ち画像ファイルと関連を作らない"
+    // oracle = { type = "contract", ref = "https://github.com/natumekazuki/GameLauncherWithGit/issues/27" }
+    // fault = "保存gateへの中止tokenを無視して終了中の撮影を後から保存する"
+    // observable = "中止例外、保持された本文、添付とPNGの件数"
+    // observation_boundary = "public-boundary"
+    // scope = "cancelled screenshot persistence"
+    // lifecycle = "permanent"
+    // impact = "終了時の未保存結果と実保存データが食い違うのを防ぐ"
+    // distinction = "serviceのfake中止では実ストアのtoken配線とDB・ファイル結果を検証できない"
+    // @end-test-value
+    [Fact]
+    public async Task CancelledSaveDoesNotCreateAnImageOrLink()
+    {
+        var (game, session) = await StartAsync();
+        await Append(session, 1);
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            _store.SaveScreenshotAsync(new(game, new(session, 1)), Image(), Time, cancelled.Token));
+        Assert.Single(await _store.GetGameCaptureItemsAsync(game));
+        Assert.Empty(await _store.GetEventScreenshotsAsync(game, new(session, 1)));
+        Assert.Empty(Directory.GetFiles(_directory, "*.png", SearchOption.AllDirectories));
     }
 
     // @test-value v2

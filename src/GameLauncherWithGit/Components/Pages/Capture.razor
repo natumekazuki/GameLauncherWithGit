@@ -114,6 +114,18 @@
                 </div>
             </div>
             <div class="capture-screenshot-status" role="status" aria-busy="@(Screenshots.Snapshot.Busy ? "true" : "false")"><CaptureIcon Name="Camera" /><span title="@Screenshots.Snapshot.Status">@Screenshots.Snapshot.Status</span><span class="capture-screenshot-count" title="アプリ起動中の撮影保存の成功回数（同一画像の再利用を含む）" aria-label="@($"アプリ起動中の撮影保存の成功回数 {Screenshots.Snapshot.SavedCount}回、同一画像の再利用を含む")">@Screenshots.Snapshot.SavedCount</span></div>
+            @if (Screenshots.Snapshot.LastFailure is { } failure)
+            {
+                <button class="capture-failure-link" @onclick="OpenScreenshotSettings" disabled="@_busy">直近の撮影失敗 @failure.OccurredAt.ToLocalTime().ToString("HH:mm:ss") · 設定で詳細・再設定</button>
+            }
+            @if (_screenshotCountsError is not null)
+            {
+                <p class="capture-inline-warning" role="status">@_screenshotCountsError</p>
+            }
+            @if (_screenshotCleanup is { RemainingImageCount: > 0 } cleanup)
+            {
+                <div class="capture-cleanup-warning" role="status"><span>本文の削除は完了しています。不要画像 @cleanup.RemainingImageCount 件の後片付けが残っています。</span><button class="secondary-button" @onclick="RetryScreenshotCleanupAsync" disabled="@_busy">後片付けを再試行</button></div>
+            }
             <div class="capture-range-summary" role="status" aria-label="@TextRangeSummary" title="@TextRangeSummary">
                 @if (_pickingRange)
                 {
@@ -137,7 +149,7 @@
                                 }
                             </strong>
                             <span class="capture-manual @(item.ManualLabel || item.ManualSpeaker || item.ManualBoundaries ? "" : "capture-hidden")" title="手動修正" aria-label="手動修正"><CaptureIcon Name="Edit" /></span>
-                            <button class="secondary-button capture-icon-button" title="この本文を受信した頃のシーン" aria-label="この本文を受信した頃のシーンを見る" @onclick="() => OpenScreenshotsAsync(item)" disabled="@_busy"><CaptureIcon Name="Image" /></button>
+                            <button class="secondary-button capture-icon-button capture-image-button" title="@ScreenshotLabel(item)" aria-label="@ScreenshotLabel(item)" @onclick="() => OpenScreenshotsAsync(item)" disabled="@(_busy || ScreenshotCount(item) is not > 0)"><CaptureIcon Name="Image" /><span class="capture-image-badge" aria-hidden="true">@(ScreenshotCount(item)?.ToString() ?? "?")</span></button>
                             @if (_pickingRange)
                             {
                                 <button class="secondary-button capture-icon-button" title="ここから" aria-label="ここから" aria-pressed="@(item.StartPosition == _rangeFirst?.StartPosition ? "true" : "false")" @onclick="() => PickRangeStart(item)" disabled="@_busy"><CaptureIcon Name="Start" /></button>
@@ -161,7 +173,7 @@
 {
     <div class="modal-backdrop"><section id="capture-editor" class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-screenshot-settings-title">
         <header class="capture-dialog-header"><h2 id="capture-screenshot-settings-title">スクリーンショット設定</h2><button class="secondary-button capture-icon-button" title="閉じる" aria-label="閉じる" @onclick="CloseEditors"><CaptureIcon Name="Close" /></button></header>
-        <div class="capture-dialog-body"><ScenarioScreenshotSettings /></div>
+        <div class="capture-dialog-body"><ScenarioScreenshotSettings LastFailure="Screenshots.Snapshot.LastFailure" /></div>
     </section></div>
 }
 @if (_screenshotItem is not null)
@@ -211,6 +223,16 @@
                     <h3>ゲームの全履歴</h3>
                     <p class="capture-muted">本文・名前の原文・区間を消去します。ゲーム登録と抽出設定は残ります。</p>
                     <button class="secondary-button capture-text-button capture-danger" @onclick="PrepareClearHistoryAsync" disabled="@(_busy || (_historyCounts.Events == 0 && _historyCounts.Ranges == 0))"><CaptureIcon Name="Trash" />全履歴を消去…</button>
+                </section>
+                <section class="capture-history-section">
+                    <h3>不要画像の後片付け</h3>
+                    <p class="capture-muted">すべてのゲームの未参照画像だけを整理します。本文や参照中の画像は削除しません。</p>
+                    <button class="secondary-button capture-text-button" @onclick="RetryScreenshotCleanupAsync" disabled="@_busy"><CaptureIcon Name="Refresh" />不要画像の後片付けを再試行</button>
+                    @if (_screenshotCleanup is { RemainingImageCount: > 0 } pending)
+                    {
+                        <p class="capture-warning">後片付けが残っている画像：@pending.RemainingImageCount 件</p>
+                        @foreach (var reason in pending.FailureReasons) { <p class="capture-muted">@reason</p> }
+                    }
                 </section>
             }
             else if (_historyDialog == HistoryDialog.DeleteSelected)
@@ -440,6 +462,10 @@
     private bool _screenshotSettingsOpen;
     private CaptureTextItem? _screenshotItem;
     private IReadOnlyList<ScenarioScreenshot> _eventScreenshots = [];
+    private IReadOnlyDictionary<CaptureEventKey, int>? _screenshotCounts;
+    private string? _screenshotCountsError;
+    private long _countsSavedCount;
+    private ScreenshotCleanupResult? _screenshotCleanup;
     private int _galleryIndex;
     private string? _galleryImage, _galleryError;
     private IReadOnlyList<CaptureProfile> _profiles = [];
@@ -570,6 +596,8 @@
                 }
                 if (FollowingView && _following && !_busy && !EditorOpen && _selected.Count == 0)
                 { await LoadItemsAsync(); _scrollToEnd = true; }
+                else if (!_busy && Screenshots.Snapshot.SavedCount != _countsSavedCount)
+                    await LoadScreenshotCountsAsync();
                 StateHasChanged();
             });
         }
@@ -600,6 +628,24 @@
         var items = _profileId == 0 ? [] : await QueryItemsAsync(LatestOrder ? 200 : 201, FollowingView ? 0 : _offset, LatestOrder);
         _hasMore = items.Count > 200;
         _items = items.Take(200).ToArray();
+        await LoadScreenshotCountsAsync();
+    }
+    private int? ScreenshotCount(CaptureTextItem item) => _screenshotCounts is null ? null
+        : _screenshotCounts.GetValueOrDefault(new(item.SessionId, item.Sequence));
+    private string ScreenshotLabel(CaptureTextItem item) => ScreenshotCount(item) is { } count
+        ? count == 0 ? "関連画像なし（0枚）" : $"この本文を受信した頃のシーンを見る（{count}枚）"
+        : "関連画像の件数を取得できません。更新して再試行してください。";
+    private async Task LoadScreenshotCountsAsync()
+    {
+        _screenshotCounts = null;
+        try
+        {
+            var savedCount = Screenshots.Snapshot.SavedCount;
+            _screenshotCounts = _profileId == 0 ? new Dictionary<CaptureEventKey, int>()
+                : await ScreenshotStore.GetScreenshotCountsAsync(_profileId, _items.Select(x => new CaptureEventKey(x.SessionId, x.Sequence)).Distinct().ToArray());
+            _countsSavedCount = savedCount; _screenshotCountsError = null;
+        }
+        catch (Exception ex) { _screenshotCountsError = $"画像件数を取得できませんでした。更新して再試行してください：{ex.Message}"; }
     }
     private Task<IReadOnlyList<CaptureTextItem>> QueryItemsAsync(int limit, int offset = 0, bool latest = false)
     {
@@ -654,10 +700,10 @@
         switch (_historyDialog)
         {
             case HistoryDialog.DeleteSelected:
-                await Store.DeleteCaptureEventsAsync(_profileId, _deletionTargets.Select(x => x.Key).ToArray());
+                _screenshotCleanup = (await Store.DeleteCaptureEventsAsync(_profileId, _deletionTargets.Select(x => x.Key).ToArray())).ScreenshotCleanup;
                 _message = $"原文 {_deletionTargets.Count} 件を削除しました。"; break;
             case HistoryDialog.Clear:
-                await Store.ClearCaptureHistoryAsync(_profileId); _rangeId = 0;
+                _screenshotCleanup = (await Store.ClearCaptureHistoryAsync(_profileId)).ScreenshotCleanup; _rangeId = 0;
                 _message = "全履歴を消去しました。ゲーム登録と抽出設定は保持しています。"; break;
             case HistoryDialog.DeleteRange:
                 await Store.DeleteCaptureRangeAsync(_profileId, _managedRangeId);
@@ -665,8 +711,14 @@
                 _message = "区間を削除しました。本文は保持しています。"; break;
             default: return;
         }
+        _offset = 0; _selected.Clear(); ClearTextRange(); CloseEditors();
         _ranges = await Store.GetCaptureRangesAsync(_profileId);
-        _offset = 0; _selected.Clear(); ClearTextRange(); CloseEditors(); await LoadItemsAsync(); _scrollToEnd = false;
+        await LoadItemsAsync(); _scrollToEnd = false;
+    });
+    private Task RetryScreenshotCleanupAsync() => RunAsync(async () =>
+    {
+        _screenshotCleanup = await ScreenshotStore.CleanupUnreferencedScreenshotsAsync();
+        _message = _screenshotCleanup.RemainingImageCount == 0 ? "不要画像の後片付けが完了しました。" : $"不要画像 {_screenshotCleanup.RemainingImageCount} 件の後片付けが残っています。履歴管理で詳細を確認できます。";
     });
     private Task ChangeProfileAsync(ChangeEventArgs e) => RunAsync(async () => { _profileId = long.Parse(e.Value!.ToString()!); await LoadProfileAsync(); _scrollToEnd = false; });
     private Task ChangeRangeAsync() => RunAsync(async () => { _offset = 0; _selected.Clear(); await LoadItemsAsync(); _scrollToEnd = FollowingView && _following; });

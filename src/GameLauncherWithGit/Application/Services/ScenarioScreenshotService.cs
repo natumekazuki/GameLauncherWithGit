@@ -5,8 +5,9 @@ using Microsoft.Extensions.Logging;
 
 namespace GameLauncherWithGit.Application.Services;
 
+public sealed record ScreenshotFailure(DateTimeOffset OccurredAt, string Message);
 public sealed record ScreenshotStatus(string Status, bool Busy, bool Registered, ScreenshotHotkey Hotkey,
-    CaptureWindow? Window, bool ManualWindow, long SavedCount);
+    CaptureWindow? Window, bool ManualWindow, long SavedCount, ScreenshotFailure? LastFailure = null);
 
 public sealed class ScenarioScreenshotService : IAsyncDisposable
 {
@@ -15,20 +16,26 @@ public sealed class ScenarioScreenshotService : IAsyncDisposable
     private readonly IScenarioScreenshotPlatform _platform;
     private readonly IAppSettingsService _settings;
     private readonly ILogger<ScenarioScreenshotService> _logger;
+    private readonly INotificationService _notifications;
+    private readonly TimeProvider _clock;
     private readonly object _gate = new();
     private readonly SemaphoreSlim _registration = new(1, 1);
+    private readonly CancellationTokenSource _shutdown = new();
     private ScreenshotStatus _snapshot;
     private long? _windowSession;
-    private int _capturing;
+    private Task? _activeCapture, _disposeTask;
+    private DateTimeOffset? _lastNotificationAt;
     private bool _disposed;
 
     public event Action? Changed;
     public ScreenshotStatus Snapshot { get { lock (_gate) return _snapshot; } }
 
     public ScenarioScreenshotService(ScenarioCaptureService capture, IScenarioScreenshotStore store,
-        IScenarioScreenshotPlatform platform, IAppSettingsService settings, ILogger<ScenarioScreenshotService> logger)
+        IScenarioScreenshotPlatform platform, IAppSettingsService settings, ILogger<ScenarioScreenshotService> logger,
+        INotificationService notifications, TimeProvider? clock = null)
     {
         _capture = capture; _store = store; _platform = platform; _settings = settings; _logger = logger;
+        _notifications = notifications; _clock = clock ?? TimeProvider.System;
         var config = settings.Get();
         _snapshot = new("正式記録中に撮影できます", false, false,
             new(config.ScreenshotModifiers, config.ScreenshotVirtualKey), null, false, 0);
@@ -55,24 +62,47 @@ public sealed class ScenarioScreenshotService : IAsyncDisposable
     {
         ValidateHotkey(hotkey);
         await _registration.WaitAsync();
+        var previous = Snapshot;
         try
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             await _platform.UnregisterHotkeyAsync();
-            Update(s => s with { Registered = false });
+            Update(s => s with { Registered = false, Status = "撮影キーを変更中" });
+            var registered = false;
             if (_capture.Snapshot.Recording)
             {
                 await _platform.RegisterHotkeyAsync(hotkey, OnHotkey);
-                Update(s => s with { Registered = true });
+                registered = true;
             }
             await _settings.SaveAsync(_settings.Get() with { ScreenshotModifiers = hotkey.Modifiers, ScreenshotVirtualKey = hotkey.VirtualKey });
-            Update(s => s with { Hotkey = hotkey, Status = s.Registered ? "撮影キーを登録しました" : "撮影キーを保存しました" });
+            Update(s => s with { Hotkey = hotkey, Registered = registered, Status = registered ? "撮影キーを登録しました" : "撮影キーを保存しました" });
         }
         catch (Exception ex)
         {
-            await _platform.UnregisterHotkeyAsync();
-            Update(s => s with { Registered = false, Status = ex.Message });
-            throw;
+            var restored = false;
+            string? restoreFailure = null;
+            try
+            {
+                await _platform.UnregisterHotkeyAsync();
+                if (previous.Registered && _capture.Snapshot.Recording && !_disposed)
+                {
+                    await _platform.RegisterHotkeyAsync(previous.Hotkey, OnHotkey);
+                    restored = true;
+                }
+            }
+            catch (Exception restoreError)
+            {
+                restoreFailure = restoreError.Message;
+                _logger.LogWarning(restoreError, "Previous screenshot hotkey could not be restored");
+            }
+            Update(s => s with { Hotkey = previous.Hotkey, Registered = restored });
+            var recovery = restored
+                ? $"以前の {DescribeHotkey(previous.Hotkey)} で撮影できます。"
+                : "撮影キーは未登録です。撮影設定で競合しないキーを保存し直してください。";
+            var message = $"撮影キーの変更に失敗しました。{ex.Message} {recovery}";
+            if (restoreFailure is not null) message += $" 復旧失敗: {restoreFailure}";
+            await ReportFailureAsync(message);
+            throw new InvalidOperationException(message, ex);
         }
         finally { _registration.Release(); }
     }
@@ -117,18 +147,26 @@ public sealed class ScenarioScreenshotService : IAsyncDisposable
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Screenshot hotkey registration failed");
-            Update(s => s with { Registered = false, Status = ex.Message });
+            Update(s => s with { Registered = false });
+            await ReportFailureAsync($"撮影キーを登録できませんでした。{ex.Message} 撮影設定で競合しないキーを保存し直してください。");
         }
         finally { _registration.Release(); }
     }
 
-    public async Task CaptureAsync()
+    public Task CaptureAsync()
     {
-        if (Interlocked.CompareExchange(ref _capturing, 1, 0) != 0)
+        lock (_gate)
         {
-            Update(s => s with { Status = "撮影を保存中です。完了後にもう一度押してください。" });
-            return;
+            if (_disposed) return Task.CompletedTask;
+            if (_activeCapture is { IsCompleted: false })
+                return ReportFailureAsync("撮影を保存中のため、今回の撮影は受け付けませんでした。完了後にもう一度押してください。");
+            _activeCapture = CaptureCoreAsync(_shutdown.Token);
+            return _activeCapture;
         }
+    }
+
+    private async Task CaptureCoreAsync(CancellationToken cancellationToken)
+    {
         try
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
@@ -147,19 +185,23 @@ public sealed class ScenarioScreenshotService : IAsyncDisposable
                 window = windows[0];
             }
             Update(s => s with { Busy = true, Window = window, Status = "撮影を保存中" });
-            var frame = await _platform.CaptureAsync(window);
-            await _capture.FlushPendingAsync();
-            await _store.SaveScreenshotAsync(target, new(frame.Width, frame.Height, frame.PixelHash, frame.PngBytes), capturedAt);
+            var frame = await _platform.CaptureAsync(window, cancellationToken);
+            await _capture.FlushPendingAsync().WaitAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            await _store.SaveScreenshotAsync(target, new(frame.Width, frame.Height, frame.PixelHash, frame.PngBytes), capturedAt, cancellationToken);
             Update(s => s with { SavedCount = s.SavedCount + 1, Status = "スクリーンショットを保存しました" });
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            await ReportFailureAsync("終了待機中の撮影を中止しました。この撮影は保存されていません。");
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Screenshot capture/save failed");
-            Update(s => s with { Status = ex.Message });
+            await ReportFailureAsync($"撮影を保存できませんでした。{ex.Message} ゲームの前面表示と撮影設定を確認して、もう一度撮影してください。");
         }
         finally
         {
-            Interlocked.Exchange(ref _capturing, 0);
             Update(s => s with { Busy = false });
         }
     }
@@ -170,17 +212,60 @@ public sealed class ScenarioScreenshotService : IAsyncDisposable
         Changed?.Invoke();
     }
 
-    public async ValueTask DisposeAsync()
+    private async Task ReportFailureAsync(string message)
+    {
+        var now = _clock.GetUtcNow();
+        bool notify;
+        lock (_gate)
+        {
+            _snapshot = _snapshot with { Status = message, LastFailure = new(now, message) };
+            notify = _lastNotificationAt is null || now - _lastNotificationAt >= TimeSpan.FromSeconds(5);
+            if (notify) _lastNotificationAt = now;
+        }
+        Changed?.Invoke();
+        if (!notify) return;
+        try { _platform.SignalFailure(); }
+        catch (Exception ex) { _logger.LogWarning(ex, "Screenshot failure sound could not be played"); }
+        try { await _notifications.NotifyAsync("スクリーンショットの確認が必要です", message); }
+        catch (Exception ex) { _logger.LogWarning(ex, "Screenshot failure notification could not be shown"); }
+    }
+
+    private static string DescribeHotkey(ScreenshotHotkey key)
+    {
+        var modifiers = new List<string>();
+        if ((key.Modifiers & 2) != 0) modifiers.Add("Ctrl");
+        if ((key.Modifiers & 1) != 0) modifiers.Add("Alt");
+        if ((key.Modifiers & 4) != 0) modifiers.Add("Shift");
+        modifiers.Add(key.VirtualKey >= 0x70 ? $"F{key.VirtualKey - 0x6F}" : ((char)key.VirtualKey).ToString());
+        return string.Join("+", modifiers);
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        lock (_gate)
+        {
+            if (_disposeTask is not null) return new(_disposeTask);
+            _disposed = true;
+            return new(_disposeTask = DisposeCoreAsync(_activeCapture));
+        }
+    }
+
+    private async Task DisposeCoreAsync(Task? activeCapture)
     {
         _capture.StateChanged -= OnCaptureStateChanged;
+        // Let an accepted capture save normally, then request cancellation at a safe boundary.
+        _shutdown.CancelAfter(TimeSpan.FromSeconds(10));
         await _registration.WaitAsync();
         try
         {
-            if (_disposed) return;
-            _disposed = true;
             await _platform.UnregisterHotkeyAsync();
             Update(s => s with { Registered = false });
         }
-        finally { _registration.Release(); }
+        finally
+        {
+            _registration.Release();
+            try { if (activeCapture is not null) await activeCapture; }
+            finally { _shutdown.Dispose(); }
+        }
     }
 }

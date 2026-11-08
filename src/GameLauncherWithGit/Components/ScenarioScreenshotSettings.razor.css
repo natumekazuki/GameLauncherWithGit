@@ -1,4 +1,7 @@
 .screenshot-settings { display:grid; gap:1rem; min-width:0; }
+.screenshot-failure { border-left:3px solid #f0c98a; padding-left:.75rem; color:#f0c98a; }
+.screenshot-failure p { margin:0; overflow-wrap:anywhere; line-height:1.6; }
+.screenshot-failure .screenshot-note { margin-top:.5rem; }
 h3 { font-size:1rem; margin:0 0 .75rem; }
 .screenshot-hotkey,.screenshot-window-heading { display:flex; align-items:center; gap:.75rem; }
 .screenshot-hotkey label { display:flex; align-items:center; gap:.35rem; white-space:nowrap; }

@@ -3,6 +3,17 @@
 @inject ScenarioScreenshotService Screenshots
 
 <div class="screenshot-settings">
+    @if (LastFailure is { } failure)
+    {
+        <section class="screenshot-failure" aria-label="直近の撮影失敗">
+            <h3>直近の撮影失敗 · @failure.OccurredAt.ToLocalTime().ToString("HH:mm:ss")</h3>
+            <p>@failure.Message</p>
+            @if (Screenshots.Snapshot.Status != failure.Message)
+            {
+                <p class="screenshot-note">現在の撮影状態：@Screenshots.Snapshot.Status</p>
+            }
+        </section>
+    }
     <section>
         <h3>撮影ショートカット</h3>
         <form @onsubmit="SaveHotkeyAsync" @onsubmit:preventDefault>
@@ -15,7 +26,7 @@
                 </select>
                 <button type="submit" class="launch-button screenshot-icon" title="ショートカットを保存" aria-label="ショートカットを保存" disabled="@(_busy || !(_ctrl || _alt || _shift))"><CaptureIcon Name="Check" /></button>
             </div>
-            <p class="screenshot-feedback" role="status">@(_error ?? _message ?? (!(_ctrl || _alt || _shift) ? "Ctrl・Alt・Shiftのいずれかを選択してください。" : ""))</p>
+            <p class="screenshot-feedback" role="status">@((_error != LastFailure?.Message ? _error : null) ?? _message ?? (!(_ctrl || _alt || _shift) ? "Ctrl・Alt・Shiftのいずれかを選択してください。" : ""))</p>
         </form>
         <p class="screenshot-note">Ctrlで文章をスキップするゲームがあります。ゲーム操作と競合しない組み合わせを選んでください。</p>
     </section>
@@ -26,7 +37,7 @@
             <button class="secondary-button screenshot-window" aria-pressed="@(!Screenshots.Snapshot.ManualWindow ? "true" : "false")" @onclick="() => SelectWindow(null)" disabled="@_busy"><strong>自動選択</strong><span>本文の取得先にウィンドウが1つある場合</span></button>
             @foreach (var window in _windows)
             {
-                <button class="secondary-button screenshot-window" aria-pressed="@(Screenshots.Snapshot.ManualWindow && Screenshots.Snapshot.Window?.Handle == window.Handle ? "true" : "false")" @onclick="() => SelectWindow(window)" disabled="@_busy"><strong>@window.Title</strong><span>@window.ProcessName · PID @window.ProcessId</span></button>
+                <button class="secondary-button screenshot-window" aria-pressed="@(Screenshots.Snapshot.ManualWindow && Screenshots.Snapshot.Window?.Handle == window.Handle ? "true" : "false")" @onclick="() => SelectWindow(window)" disabled="@_busy"><strong>@window.DisplayTitle</strong><span>@window.ProcessName · PID @window.ProcessId</span></button>
             }
         </div>
         <p class="screenshot-note">撮影先だけを変更します。ゲームを最前面にしてショートカットを押すと、枠を除いた画面を保存します。</p>
@@ -34,12 +45,13 @@
 </div>
 
 @code {
+    [Parameter] public ScreenshotFailure? LastFailure { get; set; }
     private bool _ctrl, _alt, _shift, _busy;
     private uint _key;
     private string? _error, _message;
     private IReadOnlyList<CaptureWindow> _windows = [];
     private static readonly (uint Value, string Name)[] Keys = Enumerable.Range('A', 26).Concat(Enumerable.Range('0', 10)).Select(x => ((uint)x, ((char)x).ToString())).Concat(Enumerable.Range(1, 11).Select(x => ((uint)(0x6F + x), $"F{x}"))).ToArray();
-    private string CurrentWindow => Screenshots.Snapshot.Window is { } window ? $"{window.Title} · {window.ProcessName} · PID {window.ProcessId}" : Screenshots.Snapshot.ManualWindow ? "撮影先未選択" : "本文の取得先から撮影時に自動選択";
+    private string CurrentWindow => Screenshots.Snapshot.Window is { } window ? $"{window.DisplayTitle} · {window.ProcessName} · PID {window.ProcessId}" : Screenshots.Snapshot.ManualWindow ? "撮影先未選択" : "本文の取得先から撮影時に自動選択";
     protected override void OnInitialized()
     {
         var hotkey = Screenshots.Snapshot.Hotkey;

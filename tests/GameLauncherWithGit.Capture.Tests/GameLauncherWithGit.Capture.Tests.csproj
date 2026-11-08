@@ -29,5 +29,6 @@
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/IScenarioCaptureStore.cs" Link="IScenarioCaptureStore.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/IScenarioScreenshot*.cs" Link="%(Filename)%(Extension)" />
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/ILunaCaptureHost.cs" Link="ILunaCaptureHost.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/INotificationService.cs" Link="INotificationService.cs" />
   </ItemGroup>
 </Project>

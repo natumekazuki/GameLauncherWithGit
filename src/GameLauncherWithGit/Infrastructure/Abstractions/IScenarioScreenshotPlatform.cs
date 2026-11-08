@@ -8,4 +8,5 @@ public interface IScenarioScreenshotPlatform : IDisposable
     Task<ScenarioScreenshotFrame> CaptureAsync(CaptureWindow target, CancellationToken cancellationToken = default);
     Task RegisterHotkeyAsync(ScreenshotHotkey hotkey, Action callback);
     Task UnregisterHotkeyAsync();
+    void SignalFailure();
 }

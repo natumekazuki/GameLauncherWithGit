@@ -48,7 +48,19 @@ public sealed class AppSettingsService : IAppSettingsService
 			path = _settingsFilePath;
 		}
 
-		await File.WriteAllTextAsync(path, payload, Encoding.UTF8, cancellationToken);
+		var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+		try
+		{
+			await File.WriteAllTextAsync(temporary, payload, Encoding.UTF8, cancellationToken);
+			cancellationToken.ThrowIfCancellationRequested();
+			File.Move(temporary, path, overwrite: true);
+		}
+		finally
+		{
+			try { File.Delete(temporary); }
+			catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+			{ _logger.LogWarning(ex, "Failed to remove temporary settings file. path={SettingsTemporaryPath}", temporary); }
+		}
 
 		lock (_gate)
 		{

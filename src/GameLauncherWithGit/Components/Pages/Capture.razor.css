@@ -62,8 +62,14 @@ input[type=checkbox] { width:1rem; height:1rem; margin:0; accent-color:#85b4ff; 
 .capture-feed { overflow:auto; height:60vh; min-height:18rem; border:1px solid #30415a; border-radius:8px; background:#0f1929; scrollbar-gutter:stable; overflow-anchor:none; }
 .capture-item { padding:1rem; border-bottom:1px solid #27364d; }
 .capture-item:last-child { border-bottom:0; }
-.capture-item header { display:grid; grid-template-columns:1rem minmax(3rem,6rem) minmax(0,1fr) 1.25rem 2rem 2rem 2rem; align-items:center; gap:.65rem; font-size:.8rem; color:#c0cee0; }
+.capture-item header { display:grid; grid-template-columns:1rem minmax(3rem,6rem) minmax(0,1fr) 1.25rem 3.5rem 2rem 2rem; align-items:center; gap:.65rem; font-size:.8rem; color:#c0cee0; }
 .capture-item header .capture-icon-button { width:2rem; height:2rem; }
+.capture-item header .capture-image-button { width:3.5rem; gap:.2rem; }
+.capture-image-badge { font-size:.7rem; min-width:1.4em; font-variant-numeric:tabular-nums; padding:.05rem .2rem; border-radius:4px; background:#253c5a; color:#e6edf7; }
+.capture-image-button:disabled .capture-image-badge { background:transparent; color:#adbed5; }
+.capture-failure-link { display:block; width:auto; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; padding:.15rem 0; border:0; background:transparent; color:#f0c98a; text-align:left; font-size:.8rem; text-decoration:underline; }
+.capture-inline-warning { font-size:.8rem; color:#f0c98a; margin:.35rem 0; overflow-wrap:anywhere; }
+.capture-cleanup-warning { display:flex; align-items:center; flex-wrap:wrap; gap:.5rem; margin:.5rem 0; color:#f0c98a; font-size:.85rem; }
 .capture-speaker,.capture-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .capture-speaker { min-height:1.25rem; }
 .capture-speaker ::deep svg { width:16px; height:16px; color:#adbed5; }
@@ -174,7 +180,7 @@ input[type=checkbox] { width:1rem; height:1rem; margin:0; accent-color:#85b4ff; 
     .capture-tools { gap:.5rem; }
     .capture-tool-group + .capture-tool-group { padding-left:.5rem; }
     .capture-item { padding:.75rem; }
-    .capture-item header { grid-template-columns:1rem minmax(3rem,4rem) minmax(0,1fr) 1rem 2rem 2rem 2rem; gap:.4rem; }
+    .capture-item header { grid-template-columns:1rem minmax(3rem,4rem) minmax(0,1fr) 1rem 3.5rem 2rem 2rem; gap:.4rem; }
     .capture-source-grid,.capture-result-grid { grid-template-columns:1fr; flex:none; }
     .capture-candidate-list { height:20rem; }
     .capture-samples { height:18rem; flex:none; }

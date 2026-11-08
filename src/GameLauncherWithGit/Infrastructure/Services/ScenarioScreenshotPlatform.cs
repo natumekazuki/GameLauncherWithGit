@@ -40,7 +40,6 @@ public sealed class ScenarioScreenshotPlatform : IScenarioScreenshotPlatform
                 return true;
             var title = new StringBuilder(GetWindowTextLength(hwnd) + 1);
             GetWindowText(hwnd, title, title.Capacity);
-            if (string.IsNullOrWhiteSpace(title.ToString())) return true;
             try
             {
                 using var process = Process.GetProcessById(pid);
@@ -174,6 +173,17 @@ public sealed class ScenarioScreenshotPlatform : IScenarioScreenshotPlatform
 #endif
     }
 
+    public void SignalFailure()
+    {
+#if WINDOWS
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!MessageBeep(0x00000030)) // MB_ICONEXCLAMATION
+            throw NativeError("撮影失敗の通知音を再生できませんでした。");
+#else
+        throw Unsupported();
+#endif
+    }
+
     public void Dispose()
     {
 #if WINDOWS
@@ -254,6 +264,7 @@ public sealed class ScenarioScreenshotPlatform : IScenarioScreenshotPlatform
     [StructLayout(LayoutKind.Sequential)] private struct BitmapInfo { public BitmapInfoHeader Header; public uint Colors; }
 
     [DllImport("user32.dll", SetLastError = true)] private static extern bool EnumWindows(EnumWindowsProc callback, nint data);
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool MessageBeep(uint type);
     [DllImport("user32.dll")] private static extern bool IsWindow(nint hwnd);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(nint hwnd);
     [DllImport("user32.dll")] private static extern bool IsIconic(nint hwnd);
