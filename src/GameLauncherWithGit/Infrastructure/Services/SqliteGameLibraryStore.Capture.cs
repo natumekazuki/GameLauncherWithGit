@@ -251,7 +251,7 @@ public sealed partial class SqliteGameLibraryStore
 
     private const string CaptureItemQuery = """
         SELECT i.Id,i.SessionId,i.ReceiveSequence,e.ReceivedAt,e.RawText,i.StartUtf16,i.LengthUtf16,
-        l.Id,l.Name,l.Kind,CASE WHEN l.Kind=1 THEN NULL WHEN i.HasManualSpeaker=1 THEN i.ManualSpeakerText ELSE i.AutoSpeakerText END,
+        l.Id,l.Name,l.Kind,CASE WHEN l.Kind=1 THEN NULL WHEN i.HasManualSpeaker=1 THEN i.ManualSpeakerText ELSE i.AutoSpeakerText END AS Speaker,
         i.HasManualLabel,i.HasManualSpeaker,e.HasManualBoundaries
         FROM CaptureItems i JOIN CaptureEvents e ON e.SessionId=i.SessionId AND e.ReceiveSequence=i.ReceiveSequence
         LEFT JOIN CaptureLabels l ON l.Id=CASE WHEN i.HasManualLabel=1 THEN i.ManualLabelId ELSE i.AutoLabelId END

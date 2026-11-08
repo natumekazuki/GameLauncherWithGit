@@ -59,6 +59,24 @@ public sealed partial class SqliteGameLibraryStore
         return id;
     }
 
+    public async Task<IReadOnlyList<string>> GetGameCaptureSpeakersAsync(long profileId)
+    {
+        await EnsureInitializedAsync(default);
+        await using var connection = await OpenConnectionAsync(default);
+        await using var command = CaptureCommand(connection, null, "SELECT DISTINCT Speaker FROM (" + CaptureItemQuery + """
+             JOIN CaptureSessions s ON s.Id=i.SessionId WHERE s.CaptureGameId=$game
+            ) WHERE Speaker IS NOT NULL ORDER BY Speaker
+            """, ("$game", profileId));
+        await using var reader = await command.ExecuteReaderAsync();
+        var speakers = new List<string>();
+        while (await reader.ReadAsync())
+        {
+            var speaker = reader.GetString(0);
+            if (!string.IsNullOrWhiteSpace(speaker)) speakers.Add(speaker);
+        }
+        return speakers;
+    }
+
     public async Task<IReadOnlyList<CaptureTextItem>> GetGameCaptureItemsAsync(long profileId, int limit = 200, int offset = 0,
         long? labelId = null, bool unclassifiedOnly = false, bool latest = false, long? rangeId = null, CaptureKind? kind = null,
         string? textSearch = null, string? speakerSearch = null)

@@ -164,6 +164,56 @@ public sealed class ScenarioCaptureTests : IDisposable
 
     // @test-value v2
     // kind = "invariant"
+    // claim = "ゲーム別の話者候補は全取得回の有効話者だけを名称順・重複なしで返す"
+    // oracle = { type = "contract", ref = "IScenarioCaptureStore.GetGameCaptureSpeakersAsync; docs/design/scenario-extraction.md#修正と再適用" }
+    // fault = "名前受信原文や別ゲームを混ぜる、取得回を限定する、または手動未確定と地の文の話者を候補へ戻す"
+    // observable = "公開store APIが返す話者名一覧と空の取得結果"
+    // observation_boundary = "public-boundary"
+    // scope = "SQLite game-wide effective speaker candidates"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task SpeakerCandidatesUseDistinctEffectiveNamesAcrossGameSessions()
+    {
+        var (profile, session) = await StartAsync();
+        var time = DateTimeOffset.UtcNow.AddMinutes(-1);
+        string[] names = ["美咲", "寿季", "修正前", "未確定前", "地の文前"];
+        for (var i = 0; i < names.Length; i++)
+        {
+            var receivedAt = time.AddSeconds(i * 4);
+            await _store.AppendCaptureAsync(session, Receive(i * 2 + 1, names[i], CaptureRole.Name, receivedAt), new());
+            await _store.AppendCaptureAsync(session, Receive(i * 2 + 2, "「発言」", time: receivedAt), new());
+        }
+        await _store.ResolveCaptureSpeakersAsync(session, time, time.AddSeconds(30));
+        var items = await _store.GetCaptureItemsAsync(session);
+        await _store.SetCaptureSpeakerAsync(session, items[2].Id, "手動名");
+        await _store.SetCaptureSpeakerAsync(session, items[3].Id, null);
+        var narration = Assert.Single(await _store.GetCaptureLabelsAsync(profile.Id), x => x.Kind == CaptureKind.Narration);
+        await _store.SetCaptureLabelsAsync(session, [items[4].Id], narration.Id);
+        await _store.AppendCaptureAsync(session, Receive(11, "本文に付かない名前", CaptureRole.Name), new());
+
+        var nextSession = await _store.BeginCaptureSessionAsync(profile.Id);
+        await _store.AppendCaptureAsync(nextSession, Receive(1, "「再登場」"), new());
+        var repeated = Assert.Single(await _store.GetCaptureItemsAsync(nextSession));
+        await _store.SetCaptureSpeakerAsync(nextSession, repeated.Id, "美咲");
+        await _store.AppendCaptureAsync(nextSession, Receive(2, "「別表記」"), new());
+        var variant = Assert.Single(await _store.GetCaptureItemsAsync(nextSession), x => x.Sequence == 2);
+        await _store.SetCaptureSpeakerAsync(nextSession, variant.Id, "美咲ちゃん");
+
+        await _store.UpsertAsync(new("other", "他の作品", "other.exe", null, null, null, GameCardStatus.Unknown));
+        var otherProfile = await _store.GetOrCreateCaptureProfileAsync("other");
+        var otherSession = await _store.BeginCaptureSessionAsync(otherProfile.Id);
+        await _store.AppendCaptureAsync(otherSession, Receive(1, "「他作品」"), new());
+        await _store.SetCaptureSpeakerAsync(otherSession, Assert.Single(await _store.GetCaptureItemsAsync(otherSession)).Id, "別作品の話者");
+
+        IScenarioCaptureStore store = _store;
+        Assert.Equal(new[] { "寿季", "手動名", "美咲", "美咲ちゃん" }, await store.GetGameCaptureSpeakersAsync(profile.Id));
+        Assert.Equal(new[] { "別作品の話者" }, await store.GetGameCaptureSpeakersAsync(otherProfile.Id));
+        Assert.Empty(await store.GetGameCaptureSpeakersAsync(long.MaxValue));
+    }
+
+    // @test-value v2
+    // kind = "invariant"
     // claim = "明示再適用は選択範囲の自動話者だけを再計算し手動未確定と他範囲を維持する"
     // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md#修正と再適用" }
     // fault = "再適用を全履歴へ広げる、または手動NULLを自動値で置換する"
