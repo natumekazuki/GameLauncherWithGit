@@ -37,6 +37,14 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         return lines.Select(x => JsonDocument.Parse(x).RootElement.Clone()).ToArray();
     }
 
+    private static IEnumerable<string> JsonStrings(JsonElement value) => value.ValueKind switch
+    {
+        JsonValueKind.Object => value.EnumerateObject().SelectMany(x => JsonStrings(x.Value)),
+        JsonValueKind.Array => value.EnumerateArray().SelectMany(JsonStrings),
+        JsonValueKind.String => [value.GetString()!],
+        _ => []
+    };
+
     // @test-value v2
     // kind = "invariant"
     // claim = "同一画素はイベント間で共有し同一添付の再撮影は最初の時刻を保持し再分割後も関連が残る"
@@ -298,9 +306,9 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         Assert.Equal("Dialogue", part.GetProperty("kind").GetString());
         Assert.Equal("花", part.GetProperty("speaker").GetString());
         Assert.Equal(dialogue.Name, part.GetProperty("label").GetProperty("name").GetString());
-        Assert.DoesNotContain("秘密前", row.GetRawText());
-        Assert.DoesNotContain("本文のみ", row.GetRawText());
-        Assert.DoesNotContain("名前のみ", row.GetRawText());
+        Assert.DoesNotContain(JsonStrings(row), x => x.Contains("秘密前", StringComparison.Ordinal));
+        Assert.DoesNotContain(JsonStrings(row), x => x.Contains("本文のみ", StringComparison.Ordinal));
+        Assert.DoesNotContain(JsonStrings(row), x => x.Contains("名前のみ", StringComparison.Ordinal));
         Assert.False(row.TryGetProperty("rawText", out _));
         Assert.Equal(Time, row.GetProperty("images")[0].GetProperty("capturedAt").GetDateTimeOffset());
         Assert.Equal(image.ImageId, row.GetProperty("images")[0].GetProperty("imageId").GetString());
@@ -309,7 +317,7 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         var info = Assert.Single(manifest.RootElement.GetProperty("images").EnumerateArray());
         Assert.NotNull(zip.GetEntry(info.GetProperty("path").GetString()!));
         Assert.Equal("GameLauncherWithGit.scenario", manifest.RootElement.GetProperty("format").GetString());
-        Assert.Equal(1, manifest.RootElement.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(2, manifest.RootElement.GetProperty("schemaVersion").GetInt32());
     }
 
     // @test-value v2
@@ -537,6 +545,199 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         using var empty = ZipFile.OpenRead(Output("empty-tags"));
         Assert.Empty(await Rows(empty));
         Assert.DoesNotContain(empty.Entries, x => x.FullName.StartsWith("images/", StringComparison.Ordinal));
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "無絞込みZIPは同名・重複・隣接・空の全保存区間を元境界とタグ付きで保持し取得回を越えて本文へ対応する"
+    // oracle = { type = "contract", ref = "https://github.com/natumekazuki/GameLauncherWithGit/issues/30" }
+    // fault = "区間を名前で統合する、UTF-16境界をずらす、空区間を落とす、または重複区間で本文を増やす"
+    // observable = "実ZIPの区間ID・境界・タグ・交差spansとJSONL本文・イベント順"
+    // observation_boundary = "consumer"
+    // scope = "whole-game archive range definitions and source coordinates"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task WholeArchivePreservesAllRangesAndTheirExactTextIntersections()
+    {
+        var (game, session) = await StartAsync();
+        await Append(session, 1, "前😀ABC後");
+        await Append(session, 2, "削除");
+        var second = await _store.BeginCaptureSessionAsync(game);
+        await Append(second, 1, "次本文");
+        await Append(second, 2, "区間外");
+        var first = await _store.SaveCaptureRangeAsync(game, "同名", new(session, 1, 1), new(session, 1, 5), ["章", "人物"]);
+        var overlap = await _store.SaveCaptureRangeAsync(game, "同名", new(session, 1, 3), new(second, 1, 2), ["節"]);
+        var adjacent = await _store.SaveCaptureRangeAsync(game, "隣接", new(session, 1, 5), new(session, 1, 7));
+        var empty = await _store.SaveCaptureRangeAsync(game, "空", new(session, 2, 0), new(session, 2, 2), ["残す"]);
+        await _store.DeleteCaptureEventsAsync(game, [new(session, 2)]);
+        var (other, otherSession) = await StartAsync("other");
+        await Append(otherSession, 1);
+        await _store.SaveCaptureRangeAsync(other, "別ゲーム", new(otherSession, 1, 0), new(otherSession, 1, 2));
+        await _store.ExportScenarioArchiveAsync(game, new(), Output("ranges"));
+        using var zip = ZipFile.OpenRead(Output("ranges"));
+        var rows = await Rows(zip);
+        Assert.Equal(new[] { "前😀ABC後", "次本文", "区間外" }, rows.SelectMany(x => x.GetProperty("segments").EnumerateArray()).Select(x => x.GetProperty("text").GetString()));
+        using var document = JsonDocument.Parse(zip.GetEntry("manifest.json")!.Open());
+        var manifest = document.RootElement;
+        Assert.Equal(2, manifest.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("utf16_code_unit", manifest.GetProperty("textIndexUnit").GetString());
+        var ranges = manifest.GetProperty("ranges").EnumerateArray().ToArray();
+        Assert.Equal(new[] { first, overlap, adjacent, empty }.Select(x => x.ToString()), ranges.Select(x => x.GetProperty("id").GetString()));
+        Assert.Equal(new[] { "同名", "同名", "隣接", "空" }, ranges.Select(x => x.GetProperty("name").GetString()));
+        Assert.Equal(new[] { "人物", "章" }, ranges[0].GetProperty("tags").EnumerateArray().Select(x => x.GetString()));
+        Assert.Equal("節", Assert.Single(ranges[1].GetProperty("tags").EnumerateArray()).GetString());
+        Assert.Empty(ranges[2].GetProperty("tags").EnumerateArray());
+        Assert.Equal("残す", Assert.Single(ranges[3].GetProperty("tags").EnumerateArray()).GetString());
+        AssertRangePosition(ranges[0].GetProperty("start"), session, 1, 1);
+        AssertRangePosition(ranges[0].GetProperty("end"), session, 1, 5);
+        AssertRangePosition(ranges[1].GetProperty("start"), session, 1, 3);
+        AssertRangePosition(ranges[1].GetProperty("end"), second, 1, 2);
+        AssertRangePosition(ranges[2].GetProperty("start"), session, 1, 5);
+        AssertRangePosition(ranges[2].GetProperty("end"), session, 1, 7);
+        AssertRangePosition(ranges[3].GetProperty("start"), session, 2, 0);
+        AssertRangePosition(ranges[3].GetProperty("end"), session, 2, 2);
+        Assert.Equal(new[] { ($"{session}:1", 1, 4) }, RangeSpans(ranges[0]));
+        Assert.Equal(new[] { ($"{session}:1", 3, 4), ($"{second}:1", 0, 2) }, RangeSpans(ranges[1]));
+        Assert.Equal(new[] { ($"{session}:1", 5, 2) }, RangeSpans(ranges[2]));
+        Assert.Empty(RangeSpans(ranges[3]));
+        Assert.Equal(new[] { "😀AB", "ABC後次本", "C後", "" }, ranges.Select(x => ReadRangeText(x, rows)));
+    }
+
+    private static void AssertRangePosition(JsonElement position, long session, long sequence, int offset)
+    {
+        Assert.Equal(session.ToString(), position.GetProperty("sessionId").GetString());
+        Assert.Equal(sequence, position.GetProperty("receiveSequence").GetInt64());
+        Assert.Equal(offset, position.GetProperty("offsetUtf16").GetInt32());
+    }
+
+    private static (string Event, int Start, int Length)[] RangeSpans(JsonElement range) => range.GetProperty("spans").EnumerateArray()
+        .Select(x => (x.GetProperty("eventId").GetString()!, x.GetProperty("startUtf16").GetInt32(), x.GetProperty("lengthUtf16").GetInt32())).ToArray();
+
+    private static string ReadRangeText(JsonElement range, JsonElement[] rows) => string.Concat(RangeSpans(range).Select(span =>
+    {
+        var row = rows.Single(x => x.GetProperty("eventId").GetString() == span.Event);
+        var segment = Assert.Single(row.GetProperty("segments").EnumerateArray(), x => x.GetProperty("startUtf16").GetInt32() <= span.Start
+            && x.GetProperty("startUtf16").GetInt32() + x.GetProperty("lengthUtf16").GetInt32() >= span.Start + span.Length);
+        return segment.GetProperty("text").GetString()!.Substring(span.Start - segment.GetProperty("startUtf16").GetInt32(), span.Length);
+    }));
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "各出力条件で区間metadataは実収録segmentとの交差だけを示し除外区間・無一致区間・別分類や検索対象外の区間を漏らさない"
+    // oracle = { type = "contract", ref = "https://github.com/natumekazuki/GameLauncherWithGit/issues/30" }
+    // fault = "元区間全体を収録済と扱う、選択区間metadataを無条件で出す、または除外穴を結合して本文や区間名を漏らす"
+    // observable = "条件別実ZIPの本文・区間名・元境界・交差spansと空選択時のmetadata"
+    // observation_boundary = "consumer"
+    // scope = "filtered archive range privacy and exact slice mapping"
+    // lifecycle = "permanent"
+    // impact = "外部解析への除外本文・無関係な区間名とタグの持出しを防ぎ部分出力の誤解析を避ける"
+    // distinction = "既存TXT条件testや型checkはZIP内の区間一覧と本文の対応を検証できない"
+    // @end-test-value
+    [Theory]
+    [InlineData("tags")]
+    [InlineData("range")]
+    [InlineData("kind")]
+    [InlineData("label")]
+    [InlineData("unclassified")]
+    [InlineData("speaker")]
+    [InlineData("text")]
+    [InlineData("empty")]
+    public async Task FilteredArchiveMapsOnlyEmittedSlicesWithoutLeakingRanges(string filter)
+    {
+        var (game, session) = await StartAsync();
+        await Append(session, 1, "abSECRETcd");
+        await Append(session, 2, "hidden");
+        var second = await _store.BeginCaptureSessionAsync(game);
+        await Append(second, 1, "ef");
+        var label = (await _store.GetCaptureLabelsAsync(game)).Single(x => x.Kind == CaptureKind.Dialogue);
+        var item = (await _store.GetGameCaptureItemsAsync(game)).Single(x => x.Sequence == 1 && x.SessionId == session);
+        await _store.SetCaptureLabelsAsync(session, [item.Id], label.Id);
+        await _store.SetCaptureSpeakerAsync(session, item.Id, "花");
+        await _store.SaveCaptureRangeAsync(game, "全域", new(session, 1, 0), new(second, 1, 2), ["keep"]);
+        await _store.SaveCaptureRangeAsync(game, "左", new(session, 1, 0), new(session, 1, 2));
+        await _store.SaveCaptureRangeAsync(game, "秘密区間", new(session, 1, 2), new(session, 1, 8), ["X", "秘密タグ"]);
+        await _store.SaveCaptureRangeAsync(game, "右", new(session, 1, 8), new(session, 1, 10));
+        await _store.SaveCaptureRangeAsync(game, "非収録", new(session, 2, 0), new(session, 2, 6), ["X"]);
+        await _store.SaveCaptureRangeAsync(game, "次回", new(second, 1, 0), new(second, 1, 2));
+        var selected = await _store.SaveCaptureRangeAsync(game, "選択", new(session, 1, 1), new(session, 1, 9), ["selected"]);
+        var selection = new ScenarioArchiveSelection(IncludeTags: ["keep"], ExcludeTags: ["X"]);
+        selection = filter switch
+        {
+            "range" => selection with { RangeId = selected },
+            "kind" => selection with { Kind = CaptureKind.Dialogue },
+            "label" => selection with { LabelId = label.Id },
+            "unclassified" => selection with { UnclassifiedOnly = true },
+            "speaker" => selection with { SpeakerSearch = "花" },
+            "text" => selection with { TextSearch = "cd" },
+            "empty" => selection with { RangeId = selected, TextSearch = "SECRET" },
+            _ => selection
+        };
+        await _store.ExportScenarioArchiveAsync(game, selection, Output(filter));
+        using var zip = ZipFile.OpenRead(Output(filter));
+        var rows = await Rows(zip);
+        using var document = JsonDocument.Parse(zip.GetEntry("manifest.json")!.Open());
+        var manifest = document.RootElement;
+        var ranges = manifest.GetProperty("ranges").EnumerateArray().ToArray();
+        var expectedNames = filter switch
+        {
+            "tags" => new[] { "全域", "左", "選択", "右", "次回" },
+            "range" or "kind" or "label" or "speaker" => ["全域", "左", "選択", "右"],
+            "unclassified" => ["全域", "次回"],
+            "text" => ["全域", "選択", "右"],
+            _ => []
+        };
+        Assert.Equal(expectedNames, ranges.Select(x => x.GetProperty("name").GetString()));
+        var expectedText = filter switch { "tags" => "abcdef", "range" => "bc", "unclassified" => "ef", "text" => "cd", "empty" => "", _ => "abcd" };
+        Assert.Equal(expectedText, string.Concat(rows.SelectMany(x => x.GetProperty("segments").EnumerateArray()).Select(x => x.GetProperty("text").GetString())));
+        Assert.DoesNotContain(JsonStrings(manifest), x => x.Contains("秘密区間", StringComparison.Ordinal));
+        Assert.DoesNotContain(JsonStrings(manifest), x => x.Contains("秘密タグ", StringComparison.Ordinal));
+        Assert.DoesNotContain(rows.SelectMany(JsonStrings), x => x.Contains("SECRET", StringComparison.Ordinal));
+        var selectionInfo = manifest.GetProperty("selection");
+        Assert.False(selectionInfo.TryGetProperty("range", out _));
+        Assert.Equal(filter is "range" or "empty" ? selected.ToString() : null, selectionInfo.GetProperty("rangeId").GetString());
+        if (filter == "empty") return;
+        var broad = ranges.Single(x => x.GetProperty("name").GetString() == "全域");
+        AssertRangePosition(broad.GetProperty("start"), session, 1, 0);
+        AssertRangePosition(broad.GetProperty("end"), second, 1, 2);
+        Assert.Equal(expectedText, ReadRangeText(broad, rows));
+        var expectedSpans = filter switch
+        {
+            "tags" => new[] { ($"{session}:1", 0, 2), ($"{session}:1", 8, 2), ($"{second}:1", 0, 2) },
+            "range" => [($"{session}:1", 1, 1), ($"{session}:1", 8, 1)],
+            "unclassified" => [($"{second}:1", 0, 2)],
+            "text" => [($"{session}:1", 8, 2)],
+            _ => [($"{session}:1", 0, 2), ($"{session}:1", 8, 2)]
+        };
+        Assert.Equal(expectedSpans, RangeSpans(broad));
+        foreach (var range in ranges)
+        {
+            var name = range.GetProperty("name").GetString();
+            var expected = name switch { "全域" => expectedText, "左" => filter == "range" ? "b" : "ab", "右" => filter == "range" ? "c" : "cd", "選択" => filter == "text" ? "c" : "bc", _ => "ef" };
+            Assert.Equal(expected, ReadRangeText(range, rows));
+        }
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "保存区間がなくてもZIPは全本文を出し区間一覧は空にする"
+    // oracle = { type = "contract", ref = "https://github.com/natumekazuki/GameLauncherWithGit/issues/30" }
+    // fault = "区間への割当を必須にして本文を落とすか架空の区間を作る"
+    // observable = "実ZIPの区間一覧とJSONL本文"
+    // observation_boundary = "consumer"
+    // scope = "range-free whole-game archives"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task ArchiveWithoutRangesKeepsUnassignedText()
+    {
+        var (game, session) = await StartAsync();
+        await Append(session, 1, "未割当本文");
+        await _store.ExportScenarioArchiveAsync(game, new(TextSearch: " ", IncludeTags: []), Output("no-ranges"));
+        using var zip = ZipFile.OpenRead(Output("no-ranges"));
+        using var manifest = JsonDocument.Parse(zip.GetEntry("manifest.json")!.Open());
+        Assert.Empty(manifest.RootElement.GetProperty("ranges").EnumerateArray());
+        Assert.Equal("未割当本文", Assert.Single(Assert.Single(await Rows(zip)).GetProperty("segments").EnumerateArray()).GetProperty("text").GetString());
     }
 
     public void Dispose()

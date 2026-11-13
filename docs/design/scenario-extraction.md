@@ -168,9 +168,19 @@ TXT出力は表示ページの200件制限ではなく、選択したゲーム�
 
 履歴の本文行からその原文に紐づく画像を開く。表示ページの原文key集合の添付件数を1SQLで取得し、画像ボタンに枚数を示す。0枚と取得失敗を区別し、件数表示のために画像本体を読まない。再分割された同じ原文の行にも同じ添付件数を示す。ZIP出力はTXTと同じ適用済みゲーム・区間・分類・名前・本文AND条件の全件を対象とし、表示ページ上限を適用しない。本文・分類・話者・区間・画像関連を同一DB snapshotで確定し、出力中は対象画像の削除と競合させない。ZIPは新規ファイルへ完成してから公開し、既存出力を上書きしない。欠落画像やコピー失敗を成功扱いしない。
 
-- `manifest.json`: format=`GameLauncherWithGit.scenario`、schemaVersion=1、出力時刻、ゲーム、条件snapshot、UTF-16 code unit指定、hash方式、画像IDと相対path・寸法・hash。
+- `manifest.json`: format=`GameLauncherWithGit.scenario`、schemaVersion=2、出力時刻、ゲーム、条件snapshot、区間一覧`ranges`、UTF-16 code unit指定、hash方式、画像IDと相対path・寸法・hash。`identifierScope=archive`のIDはそのZIP内の参照に使い、別ZIPやDBとの永続照合には使わない。`selection.rangeId`は選択した区間のID（ゲーム全体はnull）であり、区間定義の複製は持たない。選択しても一致本文がなければ`ranges`は空になり得る。
 - `texts.jsonl`: 原文イベントごと1行。取得回・受信連番・原文内開始位置順で、選択された現在のsegmentの開始・長さ・本文・有効分類/ラベル/話者と、画像ID・撮影時刻を記載する。除外部分を含む`rawText`は出力しない。同文別イベントを統合しない。
 - `images/<id>.png`: 選択本文が参照する画像だけを重複なく収録する。IDは出力内識別子、pathは相対pathとし、端末上の絶対pathは載せない。部分区間でも画像の関連範囲は`capture_event`、方法は`latest_received_body`と明示し、後続本文へ暗黙に持ち越さない。
+
+`ranges`の各要素は文字列`id`、`name`、`start`、`end`、文字列配列`tags`、交差範囲配列`spans`を持つ。保存済み区間の開始位置順（同位置はID順）で、同名・重複・隣接区間は独立したIDのまま保持する。区間を追加してもJSONL本文を複製せず、区間外の本文も現在の出力条件に従って出す。
+
+`start`と`end`は保存された元境界で、`{ sessionId: string, receiveSequence: number, offsetUtf16: number }`。位置は取得回IDの数値順、受信連番順、原文内UTF-16 offset順に比較し、開始を含み終了を含まない。取得回は時刻順やJSON文字列の辞書順で比較しない。`sessionId`はJSONLの同名fieldと一致し、`eventId`は`sessionId:receiveSequence`。開始/終了イベントが削除済み・選択外の場合や、取得回先頭の`receiveSequence=0, offsetUtf16=0`を境界とする場合もある。元境界は本文の収録を保証せず、出力対象に合わせて移動しない。
+
+`spans`は区間と実際に出力された各segmentとの交差で、`{ eventId: string, startUtf16: number, lengthUtf16: number }`をJSONLと同じ位置順に持つ。segmentと同様に原文内の半開区間`[startUtf16, startUtf16 + lengthUtf16)`を表す。各spanは対応eventの一つの出力segment内に収まり、segment本文内の相対位置は`span.startUtf16 - segment.startUtf16`で得る。区間がsegmentの途中で始まる場合も本文を再分割しない。分類分割・除外・検索・削除による穴をspan間へ補完したり、両端間の全文が収録済みと解釈したりしない。タグや分類・有効話者はそれぞれ区間とsegmentの情報であり、一方を他方へ自動付与しない。
+
+区間・タグ・分類・名前・本文の絞込みがないゲーム全体出力は、本文削除で空になったものも含めて全保存区間を収録し、その場合の`spans`は空配列になる。検索の空白だけの値と空のタグ配列は絞込みとしない。それ以外は、すべての出力条件適用後のsegmentと交わる区間だけを収録する。選択区間も例外にせず、無一致時に名前・境界・タグを別経路から出さない。交差する区間の元境界・名前・全タグは出力するが、無関係な区間や除外範囲内だけの区間metadataは出さない。出力条件として指定された検索語・包含/除外タグ名と`rangeId`は条件snapshotに保持する。
+
+schema 2では区間定義を`ranges`へ明示し、選択区間の表現を`selection.rangeId`へ統一する。既存ZIPを上書き・変換せず、新しく出すZIPの契約として適用する。ZIPを読む側は`schemaVersion`を確認する。アプリにはZIP再取込・旧schema読出し・互換出力の経路を設けない。
 
 ## ネイティブbuild・安全境界
 

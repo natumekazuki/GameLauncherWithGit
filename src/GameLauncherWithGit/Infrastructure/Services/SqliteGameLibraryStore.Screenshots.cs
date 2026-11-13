@@ -203,7 +203,10 @@ public sealed partial class SqliteGameLibraryStore
         var title = await gameQuery.ExecuteScalarAsync() as string ?? throw new ArgumentException("ゲームの履歴が見つかりません。");
         var ranges = await ReadCaptureRangesAsync(connection, transaction, captureGameId);
         var items = await ReadCaptureExportItemsAsync(connection, transaction, captureGameId, selection, ranges);
-        var range = ranges.SingleOrDefault(x => x.Id == selection.RangeId);
+        var includeAllRanges = selection.RangeId is null && selection.LabelId is null && !selection.UnclassifiedOnly
+            && selection.Kind is null && string.IsNullOrWhiteSpace(selection.TextSearch) && string.IsNullOrWhiteSpace(selection.SpeakerSearch)
+            && NormalizeCaptureTags(selection.IncludeTags).Length == 0 && NormalizeCaptureTags(selection.ExcludeTags).Length == 0;
+        var archiveRanges = CreateArchiveRanges(ranges, items, includeAllRanges);
         var images = new Dictionary<string, ScenarioScreenshot>();
         var rows = new List<object>();
         foreach (var group in items.GroupBy(x => new CaptureEventKey(x.SessionId, x.Sequence)))
@@ -227,11 +230,11 @@ public sealed partial class SqliteGameLibraryStore
                 using (var zip = new ZipArchive(file, ZipArchiveMode.Create, leaveOpen: true))
                 {
                     await using (var manifest = zip.CreateEntry("manifest.json").Open())
-                        await JsonSerializer.SerializeAsync(manifest, new { format = "GameLauncherWithGit.scenario", schemaVersion = 1, exportedAt = DateTimeOffset.UtcNow,
+                        await JsonSerializer.SerializeAsync(manifest, new { format = "GameLauncherWithGit.scenario", schemaVersion = 2, exportedAt = DateTimeOffset.UtcNow,
                             identifierScope = "archive", game = new { captureGameId = captureGameId.ToString(), title },
-                            selection = new { scope = range is null ? "game" : "range", range, selection.LabelId, selection.UnclassifiedOnly, kind = selection.Kind?.ToString(), selection.TextSearch, selection.SpeakerSearch,
+                            selection = new { scope = selection.RangeId is null ? "game" : "range", rangeId = selection.RangeId?.ToString(), selection.LabelId, selection.UnclassifiedOnly, kind = selection.Kind?.ToString(), selection.TextSearch, selection.SpeakerSearch,
                                 includeTags = NormalizeCaptureTags(selection.IncludeTags), excludeTags = NormalizeCaptureTags(selection.ExcludeTags) },
-                            textFile = "texts.jsonl", textIndexUnit = "utf16_code_unit", imageHashAlgorithm = ImageHashAlgorithm,
+                            ranges = archiveRanges, textFile = "texts.jsonl", textIndexUnit = "utf16_code_unit", imageHashAlgorithm = ImageHashAlgorithm,
                             images = images.Values.Select(x => new { id = x.ImageId, path = $"images/{x.ImageId}.png", mediaType = "image/png", width = x.Width, height = x.Height, pixelHash = x.PixelHash }) }, JsonOptions);
                     await using (var writer = new StreamWriter(zip.CreateEntry("texts.jsonl").Open(), new UTF8Encoding(false)))
                         foreach (var row in rows) await writer.WriteLineAsync(JsonSerializer.Serialize(row, JsonOptions));
@@ -246,5 +249,25 @@ public sealed partial class SqliteGameLibraryStore
             File.Move(temporary, outputPath);
         }
         finally { if (temporaryCreated) File.Delete(temporary); }
+    }
+
+    private static object[] CreateArchiveRanges(IReadOnlyList<CaptureRange> ranges, IReadOnlyList<CaptureTextItem> items, bool includeAll)
+    {
+        static object Position(CapturePosition position) => new
+        {
+            sessionId = position.SessionId.ToString(), receiveSequence = position.Sequence, offsetUtf16 = position.Offset
+        };
+        var result = new List<object>();
+        foreach (var range in ranges)
+        {
+            // Intersect with the final slices, not their enclosing bounds: exclusions and searches can leave holes.
+            var spans = items.Select(item => (Item: item, Bounds: ClipCaptureInterval(item, range)))
+                .Where(x => x.Bounds.From < x.Bounds.To)
+                .Select(x => new { eventId = $"{x.Item.SessionId}:{x.Item.Sequence}", startUtf16 = x.Bounds.From, lengthUtf16 = x.Bounds.To - x.Bounds.From })
+                .ToArray();
+            if (includeAll || spans.Length > 0)
+                result.Add(new { id = range.Id.ToString(), name = range.Name, start = Position(range.Start), end = Position(range.End), tags = range.Tags, spans });
+        }
+        return result.ToArray();
     }
 }
