@@ -29,6 +29,13 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
     }
     private Task<bool> Append(long session, long sequence, string text = "本文", CaptureRole role = CaptureRole.Body) =>
         _store.AppendCaptureAsync(session, new(sequence, Time.AddSeconds(-sequence), Source, text, role), new());
+    private async Task AppendVisit(long session, IEnumerable<string> texts)
+    {
+        long sequence = 0;
+        foreach (var text in texts)
+            await _store.AppendCaptureAsync(session, new(++sequence, Time.AddSeconds(-sequence), Source, text, CaptureRole.Body),
+                new() { OutsideIsNarration = true });
+    }
     private string Output(string name) => Path.Combine(_directory, name + ".zip");
     private static async Task<JsonElement[]> Rows(ZipArchive zip)
     {
@@ -74,6 +81,52 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         Assert.Equal(2, Directory.GetFiles(Path.GetDirectoryName(first.FilePath)!, "*.png").Length);
         await _store.DeleteAsync("game");
         Assert.Equal(first.ImageId, Assert.Single(await _store.GetEventScreenshotsAsync(game, new(session, 2))).ImageId);
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "指定イベントごとの画像IDと撮影時刻をPNGなしで返し添付なしを空として区別する"
+    // oracle = { type = "contract", ref = "https://github.com/natumekazuki/GameLauncherWithGit/issues/32" }
+    // fault = "画像metadata読取がPNGへ依存する、イベント間の添付関係を混ぜる、または未取得・不正参照を0件として返す"
+    // observable = "要求順のevent keyと各画像ID・時刻、PNGを除いた後の結果、不正参照時の例外"
+    // observation_boundary = "public-boundary"
+    // scope = "event-scoped screenshot metadata reader"
+    // lifecycle = "permanent"
+    // impact = "本文・画像本体を開かず撮影位置と画像参照を特定できる"
+    // distinction = "ZIP testは出力metadataを確認し、このtestはstorage readerがPNG非依存であることを確認する"
+    // @end-test-value
+    [Fact]
+    public async Task ReadsScreenshotMetadataPerEventWithoutOpeningPng()
+    {
+        var (game, session) = await StartAsync();
+        var (_, otherSession) = await StartAsync("other");
+        await Append(session, 1, "一枚と二枚");
+        await Append(session, 2, "添付なし");
+        await Append(session, 3, "共有画像の別出現");
+        await Append(otherSession, 1, "別ゲーム");
+
+        var shared = await _store.SaveScreenshotAsync(new(game, new(session, 1)), Image(), Time);
+        var additional = await _store.SaveScreenshotAsync(new(game, new(session, 1)), Image('b'), Time.AddMinutes(1));
+        await _store.SaveScreenshotAsync(new(game, new(session, 3)), Image(), Time.AddMinutes(2));
+
+        var requested = new[] { new CaptureEventKey(session, 2), new(session, 1), new(session, 3), new(session, 1) };
+        var metadata = await _store.GetEventScreenshotMetadataAsync(game, requested);
+
+        Assert.Equal(new[] { requested[0], requested[1], requested[2] }, metadata.Select(x => x.Event));
+        Assert.Empty(metadata[0].Images);
+        Assert.Equal(new[] { shared.ImageId, additional.ImageId }, metadata[1].Images.Select(x => x.ImageId));
+        Assert.Equal(new[] { Time, Time.AddMinutes(1) }, metadata[1].Images.Select(x => x.CapturedAt));
+        Assert.Equal(shared.ImageId, Assert.Single(metadata[2].Images).ImageId);
+
+        File.Delete(shared.FilePath);
+        var withoutPng = await _store.GetEventScreenshotMetadataAsync(game, [new(session, 1), new(session, 3)]);
+        Assert.Equal(new[] { shared.ImageId, additional.ImageId }, withoutPng[0].Images.Select(x => x.ImageId));
+        Assert.Equal(shared.ImageId, Assert.Single(withoutPng[1].Images).ImageId);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            _store.GetEventScreenshotMetadataAsync(game, [new(session, 99)]));
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            _store.GetEventScreenshotMetadataAsync(game, [new(otherSession, 1)]));
     }
 
     // @test-value v2
@@ -738,6 +791,253 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         using var manifest = JsonDocument.Parse(zip.GetEntry("manifest.json")!.Open());
         Assert.Empty(manifest.RootElement.GetProperty("ranges").EnumerateArray());
         Assert.Equal("未割当本文", Assert.Single(Assert.Single(await Rows(zip)).GetProperty("segments").EnumerateArray()).GetProperty("text").GetString());
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "schema 2 manifestは選択イベントごとにraw位置と一意な画像ID対応を一度だけ示し本文のimagesと一致する"
+    // oracle = { type = "contract", ref = "https://github.com/natumekazuki/GameLauncherWithGit/issues/32" }
+    // fault = "未タグの部分・重複区間でevent単位の添付を欠落・複製する、同一画像の別出現を統合する、または範囲外画像を漏らす"
+    // observable = "実ZIPのscreenshotOccurrences、texts.jsonl画像ID、ranges.spans、manifest images一覧とPNG entry集合"
+    // observation_boundary = "consumer"
+    // scope = "archive screenshot occurrence metadata and filtered image references"
+    // lifecycle = "permanent"
+    // impact = "分析側が本文JSONLやPNGを開かず選択イベントの画像位置・件数を引ける"
+    // distinction = "既存JSONLのみでは本文行の読取が必要で、既存range testは画像対応を検証しない"
+    // @end-test-value
+    [Fact]
+    public async Task ArchiveManifestMapsSelectedEventPositionsToImagesAndZeroCounts()
+    {
+        var (game, session) = await StartAsync();
+        await Append(session, 1, "abcdef");
+        await Append(session, 2, "gh");
+        await Append(session, 3, "ij");
+        await Append(session, 4, "範囲外");
+        await _store.SplitCaptureEventAsync(session, 1, [2, 4]);
+
+        var shared = await _store.SaveScreenshotAsync(new(game, new(session, 1)), Image(), Time);
+        var firstOnly = await _store.SaveScreenshotAsync(new(game, new(session, 1)), Image('b'), Time.AddMinutes(1));
+        await _store.SaveScreenshotAsync(new(game, new(session, 3)), Image(), Time.AddMinutes(2));
+        var outside = await _store.SaveScreenshotAsync(new(game, new(session, 4)), Image('c'), Time.AddMinutes(3));
+        var selectedRange = await _store.SaveCaptureRangeAsync(game, "未タグ選択",
+            new(session, 1, 1), new(session, 3, 1));
+        await _store.SaveCaptureRangeAsync(game, "重なり",
+            new(session, 1, 2), new(session, 2, 1));
+
+        await _store.ExportScenarioArchiveAsync(game, new(RangeId: selectedRange), Output("screenshot-occurrences"));
+        using var zip = ZipFile.OpenRead(Output("screenshot-occurrences"));
+        var rows = await Rows(zip);
+        using var document = JsonDocument.Parse(zip.GetEntry("manifest.json")!.Open());
+        var manifest = document.RootElement;
+        Assert.Equal(2, manifest.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(new[] { "b", "cd", "ef", "gh", "i" }, rows.SelectMany(x => x.GetProperty("segments").EnumerateArray())
+            .Select(x => x.GetProperty("text").GetString()));
+
+        var occurrences = manifest.GetProperty("screenshotOccurrences").EnumerateArray().ToArray();
+        Assert.Equal(new[] { $"{session}:1", $"{session}:2", $"{session}:3" },
+            occurrences.Select(x => x.GetProperty("eventId").GetString()));
+        Assert.Equal(new long[] { 1, 2, 3 }, occurrences.Select(x => x.GetProperty("receiveSequence").GetInt64()));
+        Assert.All(occurrences, x => Assert.Equal(session.ToString(), x.GetProperty("sessionId").GetString()));
+        Assert.Equal(new[] { shared.ImageId, firstOnly.ImageId }, occurrences[0].GetProperty("imageIds").EnumerateArray()
+            .Select(x => x.GetString()));
+        Assert.Empty(occurrences[1].GetProperty("imageIds").EnumerateArray());
+        Assert.Equal(shared.ImageId, Assert.Single(occurrences[2].GetProperty("imageIds").EnumerateArray()).GetString());
+        Assert.Equal(new[] { $"{session}:1", $"{session}:2", $"{session}:3" },
+            occurrences.Select(x => x.GetProperty("eventId").GetString()).Distinct());
+
+        foreach (var occurrence in occurrences)
+        {
+            var row = Assert.Single(rows, x => x.GetProperty("eventId").GetString() == occurrence.GetProperty("eventId").GetString());
+            Assert.Equal(row.GetProperty("images").EnumerateArray().Select(x => x.GetProperty("imageId").GetString()),
+                occurrence.GetProperty("imageIds").EnumerateArray().Select(x => x.GetString()));
+        }
+
+        var manifestImageIds = manifest.GetProperty("images").EnumerateArray().Select(x => x.GetProperty("id").GetString()).ToArray();
+        Assert.Equal(new[] { shared.ImageId, firstOnly.ImageId }.Order(), manifestImageIds.Order());
+        Assert.Equal(2, occurrences.Count(x => x.GetProperty("imageIds").EnumerateArray()
+            .Any(id => id.GetString() == shared.ImageId)));
+        Assert.DoesNotContain(occurrences.SelectMany(x => x.GetProperty("imageIds").EnumerateArray()),
+            x => x.GetString() == outside.ImageId);
+        Assert.Null(zip.GetEntry($"images/{outside.ImageId}.png"));
+        Assert.NotNull(zip.GetEntry($"images/{shared.ImageId}.png"));
+        Assert.Equal(1, zip.Entries.Count(x => x.FullName == $"images/{shared.ImageId}.png"));
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "ZIPのmaterial snapshotは3周の共通本文・一言分岐・再合流・周回別画像を保ち選択範囲と同じ版を示す"
+    // oracle = { type = "contract", ref = "https://github.com/natumekazuki/GameLauncherWithGit/issues/31" }
+    // fault = "共通本文の出現を消す、分岐を共通化する、画像を別周へ混ぜる、選択外参照を出す、またはmanifestとmaterialの版がずれる"
+    // observable = "material.jsonのcontents/occurrences/matches/version、manifestのmaterial参照、JSONLとの出現・画像対応、tag/UTF-16 partial選択"
+    // observation_boundary = "consumer"
+    // scope = "schema 2 ZIP common scenario material projection"
+    // lifecycle = "permanent"
+    // impact = "分析側が共通本文を一度だけ読み、選択中の各周・分岐・画像をraw位置から復元できる"
+    // distinction = "reader testはsnapshot APIを検証し、このtestはZIP同梱projection・manifest連携・従来本文出力との一致を検証する"
+    // @end-test-value
+    [Fact]
+    public async Task ArchiveMaterialPreservesVisitsBranchRejoinImageAndScopedSelections()
+    {
+        var (game, first) = await StartAsync();
+        var common = new[] { "冒頭😀の短文", "長い会話のアンカーになる文章です", "続きの短文", "うん", "共通の後半へ戻る長い文章です", "次の場面", "結びの言葉" };
+        var variant = common.Select(x => x == "うん" ? "いや" : x).ToArray();
+        await AppendVisit(first, common);
+        var second = await _store.BeginCaptureSessionAsync(game);
+        await AppendVisit(second, variant);
+        var third = await _store.BeginCaptureSessionAsync(game);
+        await AppendVisit(third, common);
+
+        var beforeImage = Output("material-before-image");
+        await _store.ExportScenarioArchiveAsync(game, new(), beforeImage);
+        using var beforeZip = ZipFile.OpenRead(beforeImage);
+        using var beforeManifestDocument = JsonDocument.Parse(beforeZip.GetEntry("manifest.json")!.Open());
+        var beforeVersion = beforeManifestDocument.RootElement.GetProperty("materialVersion");
+
+        var image = await _store.SaveScreenshotAsync(new(game, new(second, 4)), Image(), Time);
+        var fullOutput = Output("material-all-visits");
+        await _store.ExportScenarioArchiveAsync(game, new(), fullOutput);
+        using var fullZip = ZipFile.OpenRead(fullOutput);
+        using var manifestDocument = JsonDocument.Parse(fullZip.GetEntry("manifest.json")!.Open());
+        using var materialDocument = JsonDocument.Parse(fullZip.GetEntry("material.json")!.Open());
+        var manifest = manifestDocument.RootElement;
+        var material = materialDocument.RootElement;
+
+        Assert.Equal(2, manifest.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("material.json", manifest.GetProperty("materialFile").GetString());
+        Assert.True(manifest.GetProperty("matchingComplete").GetBoolean());
+        Assert.True(material.GetProperty("matchingComplete").GetBoolean());
+        Assert.Equal(manifest.GetProperty("materialVersion").GetProperty("captureGameId").GetInt64(),
+            material.GetProperty("version").GetProperty("captureGameId").GetInt64());
+        Assert.Equal(manifest.GetProperty("materialVersion").GetProperty("revision").GetInt64(),
+            material.GetProperty("version").GetProperty("revision").GetInt64());
+        Assert.Equal(manifest.GetProperty("materialVersion").GetProperty("matchingRevision").GetInt64(),
+            material.GetProperty("version").GetProperty("matchingRevision").GetInt64());
+        Assert.True(manifest.GetProperty("materialVersion").GetProperty("revision").GetInt64() >
+            beforeVersion.GetProperty("revision").GetInt64());
+
+        var contents = material.GetProperty("contents").EnumerateArray().ToArray();
+        var occurrences = material.GetProperty("occurrences").EnumerateArray().ToArray();
+        var matches = material.GetProperty("matches").EnumerateArray().ToArray();
+        Assert.Equal(8, contents.Length);
+        Assert.Equal(21, occurrences.Length);
+        Assert.Equal(7, matches.Length);
+        Assert.Equal(6, matches.Count(match => match.GetProperty("items").GetArrayLength() == 2));
+        Assert.Equal(1, matches.Count(match => match.GetProperty("items").GetArrayLength() == 1));
+        Assert.Contains(contents, content => content.GetProperty("text").GetString() == "うん");
+        var branch = Assert.Single(contents, content => content.GetProperty("text").GetString() == "いや");
+        Assert.DoesNotContain(matches, match => match.GetProperty("id").GetString() == branch.GetProperty("id").GetString());
+
+        foreach (var (session, expected) in new[] { (first, common), (second, variant), (third, common) })
+        {
+            var actual = occurrences.Where(occurrence => occurrence.GetProperty("source").GetProperty("sessionId").GetInt64() == session)
+                .Select(occurrence => contents.Single(content => content.GetProperty("id").GetString() == occurrence.GetProperty("contentId").GetString())
+                    .GetProperty("text").GetString()).ToArray();
+            Assert.Equal(expected, actual);
+        }
+
+        var pictured = Assert.Single(occurrences, occurrence => occurrence.GetProperty("images").GetArrayLength() > 0);
+        Assert.Equal(second, pictured.GetProperty("source").GetProperty("sessionId").GetInt64());
+        Assert.Equal(4, pictured.GetProperty("source").GetProperty("receiveSequence").GetInt64());
+        Assert.Equal(image.ImageId, Assert.Single(pictured.GetProperty("images").EnumerateArray()).GetProperty("imageId").GetString());
+        Assert.Equal(new[] { image.ImageId }, manifest.GetProperty("images").EnumerateArray().Select(x => x.GetProperty("id").GetString()));
+
+        var rows = await Rows(fullZip);
+        Assert.Equal(occurrences.Length, rows.Length);
+        for (var index = 0; index < rows.Length; index++)
+        {
+            var occurrence = occurrences[index];
+            var row = rows[index];
+            Assert.Equal(occurrence.GetProperty("source").GetProperty("sessionId").GetInt64().ToString(), row.GetProperty("sessionId").GetString());
+            Assert.Equal(occurrence.GetProperty("source").GetProperty("receiveSequence").GetInt64(), row.GetProperty("receiveSequence").GetInt64());
+            Assert.Equal(occurrence.GetProperty("images").EnumerateArray().Select(x => x.GetProperty("imageId").GetString()),
+                row.GetProperty("images").EnumerateArray().Select(x => x.GetProperty("imageId").GetString()));
+        }
+
+        await _store.SaveCaptureRangeAsync(game, "二周目", new(second, 1, 0), new(second, 7, variant[6].Length), ["second"]);
+        await _store.ExportScenarioArchiveAsync(game, new(IncludeTags: ["second"]), Output("material-second-visit"));
+        using (var taggedZip = ZipFile.OpenRead(Output("material-second-visit")))
+        using (var taggedMaterial = JsonDocument.Parse(taggedZip.GetEntry("material.json")!.Open()))
+        {
+            var selected = taggedMaterial.RootElement;
+            Assert.Equal(7, selected.GetProperty("occurrences").GetArrayLength());
+            Assert.All(selected.GetProperty("occurrences").EnumerateArray(), occurrence =>
+                Assert.Equal(second, occurrence.GetProperty("source").GetProperty("sessionId").GetInt64()));
+            Assert.Equal(variant, selected.GetProperty("occurrences").EnumerateArray().Select(occurrence =>
+                selected.GetProperty("contents").EnumerateArray().Single(content => content.GetProperty("id").GetString() == occurrence.GetProperty("contentId").GetString())
+                    .GetProperty("text").GetString()));
+        }
+
+        await _store.SaveCaptureRangeAsync(game, "UTF-16 partial", new(second, 1, 2), new(second, 1, 4), ["partial"]);
+        await _store.ExportScenarioArchiveAsync(game, new(IncludeTags: ["partial"]), Output("material-partial"));
+        using var partialZip = ZipFile.OpenRead(Output("material-partial"));
+        using var partialMaterial = JsonDocument.Parse(partialZip.GetEntry("material.json")!.Open());
+        var partial = partialMaterial.RootElement;
+        var partialOccurrence = Assert.Single(partial.GetProperty("occurrences").EnumerateArray());
+        Assert.Equal(second, partialOccurrence.GetProperty("source").GetProperty("sessionId").GetInt64());
+        Assert.Equal(1, partialOccurrence.GetProperty("source").GetProperty("receiveSequence").GetInt64());
+        Assert.Equal(2, partialOccurrence.GetProperty("source").GetProperty("startUtf16").GetInt32());
+        Assert.Equal(2, partialOccurrence.GetProperty("source").GetProperty("lengthUtf16").GetInt32());
+        Assert.Equal("😀", partial.GetProperty("contents").EnumerateArray().Single().GetProperty("text").GetString());
+        Assert.Empty(partial.GetProperty("occurrences").EnumerateArray().SelectMany(x => x.GetProperty("images").EnumerateArray()));
+        Assert.DoesNotContain(JsonStrings(partial), text => common.Contains(text) || variant.Contains(text));
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "捕捉書込中のZIPはMatchingComplete=falseを示し画像関係変更後の同snapshot版をmanifestとmaterialへ一致させる"
+    // oracle = { type = "contract", ref = "https://github.com/natumekazuki/GameLauncherWithGit/issues/31" }
+    // fault = "未処理一致状態を完了扱いする、古い版を参照する、またはmanifestとmaterialで異なる版を示す"
+    // observable = "実ZIPのmatchingComplete・version、未処理occurrences/contents、画像関係変更前後のRevision"
+    // observation_boundary = "consumer"
+    // scope = "deferred scenario matching and versioned ZIP export"
+    // lifecycle = "permanent"
+    // impact = "保存優先中の未処理資料を古い一致と誤認せず、再利用可能な同一snapshot版を示す"
+    // distinction = "reader batch testは処理進行を検証し、このtestはZIP exportの保存優先状態と版参照を検証する"
+    // @end-test-value
+    [Fact]
+    public async Task ArchiveMarksDeferredMatchingAndTracksVersionChanges()
+    {
+        var (game, session) = await StartAsync();
+        await Append(session, 1, "未照合本文");
+        var pendingWrites = typeof(SqliteGameLibraryStore).GetField("_captureWritesPending",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(pendingWrites);
+        pendingWrites.SetValue(_store, 1);
+        try
+        {
+            var beforeOutput = Output("material-pending-before-image");
+            await _store.ExportScenarioArchiveAsync(game, new(), beforeOutput);
+            using var beforeZip = ZipFile.OpenRead(beforeOutput);
+            using var beforeManifestDocument = JsonDocument.Parse(beforeZip.GetEntry("manifest.json")!.Open());
+            using var beforeMaterialDocument = JsonDocument.Parse(beforeZip.GetEntry("material.json")!.Open());
+            var beforeManifest = beforeManifestDocument.RootElement;
+            var beforeMaterial = beforeMaterialDocument.RootElement;
+            Assert.False(beforeManifest.GetProperty("matchingComplete").GetBoolean());
+            Assert.False(beforeMaterial.GetProperty("matchingComplete").GetBoolean());
+            Assert.Equal(1, beforeMaterial.GetProperty("contents").GetArrayLength());
+            Assert.Empty(beforeMaterial.GetProperty("matches").EnumerateArray());
+            var beforeRevision = beforeMaterial.GetProperty("version").GetProperty("revision").GetInt64();
+
+            var image = await _store.SaveScreenshotAsync(new(game, new(session, 1)), Image(), Time);
+            var afterOutput = Output("material-pending-after-image");
+            await _store.ExportScenarioArchiveAsync(game, new(), afterOutput);
+            using var afterZip = ZipFile.OpenRead(afterOutput);
+            using var afterManifestDocument = JsonDocument.Parse(afterZip.GetEntry("manifest.json")!.Open());
+            using var afterMaterialDocument = JsonDocument.Parse(afterZip.GetEntry("material.json")!.Open());
+            var afterManifest = afterManifestDocument.RootElement;
+            var afterMaterial = afterMaterialDocument.RootElement;
+            Assert.False(afterManifest.GetProperty("matchingComplete").GetBoolean());
+            Assert.False(afterMaterial.GetProperty("matchingComplete").GetBoolean());
+            Assert.True(afterMaterial.GetProperty("version").GetProperty("revision").GetInt64() > beforeRevision);
+            Assert.Equal(afterManifest.GetProperty("materialVersion").GetProperty("revision").GetInt64(),
+                afterMaterial.GetProperty("version").GetProperty("revision").GetInt64());
+            Assert.Equal(image.ImageId, Assert.Single(Assert.Single(afterMaterial.GetProperty("occurrences").EnumerateArray())
+                .GetProperty("images").EnumerateArray()).GetProperty("imageId").GetString());
+        }
+        finally
+        {
+            pendingWrites.SetValue(_store, 0);
+        }
     }
 
     public void Dispose()

@@ -321,6 +321,14 @@ public sealed class TrayService : ITrayService, IDisposable
 		{
 			_logger.LogWarning(ex, "Capture shutdown did not finish. stage=exit");
 		}
+		try
+		{
+			await _serviceProvider.GetRequiredService<SqliteGameLibraryStore>().StopScenarioMatchingAsync();
+		}
+		catch (Exception ex)
+		{
+			_logger.LogWarning(ex, "Scenario matching shutdown did not finish. stage=exit");
+		}
 		_allowWindowClose = true;
 		ShowWindow(hwnd, SW_RESTORE);
 		_ = PostMessage(hwnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);

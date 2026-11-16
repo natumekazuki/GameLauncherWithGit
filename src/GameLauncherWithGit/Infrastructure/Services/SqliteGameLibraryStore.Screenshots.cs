@@ -9,6 +9,7 @@ namespace GameLauncherWithGit.Infrastructure.Services;
 public sealed partial class SqliteGameLibraryStore
 {
     private const string ImageHashAlgorithm = "sha256-dimensions-rgba8-v1";
+    private sealed record ScenarioScreenshotAsset(string ImageId, int Width, int Height, string PixelHash, string FilePath);
     private readonly SemaphoreSlim _screenshotFilesLock = new(1, 1);
     private string ScreenshotPath(string id) => Path.Combine(Path.GetDirectoryName(Path.GetFullPath(_databasePath))!, "scenario-images", id + ".png");
 
@@ -109,6 +110,69 @@ public sealed partial class SqliteGameLibraryStore
         return result;
     }
 
+    public async Task<IReadOnlyList<ScenarioScreenshotEventMetadata>> GetEventScreenshotMetadataAsync(long captureGameId,
+        IReadOnlyCollection<CaptureEventKey> events, CancellationToken cancellationToken = default)
+    {
+        var keys = events.Distinct().ToArray();
+        if (keys.Length == 0) return [];
+
+        await EnsureInitializedAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var transaction = connection.BeginTransaction(deferred: true);
+        var result = await ReadEventScreenshotMetadataAsync(connection, transaction, captureGameId, keys, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return result;
+    }
+
+    private static async Task<IReadOnlyList<ScenarioScreenshotEventMetadata>> ReadEventScreenshotMetadataAsync(
+        SqliteConnection connection, SqliteTransaction transaction, long captureGameId,
+        IReadOnlyList<CaptureEventKey> events, CancellationToken cancellationToken)
+    {
+        const int batchSize = 400;
+        var images = events.Select(_ => new List<ScenarioScreenshotReference>()).ToArray();
+        for (var offset = 0; offset < events.Count; offset += batchSize)
+        {
+            var batchCount = Math.Min(batchSize, events.Count - offset);
+            var values = new List<string>(batchCount);
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            for (var index = 0; index < batchCount; index++)
+            {
+                var ordinal = offset + index;
+                var key = events[ordinal];
+                values.Add($"({ordinal},$session{index},$sequence{index})");
+                command.Parameters.AddWithValue($"$session{index}", key.SessionId);
+                command.Parameters.AddWithValue($"$sequence{index}", key.Sequence);
+            }
+            command.CommandText = $"""
+                WITH requested(Ordinal,SessionId,ReceiveSequence) AS (VALUES {string.Join(",", values)})
+                SELECT r.Ordinal,s.CaptureGameId,e.ReceiveSequence,l.ImageId,l.CapturedAt
+                FROM requested r
+                LEFT JOIN CaptureSessions s ON s.Id=r.SessionId
+                LEFT JOIN CaptureEvents e ON e.SessionId=r.SessionId AND e.ReceiveSequence=r.ReceiveSequence
+                LEFT JOIN CaptureEventImages l ON l.SessionId=r.SessionId AND l.ReceiveSequence=r.ReceiveSequence
+                WHERE s.CaptureGameId=$game
+                ORDER BY r.Ordinal,l.CapturedAt,l.ImageId
+                """;
+            command.Parameters.AddWithValue("$game", captureGameId);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            var found = new HashSet<int>();
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var ordinal = reader.GetInt32(0);
+                if (reader.IsDBNull(1) || reader.GetInt64(1) != captureGameId || reader.IsDBNull(2))
+                    throw new ArgumentException("このゲームの本文を選んでください。");
+                found.Add(ordinal);
+                if (!reader.IsDBNull(3))
+                    images[ordinal].Add(new(reader.GetString(3), DateTimeOffset.Parse(reader.GetString(4))));
+            }
+            if (found.Count != batchCount)
+                throw new ArgumentException("このゲームの本文を選んでください。");
+        }
+
+        return events.Select((key, index) => new ScenarioScreenshotEventMetadata(key, images[index])).ToArray();
+    }
+
     public async Task<IReadOnlyDictionary<CaptureEventKey, int>> GetScreenshotCountsAsync(long captureGameId, IReadOnlyCollection<CaptureEventKey> events)
     {
         var keys = events.Distinct().ToArray();
@@ -188,6 +252,7 @@ public sealed partial class SqliteGameLibraryStore
 
     public async Task ExportScenarioArchiveAsync(long captureGameId, ScenarioArchiveSelection selection, string outputPath)
     {
+        await PrepareScenarioMaterialAsync(captureGameId);
         await _screenshotFilesLock.WaitAsync();
         try { await ExportScenarioArchiveCoreAsync(captureGameId, selection, outputPath); }
         finally { _screenshotFilesLock.Release(); }
@@ -203,19 +268,28 @@ public sealed partial class SqliteGameLibraryStore
         var title = await gameQuery.ExecuteScalarAsync() as string ?? throw new ArgumentException("ゲームの履歴が見つかりません。");
         var ranges = await ReadCaptureRangesAsync(connection, transaction, captureGameId);
         var items = await ReadCaptureExportItemsAsync(connection, transaction, captureGameId, selection, ranges);
+        var material = await ReadScenarioMaterialAsync(connection, transaction, captureGameId, selection, ranges, items);
         var includeAllRanges = selection.RangeId is null && selection.LabelId is null && !selection.UnclassifiedOnly
             && selection.Kind is null && string.IsNullOrWhiteSpace(selection.TextSearch) && string.IsNullOrWhiteSpace(selection.SpeakerSearch)
             && NormalizeCaptureTags(selection.IncludeTags).Length == 0 && NormalizeCaptureTags(selection.ExcludeTags).Length == 0;
         var archiveRanges = CreateArchiveRanges(ranges, items, includeAllRanges);
-        var images = new Dictionary<string, ScenarioScreenshot>();
+        var contents = material.Contents.ToDictionary(x => x.Id);
+        var eventGroups = material.Occurrences.GroupBy(x => new CaptureEventKey(x.Source.SessionId, x.Source.ReceiveSequence)).ToArray();
+        var imageReferences = eventGroups.SelectMany(x => x.SelectMany(occurrence => occurrence.Images)).ToArray();
+        var images = await ReadScreenshotAssetsAsync(connection, transaction, imageReferences);
         var rows = new List<object>();
-        foreach (var group in items.GroupBy(x => new CaptureEventKey(x.SessionId, x.Sequence)))
+        var screenshotOccurrences = new List<object>();
+        foreach (var group in eventGroups)
         {
-            var attached = await ReadEventScreenshotsAsync(connection, transaction, group.Key);
-            foreach (var image in attached) images.TryAdd(image.ImageId, image);
-            rows.Add(new { order = rows.Count + 1, eventId = $"{group.Key.SessionId}:{group.Key.Sequence}",
-                sessionId = group.Key.SessionId.ToString(), receiveSequence = group.Key.Sequence, receivedAt = group.First().ReceivedAt,
-                segments = group.Select(x => new { startUtf16 = x.Start, lengthUtf16 = x.Length, text = x.Text, kind = x.Kind?.ToString(),
+            var key = group.Key;
+            var attached = group.SelectMany(x => x.Images).GroupBy(x => x.ImageId).Select(x => x.First()).ToArray();
+            var eventId = $"{group.Key.SessionId}:{group.Key.Sequence}";
+            screenshotOccurrences.Add(new { eventId, sessionId = key.SessionId.ToString(),
+                receiveSequence = key.Sequence, imageIds = attached.Select(x => x.ImageId).ToArray() });
+            rows.Add(new { order = rows.Count + 1, eventId,
+                sessionId = key.SessionId.ToString(), receiveSequence = key.Sequence, receivedAt = group.First().ReceivedAt,
+                segments = group.Select(x => new { startUtf16 = x.Source.StartUtf16, lengthUtf16 = x.Source.LengthUtf16,
+                    text = contents[x.ContentId].Text, kind = contents[x.ContentId].Kind?.ToString(),
                     speaker = x.Speaker, label = x.LabelId is null ? null : new { id = x.LabelId.ToString(), name = x.LabelName } }).ToArray(),
                 images = attached.Select(x => new { imageId = x.ImageId, capturedAt = x.CapturedAt, scope = "capture_event", binding = "latest_received_body" }).ToArray() });
         }
@@ -234,8 +308,11 @@ public sealed partial class SqliteGameLibraryStore
                             identifierScope = "archive", game = new { captureGameId = captureGameId.ToString(), title },
                             selection = new { scope = selection.RangeId is null ? "game" : "range", rangeId = selection.RangeId?.ToString(), selection.LabelId, selection.UnclassifiedOnly, kind = selection.Kind?.ToString(), selection.TextSearch, selection.SpeakerSearch,
                                 includeTags = NormalizeCaptureTags(selection.IncludeTags), excludeTags = NormalizeCaptureTags(selection.ExcludeTags) },
-                            ranges = archiveRanges, textFile = "texts.jsonl", textIndexUnit = "utf16_code_unit", imageHashAlgorithm = ImageHashAlgorithm,
+                            ranges = archiveRanges, screenshotOccurrences, materialFile = "material.json", materialVersion = material.Version,
+                            matchingComplete = material.MatchingComplete, textFile = "texts.jsonl", textIndexUnit = "utf16_code_unit", imageHashAlgorithm = ImageHashAlgorithm,
                             images = images.Values.Select(x => new { id = x.ImageId, path = $"images/{x.ImageId}.png", mediaType = "image/png", width = x.Width, height = x.Height, pixelHash = x.PixelHash }) }, JsonOptions);
+                    await using (var materialFile = zip.CreateEntry("material.json").Open())
+                        await JsonSerializer.SerializeAsync(materialFile, material, JsonOptions);
                     await using (var writer = new StreamWriter(zip.CreateEntry("texts.jsonl").Open(), new UTF8Encoding(false)))
                         foreach (var row in rows) await writer.WriteLineAsync(JsonSerializer.Serialize(row, JsonOptions));
                     foreach (var image in images.Values)
@@ -249,6 +326,46 @@ public sealed partial class SqliteGameLibraryStore
             File.Move(temporary, outputPath);
         }
         finally { if (temporaryCreated) File.Delete(temporary); }
+    }
+
+    private async Task<Dictionary<string, ScenarioScreenshotAsset>> ReadScreenshotAssetsAsync(SqliteConnection connection,
+        SqliteTransaction transaction, IReadOnlyCollection<ScenarioOccurrenceImage> imageReferences)
+    {
+        var imageIds = imageReferences.Select(x => x.ImageId).Distinct().ToArray();
+        var result = new Dictionary<string, ScenarioScreenshotAsset>(StringComparer.Ordinal);
+        const int batchSize = 400;
+        for (var offset = 0; offset < imageIds.Length; offset += batchSize)
+        {
+            var batchCount = Math.Min(batchSize, imageIds.Length - offset);
+            var values = new List<string>(batchCount);
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            for (var index = 0; index < batchCount; index++)
+            {
+                var ordinal = offset + index;
+                values.Add($"({ordinal},$image{index})");
+                command.Parameters.AddWithValue($"$image{index}", imageIds[ordinal]);
+            }
+            command.CommandText = $"""
+                WITH requested(Ordinal,ImageId) AS (VALUES {string.Join(",", values)})
+                SELECT i.Id,i.Width,i.Height,i.PixelHash FROM requested r
+                LEFT JOIN CaptureImages i ON i.Id=r.ImageId
+                ORDER BY r.Ordinal
+                """;
+            await using var reader = await command.ExecuteReaderAsync();
+            var found = new HashSet<string>(StringComparer.Ordinal);
+            while (await reader.ReadAsync())
+            {
+                if (reader.IsDBNull(0))
+                    throw new InvalidOperationException("ZIPの添付metadataが参照する画像が見つかりません。");
+                var id = reader.GetString(0);
+                found.Add(id);
+                result.Add(id, new(id, reader.GetInt32(1), reader.GetInt32(2), reader.GetString(3), ScreenshotPath(id)));
+            }
+            if (found.Count != batchCount)
+                throw new InvalidOperationException("ZIPの添付metadataが参照する画像が見つかりません。");
+        }
+        return result;
     }
 
     private static object[] CreateArchiveRanges(IReadOnlyList<CaptureRange> ranges, IReadOnlyList<CaptureTextItem> items, bool includeAll)

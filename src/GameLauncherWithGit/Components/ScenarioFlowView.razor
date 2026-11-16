@@ -1,0 +1,115 @@
+@using GameLauncherWithGit.Application.Models
+@using GameLauncherWithGit.Application.Services
+
+<section class="scenario-flow" aria-label="シナリオのフローチャート">
+    <div class="flow-toolbar">
+        <label>フローチャート
+            <select value="@SelectedChartId" @onchange="ChangeChart">
+                @foreach (var chart in Graph.Charts)
+                {
+                    <option value="@chart.Id">フローチャート @(Graph.Charts.ToList().IndexOf(chart) + 1) · @chart.OccurrenceIds.Count 出現</option>
+                }
+            </select>
+        </label>
+        <span role="status">@(MatchingComplete ? "照合済み" : "照合途中 · 未照合の本文は別ブロックで表示")</span>
+    </div>
+    @if (Graph.Occurrences.Count == 0)
+    {
+        <p class="flow-empty">記録した本文は、タグや区間を付けなくてもここに表示されます。</p>
+    }
+    else
+    {
+        <div class="flow-canvas" tabindex="0" aria-label="観測した接続。ブロックを選ぶと周回ごとの本文を表示">
+            <div class="flow-surface" style="width:@(CanvasWidth)px;height:@(CanvasHeight)px">
+                <svg width="@CanvasWidth" height="@CanvasHeight" aria-hidden="true" focusable="false">
+                    <defs><marker id="flow-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#8db8ff" /></marker></defs>
+                    @foreach (var edge in VisibleEdges)
+                    {
+                        var from = _positions[edge.FromBlockId]; var to = _positions[edge.ToBlockId];
+                        <path d="@EdgePath(from, to)" fill="none" stroke="#8db8ff" stroke-width="2" marker-end="url(#flow-arrow)" />
+                    }
+                </svg>
+                @foreach (var block in VisibleBlocks)
+                {
+                    var position = _positions[block.Id];
+                    <button class="flow-node" style="left:@(position.X)px;top:@(position.Y)px" aria-pressed="@(_blockId == block.Id ? "true" : "false")" @onclick="() => SelectBlock(block.Id)">
+                        <span>@block.Text</span><small>@block.OccurrenceIds.Count 出現</small>
+                    </button>
+                }
+            </div>
+        </div>
+        <div class="flow-reading">
+            <div class="flow-visits" aria-label="ブロックを読んだ周回">
+                @foreach (var occurrence in SelectedOccurrences)
+                {
+                    <button class="secondary-button" aria-pressed="@(_occurrenceId == occurrence.Id ? "true" : "false")" @onclick="() => _occurrenceId = occurrence.Id">記録 @SessionNumber(occurrence.Start.SessionId) · @OccurrenceNumber(occurrence) @(occurrence.CutBefore ? "· 別経路の先頭" : "")</button>
+                }
+            </div>
+            @if (SelectedOccurrence is { } selected)
+            {
+                <div class="flow-occurrence">
+                    @if (selected.Speaker is not null) { <strong>@selected.Speaker</strong> }
+                    <p>@selected.Text</p>
+                    <div class="flow-occurrence-actions">
+                        <button class="secondary-button" @onclick="() => OpenOccurrence.InvokeAsync(selected)">この出現の本文・画像へ</button>
+                        <button class="secondary-button" @onclick="() => CutOccurrence.InvokeAsync(selected)" disabled="@selected.CutBefore">ここから別経路</button>
+                    </div>
+                    <p class="flow-connections">@ConnectionSummary(selected)</p>
+                </div>
+            }
+        </div>
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired] public ScenarioFlowGraph Graph { get; set; } = new([], [], [], []);
+    [Parameter] public bool MatchingComplete { get; set; }
+    [Parameter] public EventCallback<ScenarioFlowOccurrence> OpenOccurrence { get; set; }
+    [Parameter] public EventCallback<ScenarioFlowOccurrence> CutOccurrence { get; set; }
+    private string? _chartId, _blockId, _occurrenceId;
+    private readonly Dictionary<string, (int X, int Y)> _positions = [];
+    private string? SelectedChartId => Graph.Charts.Any(x => x.Id == _chartId) ? _chartId : Graph.Charts.FirstOrDefault()?.Id;
+    private IEnumerable<ScenarioFlowBlock> VisibleBlocks => Graph.Blocks.Where(b => Graph.Occurrences.Any(o => o.BlockId == b.Id && o.ChartId == SelectedChartId));
+    private IEnumerable<ScenarioFlowEdge> VisibleEdges => Graph.Edges.Where(e => _positions.ContainsKey(e.FromBlockId) && _positions.ContainsKey(e.ToBlockId));
+    private IEnumerable<ScenarioFlowOccurrence> SelectedOccurrences => Graph.Occurrences.Where(o => o.BlockId == _blockId && o.ChartId == SelectedChartId);
+    private ScenarioFlowOccurrence? SelectedOccurrence => SelectedOccurrences.FirstOrDefault(x => x.Id == _occurrenceId) ?? SelectedOccurrences.FirstOrDefault();
+    private int CanvasWidth => Math.Max(280, _positions.Values.Select(x => x.X + 250).DefaultIfEmpty(280).Max());
+    private int CanvasHeight => Math.Max(160, _positions.Values.Select(x => x.Y + 130).DefaultIfEmpty(160).Max());
+    protected override void OnParametersSet() => Layout();
+    private void ChangeChart(ChangeEventArgs args) { _chartId = args.Value?.ToString(); _blockId = _occurrenceId = null; Layout(); }
+    private void SelectBlock(string id) { _blockId = id; _occurrenceId = SelectedOccurrences.FirstOrDefault()?.Id; }
+    private int SessionNumber(long session) => Graph.Occurrences.Select(x => x.Start.SessionId).Distinct().Order().ToList().IndexOf(session) + 1;
+    private int OccurrenceNumber(ScenarioFlowOccurrence occurrence) => Graph.Occurrences.Where(x => x.Start.SessionId == occurrence.Start.SessionId).ToList().FindIndex(x => x.Id == occurrence.Id) + 1;
+    private string ConnectionSummary(ScenarioFlowOccurrence selected)
+    {
+        var incoming = Graph.Edges.SelectMany(x => x.Traversals).Count(x => x.ToOccurrenceId == selected.Id);
+        var outgoing = Graph.Edges.SelectMany(x => x.Traversals).Count(x => x.FromOccurrenceId == selected.Id);
+        return $"この出現の接続：前 {incoming} · 次 {outgoing}";
+    }
+    private void Layout()
+    {
+        _positions.Clear();
+        var blocks = VisibleBlocks.ToArray();
+        if (blocks.Length == 0) return;
+        if (!blocks.Any(x => x.Id == _blockId)) SelectBlock(blocks[0].Id);
+        var ids = blocks.Select(x => x.Id).ToHashSet();
+        var edges = Graph.Edges.Where(e => ids.Contains(e.FromBlockId) && ids.Contains(e.ToBlockId)).ToArray();
+        var levels = new Dictionary<string, int>();
+        var queue = new Queue<string>(blocks.Where(b => !edges.Any(e => e.ToBlockId == b.Id)).Select(b => b.Id));
+        if (queue.Count == 0) queue.Enqueue(blocks[0].Id);
+        foreach (var id in queue) levels[id] = 0;
+        while (queue.TryDequeue(out var id))
+            foreach (var edge in edges.Where(e => e.FromBlockId == id))
+                if (levels.TryAdd(edge.ToBlockId, levels[id] + 1)) queue.Enqueue(edge.ToBlockId);
+        var rows = new Dictionary<int, int>();
+        foreach (var block in blocks)
+        {
+            var level = levels.GetValueOrDefault(block.Id);
+            var row = rows.GetValueOrDefault(level); rows[level] = row + 1;
+            _positions[block.Id] = (25 + level * 310, 35 + row * 150);
+        }
+    }
+    private static string EdgePath((int X, int Y) from, (int X, int Y) to) => from == to
+        ? $"M {from.X + 160} {from.Y} C {from.X + 230} {from.Y - 40}, {from.X + 60} {from.Y - 40}, {from.X + 80} {from.Y}"
+        : $"M {from.X + 220} {from.Y + 45} C {from.X + 270} {from.Y + 45}, {to.X - 50} {to.Y + 45}, {to.X} {to.Y + 45}";
+}

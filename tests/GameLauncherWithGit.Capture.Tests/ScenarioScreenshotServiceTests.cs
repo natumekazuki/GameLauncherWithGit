@@ -454,6 +454,7 @@ public sealed class ScenarioScreenshotServiceTests : IAsyncDisposable
             return await inner.SaveScreenshotAsync(target, image, capturedAt, cancellationToken);
         }
         public Task<IReadOnlyList<ScenarioScreenshot>> GetEventScreenshotsAsync(long game, CaptureEventKey key) => inner.GetEventScreenshotsAsync(game, key);
+        public Task<IReadOnlyList<ScenarioScreenshotEventMetadata>> GetEventScreenshotMetadataAsync(long game, IReadOnlyCollection<CaptureEventKey> keys, CancellationToken cancellationToken = default) => inner.GetEventScreenshotMetadataAsync(game, keys, cancellationToken);
         public Task<IReadOnlyDictionary<CaptureEventKey, int>> GetScreenshotCountsAsync(long game, IReadOnlyCollection<CaptureEventKey> keys) => inner.GetScreenshotCountsAsync(game, keys);
         public Task<ScreenshotCleanupResult> CleanupUnreferencedScreenshotsAsync() => inner.CleanupUnreferencedScreenshotsAsync();
         public Task ExportScenarioArchiveAsync(long game, ScenarioArchiveSelection selection, string output) => inner.ExportScenarioArchiveAsync(game, selection, output);
@@ -499,6 +500,81 @@ public sealed class ScenarioScreenshotServiceTests : IAsyncDisposable
         public Task UnregisterHotkeyAsync() { Callback = null; ActiveKey = null; return Task.CompletedTask; }
         public void SignalFailure() => Signals++;
         public void Dispose() { }
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "停止中の本文と撮影は保存せず、受付済み撮影は元本文へ完了し、再開直後の撮影は旧本文に付かず次の本文から別経路になる"
+    // oracle = { type = "contract", ref = "https://github.com/natumekazuki/GameLauncherWithGit/issues/34" }
+    // fault = "停止中受信を再開後にbackfillする、旧本文を撮影対象に残す、または再開後のcutを失う"
+    // observable = "SQLite保存本文とイベント別画像、撮影回数、再開後のraw cut、正式記録設定と状態"
+    // observation_boundary = "public-boundary"
+    // scope = "pause resume racing accepted screenshot and candidate backfill"
+    // lifecycle = "permanent"
+    // impact = "停止中の私的な場面を保存したり、別の場面の画像を旧本文に誤関連付けする"
+    // distinction = "既存の終了/取得回切替testは同じ接続内の一時停止と再開時backfillを通らない"
+    // @end-test-value
+    [Fact]
+    public async Task PauseDropsTextAndHotkeysUntilANewBodyArrivesAfterResume()
+    {
+        await BeginPreviewAsync(); await _capture.ConfirmProcessAsync();
+        _host.Emit(Body, "停止前");
+        var before = _capture.FreezeScreenshotTarget().Target;
+        var frame = _platform.HoldNextFrame();
+        var accepted = _screenshots.CaptureAsync();
+        _capture.PauseRecording();
+        Assert.True(_capture.Snapshot.Paused);
+        Assert.False(_capture.Snapshot.Recording);
+        Assert.True(_capture.Snapshot.Connected);
+        _host.Emit(Body, "停止中の本文"); _host.Emit(Name, "停止中の名前");
+        await _capture.SaveRulesAsync(_capture.Snapshot.Profile!.Rules);
+        Assert.Throws<InvalidOperationException>(() => _capture.FreezeScreenshotTarget());
+        frame.SetResult(FakePlatform.Frame); await accepted;
+        await _screenshots.CaptureAsync();
+        Assert.Single(_platform.Captured);
+        _capture.ResumeRecording();
+        await _screenshots.CaptureAsync();
+        Assert.Single(_platform.Captured);
+        _host.Emit(Name, "再開後の名前"); _host.Emit(Body, "");
+        await _screenshots.CaptureAsync();
+        Assert.Single(_platform.Captured);
+        _host.Emit(Body, "再開後");
+        var after = _capture.FreezeScreenshotTarget().Target;
+        await _screenshots.CaptureAsync(); await _capture.FlushPendingAsync();
+        Assert.Equal(2, _platform.Captured.Count);
+        Assert.Single(await _store.GetEventScreenshotsAsync(before.CaptureGameId, before.Event));
+        Assert.Single(await _store.GetEventScreenshotsAsync(after.CaptureGameId, after.Event));
+        Assert.Equal(new[] { "停止前", "再開後" }, (await _store.GetCaptureItemsAsync(before.Event.SessionId, 0)).Select(x => x.Text));
+        Assert.Contains(new CapturePosition(after.Event.SessionId, after.Event.Sequence, 0), (await _store.GetScenarioFlowOverridesAsync(after.CaptureGameId)).Cuts);
+        Assert.True(_capture.Snapshot.Profile!.Enabled);
+        Assert.False(_capture.Snapshot.Paused);
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "プレイ中の経路区切りは名前・空本文・重複Sequenceで消費されず次の保存成功本文の直前に永続化し、本文と撮影の記録は続く"
+    // oracle = { type = "contract", ref = "https://github.com/natumekazuki/GameLauncherWithGit/issues/34" }
+    // fault = "名前・空本文・inserted=falseへcutを消費するか区切り操作を記録停止として扱う"
+    // observable = "保存されたcut位置、全本文と後続画像、記録中状態"
+    // observation_boundary = "public-boundary"
+    // scope = "live path break writer boundary"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task LiveBreakWaitsForAnActualBodyAndKeepsRecording()
+    {
+        await BeginPreviewAsync(); await _capture.ConfirmProcessAsync();
+        _host.Emit(Body, "A"); await _capture.FlushPendingAsync();
+        _capture.BreakPath();
+        var session = _capture.Snapshot.SessionId!.Value;
+        await _store.AppendCaptureAsync(session, new(4, DateTimeOffset.UtcNow, Body, "既存の重複Sequence", CaptureRole.Body), new());
+        _host.Emit(Name, "名前"); _host.Emit(Body, ""); _host.Emit(Body, "重複なので保存しない"); _host.Emit(Body, "B"); _host.Emit(Body, "C");
+        await _screenshots.CaptureAsync(); await _capture.FlushPendingAsync();
+        var snapshot = _capture.Snapshot;
+        Assert.True(snapshot.Recording);
+        Assert.Equal(new[] { "A", "既存の重複Sequence", "B", "C" }, (await _store.GetCaptureItemsAsync(snapshot.SessionId!.Value, 0)).Select(x => x.Text));
+        Assert.Equal(new long[] { 1, 5 }, (await _store.GetScenarioFlowOverridesAsync(snapshot.Profile!.Id)).Cuts.Select(x => x.Sequence));
+        Assert.Single(await _store.GetEventScreenshotsAsync(snapshot.Profile.Id, new(snapshot.SessionId.Value, 6)));
     }
 
     private sealed class FakeSettings : IAppSettingsService

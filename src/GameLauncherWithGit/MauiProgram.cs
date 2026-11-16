@@ -42,10 +42,16 @@ public static class MauiProgram
 				configureFile: options => options.FilePath = structuredLogPath);
 
 		builder.Services.AddSingleton<IRepositoryStateStore, RepositoryStateStore>();
-		builder.Services.AddSingleton(serviceProvider => new SqliteGameLibraryStore(
-			serviceProvider.GetRequiredService<ILogger<SqliteGameLibraryStore>>(),
-			Path.Combine(AppDataPaths.Directory, "game-library.db")));
+		builder.Services.AddSingleton(serviceProvider =>
+		{
+			var store = new SqliteGameLibraryStore(
+				serviceProvider.GetRequiredService<ILogger<SqliteGameLibraryStore>>(),
+				Path.Combine(AppDataPaths.Directory, "game-library.db"));
+			store.StartScenarioMatching();
+			return store;
+		});
 		builder.Services.AddSingleton<IScenarioCaptureStore>(serviceProvider => serviceProvider.GetRequiredService<SqliteGameLibraryStore>());
+		builder.Services.AddSingleton<IScenarioMaterialReader>(serviceProvider => serviceProvider.GetRequiredService<SqliteGameLibraryStore>());
 		builder.Services.AddSingleton<ILunaCaptureHost, LunaCaptureHost>();
 		builder.Services.AddSingleton<ScenarioCaptureService>();
 		builder.Services.AddSingleton<IScenarioScreenshotStore>(serviceProvider => serviceProvider.GetRequiredService<SqliteGameLibraryStore>());

@@ -78,6 +78,7 @@ public sealed record CaptureSnapshot
     public bool Preview { get; init; }
     public bool Connecting { get; init; }
     public bool Recording { get; init; }
+    public bool Paused { get; init; }
     public CaptureProcess? Process { get; init; }
     public long Received { get; init; }
     public long Saved { get; init; }

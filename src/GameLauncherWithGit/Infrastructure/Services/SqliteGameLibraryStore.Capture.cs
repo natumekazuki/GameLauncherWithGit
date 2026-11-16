@@ -73,6 +73,8 @@ public sealed partial class SqliteGameLibraryStore
                 FOREIGN KEY(SessionId,ReceiveSequence) REFERENCES CaptureEvents(SessionId,ReceiveSequence) ON DELETE CASCADE);
             """;
         await command.ExecuteNonQueryAsync(cancellationToken);
+        await EnsureScenarioMatchingSchemaAsync(connection, cancellationToken);
+        await EnsureScenarioFlowSchemaAsync(connection, cancellationToken);
     }
 
     private static SqliteCommand CaptureCommand(SqliteConnection connection, SqliteTransaction? transaction,
@@ -224,32 +226,40 @@ public sealed partial class SqliteGameLibraryStore
         }
     }
 
-    public async Task<bool> AppendCaptureAsync(long sessionId, CaptureReceived received, CaptureRules rules)
+    public async Task<bool> AppendCaptureAsync(long sessionId, CaptureReceived received, CaptureRules rules, bool startNewPath = false)
     {
-        await EnsureInitializedAsync(default);
-        await using var connection = await OpenConnectionAsync(default);
-        await using var transaction = connection.BeginTransaction();
-        var owner = await CaptureOwnerAsync(connection, transaction, sessionId);
-        var labels = await ReadCaptureLabelsAsync(connection, transaction, owner);
-        var source = received.Source;
-        await using var addSource = CaptureCommand(connection, transaction, """
-            INSERT INTO CaptureSources(SessionId,SourceKey,ProcessId,HookCode,HookName,Address,Context,Context2)
-            VALUES($session,$key,$pid,$code,$name,$address,$context,$context2)
-            ON CONFLICT(SessionId,SourceKey) DO NOTHING;
-            SELECT Id FROM CaptureSources WHERE SessionId=$session AND SourceKey=$key;
-            """, ("$session", sessionId), ("$key", source.Key), ("$pid", source.ProcessId),
-            ("$code", source.HookCode), ("$name", source.HookName), ("$address", source.Address.ToString("x")),
-            ("$context", source.Context.ToString("x")), ("$context2", source.Context2.ToString("x")));
-        var sourceId = await addSource.ExecuteScalarAsync();
-        await using var addEvent = CaptureCommand(connection, transaction, """
-            INSERT INTO CaptureEvents(SessionId,ReceiveSequence,SourceId,ReceivedAt,InputRole,RawText)
-            VALUES($session,$sequence,$source,$time,$role,$text) ON CONFLICT(SessionId,ReceiveSequence) DO NOTHING
-            """, ("$session", sessionId), ("$sequence", received.Sequence), ("$source", sourceId),
-            ("$time", received.ReceivedAt.ToUniversalTime().ToString("O")), ("$role", (int)received.Role), ("$text", received.Text));
-        var inserted = await addEvent.ExecuteNonQueryAsync() == 1;
-        if (inserted) await InsertCaptureItemsAsync(connection, transaction, sessionId, received, rules, labels);
-        await transaction.CommitAsync();
-        return inserted;
+        Interlocked.Increment(ref _captureWritesPending);
+        try
+        {
+            await EnsureInitializedAsync(default);
+            await using var connection = await OpenConnectionAsync(default);
+            await using var transaction = connection.BeginTransaction();
+            var owner = await CaptureOwnerAsync(connection, transaction, sessionId);
+            var labels = await ReadCaptureLabelsAsync(connection, transaction, owner);
+            var source = received.Source;
+            await using var addSource = CaptureCommand(connection, transaction, """
+                INSERT INTO CaptureSources(SessionId,SourceKey,ProcessId,HookCode,HookName,Address,Context,Context2)
+                VALUES($session,$key,$pid,$code,$name,$address,$context,$context2)
+                ON CONFLICT(SessionId,SourceKey) DO NOTHING;
+                SELECT Id FROM CaptureSources WHERE SessionId=$session AND SourceKey=$key;
+                """, ("$session", sessionId), ("$key", source.Key), ("$pid", source.ProcessId),
+                ("$code", source.HookCode), ("$name", source.HookName), ("$address", source.Address.ToString("x")),
+                ("$context", source.Context.ToString("x")), ("$context2", source.Context2.ToString("x")));
+            var sourceId = await addSource.ExecuteScalarAsync();
+            await using var addEvent = CaptureCommand(connection, transaction, """
+                INSERT INTO CaptureEvents(SessionId,ReceiveSequence,SourceId,ReceivedAt,InputRole,RawText)
+                VALUES($session,$sequence,$source,$time,$role,$text) ON CONFLICT(SessionId,ReceiveSequence) DO NOTHING
+                """, ("$session", sessionId), ("$sequence", received.Sequence), ("$source", sourceId),
+                ("$time", received.ReceivedAt.ToUniversalTime().ToString("O")), ("$role", (int)received.Role), ("$text", received.Text));
+            var inserted = await addEvent.ExecuteNonQueryAsync() == 1;
+            if (inserted) await InsertCaptureItemsAsync(connection, transaction, sessionId, received, rules, labels);
+            if (inserted && startNewPath)
+                await InsertScenarioFlowCutAsync(connection, transaction, owner, new(sessionId, received.Sequence, 0));
+            await transaction.CommitAsync();
+            if (inserted) ScheduleScenarioMatching(owner);
+            return inserted;
+        }
+        finally { Interlocked.Decrement(ref _captureWritesPending); }
     }
 
     private const string CaptureItemQuery = """

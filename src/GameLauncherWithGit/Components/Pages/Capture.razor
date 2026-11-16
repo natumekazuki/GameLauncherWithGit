@@ -7,6 +7,7 @@
 @implements IAsyncDisposable
 @inject IScenarioCaptureStore Store
 @inject IScenarioScreenshotStore ScreenshotStore
+@inject IScenarioMaterialReader MaterialReader
 @inject ScenarioScreenshotService Screenshots
 @inject ScenarioCaptureService CaptureService
 @inject IPathPickerService Picker
@@ -31,9 +32,13 @@
         {
             <div class="capture-livebar">
                 <strong class="capture-game-title">@(_snapshot.Profile?.Title ?? "ゲームなし")</strong>
+                <div class="capture-recording-actions" aria-label="記録と経路">
+                    <button class="secondary-button capture-icon-button" title="@(_snapshot.Paused ? "記録を再開（次の本文から別経路）" : "記録を一時停止")" aria-label="@(_snapshot.Paused ? "記録を再開" : "記録を一時停止")" aria-pressed="@(_snapshot.Paused ? "true" : "false")" @onclick="ToggleRecordingPauseAsync" disabled="@(_busy || !_snapshot.Connected || _snapshot.Preview)"><CaptureIcon Name="@(_snapshot.Paused ? "Play" : "Pause")" /></button>
+                    <button class="secondary-button capture-icon-button" title="ここで経路を区切る（次の本文から別経路）" aria-label="ここで経路を区切る" @onclick="BreakLivePathAsync" disabled="@(_busy || !_snapshot.Recording)"><CaptureIcon Name="PathBreak" /></button>
+                </div>
                 <div class="capture-play-range" aria-label="プレイ中の区間指定">
                     <span class="capture-range-caption">区間</span>
-                    <button class="launch-button capture-icon-button" title="区間を開始" aria-label="ここから開始" @onclick="StartLiveRangeAsync" disabled="@(_busy || !_snapshot.Connected || _snapshot.Preview || _snapshot.RangeStart is not null)"><CaptureIcon Name="Play" /></button>
+                    <button class="launch-button capture-icon-button" title="区間を開始" aria-label="ここから開始" @onclick="StartLiveRangeAsync" disabled="@(_busy || !_snapshot.Recording || _snapshot.RangeStart is not null)"><CaptureIcon Name="Play" /></button>
                     <button class="launch-button capture-icon-button" title="区間を終了" aria-label="ここまでで終了" @onclick="EndLiveRangeAsync" disabled="@(_busy || _snapshot.RangeStart is null)"><CaptureIcon Name="Stop" /></button>
                     <button class="secondary-button capture-icon-button" title="区間指定を取消" aria-label="区間指定を取消" @onclick="CancelLiveRange" disabled="@(_busy || _snapshot.RangeStart is null)"><CaptureIcon Name="Close" /></button>
                 </div>
@@ -47,7 +52,7 @@
             </div>
         }
         <section class="capture-content" aria-busy="@(_busy ? "true" : "false")">
-            <div class="capture-filters @(_live ? "capture-filters-live" : "")">
+            <div class="capture-filters @(_live ? "capture-filters-live" : "")" hidden="@_flowOpen">
                 @if (!_live)
                 {
                     <label class="capture-filter" title="ゲーム"><CaptureIcon Name="Game" /><select aria-label="ゲーム" value="@_profileId" @onchange="ChangeProfileAsync" disabled="@_busy">
@@ -64,7 +69,7 @@
                     <option value="dialogue">セリフ</option><option value="narration">地の文</option>
                 </select></label>
             </div>
-            @if (!_live)
+            @if (!_live && !_flowOpen)
             {
                 <div class="capture-history-toolbar">
                     <form class="capture-search" @onsubmit="SearchHistoryAsync" @onsubmit:preventDefault>
@@ -79,7 +84,11 @@
             }
             <div class="capture-tools">
                 <div class="capture-tool-group capture-view-tools">
-                    @if (LatestOrder)
+                    @if (_flowOpen)
+                    {
+                        <button class="secondary-button capture-icon-button" title="フローチャートを更新" aria-label="フローチャートを更新" @onclick="RefreshAsync" disabled="@_busy"><CaptureIcon Name="Refresh" /></button>
+                    }
+                    else if (LatestOrder)
                     {
                         <button class="secondary-button capture-icon-button" title="@(_following ? "末尾に追従中" : "末尾へ戻る")" aria-label="末尾を表示" aria-pressed="@(_following ? "true" : "false")" @onclick="FollowAsync" disabled="@(_busy || _following || _selected.Count > 0 || _pickingRange)"><CaptureIcon Name="Follow" /></button>
                     }
@@ -91,12 +100,13 @@
                         <button class="secondary-button capture-icon-button" title="更新" aria-label="更新" @onclick="RefreshAsync" disabled="@_busy"><CaptureIcon Name="Refresh" /></button>
                     }
                 </div>
-                <div class="capture-tool-group" aria-label="本文で区間指定">
+                <div class="capture-tool-group" aria-label="本文で区間指定" inert="@_flowOpen">
                     <button class="secondary-button capture-icon-button" title="本文から区間を指定" aria-label="本文で区間指定" aria-pressed="@(_pickingRange ? "true" : "false")" @onclick="ToggleTextRange" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Pick" /></button>
                     <button class="secondary-button capture-icon-button" title="区間を保存" aria-label="区間を保存" @onclick="OpenTextRange" disabled="@(_busy || !TextRangeValid)"><CaptureIcon Name="Save" /></button>
                     <button class="secondary-button capture-icon-button" title="本文の区間指定を解除" aria-label="本文の区間指定を解除" @onclick="ClearTextRangeAsync" disabled="@(_busy || !_pickingRange)"><CaptureIcon Name="Close" /></button>
+                    <button class="secondary-button capture-icon-button" title="選択範囲を独立したフローチャートにする" aria-label="選択範囲を独立したフローチャートにする" @onclick="OpenIndependentFlow" disabled="@(_busy || !TextRangeValid)"><CaptureIcon Name="Flow" /></button>
                 </div>
-                <div class="capture-tool-group capture-bulk" aria-label="本文の修正" title="@(_rangeId != 0 ? "修正はゲーム全体で" : "本文の修正")">
+                <div class="capture-tool-group capture-bulk" aria-label="本文の修正" inert="@_flowOpen" title="@(_rangeId != 0 ? "修正はゲーム全体で" : "本文の修正")">
                     <input type="checkbox" aria-label="表示分を選択" title="表示分を選択" checked="@(_items.Count > 0 && _selected.Count == _items.Count)" @onchange="SelectPage" disabled="@(_busy || _items.Count == 0 || !CanEdit)" />
                     <span class="capture-selection-count" aria-label="@($"{_selected.Count}件選択")">@_selected.Count</span>
                     <button class="secondary-button capture-icon-button" title="一括修正" aria-label="一括修正" @onclick="OpenBulk" disabled="@(_busy || _selected.Count == 0)"><CaptureIcon Name="BulkEdit" /></button>
@@ -107,6 +117,7 @@
                     }
                 </div>
                 <div class="capture-tool-group capture-utilities">
+                    <button class="secondary-button capture-icon-button" title="フローチャート" aria-label="フローチャートを表示" aria-pressed="@(_flowOpen ? "true" : "false")" @onclick="ToggleFlowAsync" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Flow" /></button>
                     <button class="secondary-button capture-icon-button" title="スクリーンショット設定" aria-label="スクリーンショット設定" @onclick="OpenScreenshotSettings" disabled="@_busy"><CaptureIcon Name="Camera" /></button>
                     <button class="secondary-button capture-icon-button" title="抽出設定" aria-label="抽出設定" @onclick="OpenSettings" disabled="@_busy"><CaptureIcon Name="Settings" /></button>
                     <button class="secondary-button capture-icon-button" title="TXT出力（条件の全件）" aria-label="条件の全件をTXT出力" @onclick="() => OpenExportAsync(false)" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Export" /></button>
@@ -133,11 +144,20 @@
                     <span><CaptureIcon Name="End" />@(_rangeLast is null ? "—" : CandidatePreview(_rangeLast.Text))</span>
                 }
             </div>
-            <div class="capture-feed" @ref="_feed" tabindex="0" aria-label="抽出本文">
+            @if (_flowOpen)
+            {
+                @if (!_live) { <h2 class="capture-flow-title">@_profile?.Title</h2> }
+                @if (_flowGraph is not null)
+                {
+                    <ScenarioFlowView Graph="_flowGraph" MatchingComplete="_flowMatchingComplete" OpenOccurrence="OpenFlowOccurrenceAsync" CutOccurrence="CutFlowOccurrenceAsync" />
+                }
+                else { <p role="status">フローチャートを取得できませんでした。更新して再試行してください。</p> }
+            }
+            <div class="capture-feed" hidden="@_flowOpen" @ref="_feed" tabindex="0" aria-label="抽出本文">
                 @if (_items.Count == 0) { <p class="capture-empty">@EmptyMessage</p> }
                 @foreach (var item in _items)
                 {
-                    <article class="capture-item @(IsRangeEdge(item) ? "capture-range-edge" : "")" @key="item.Id">
+                    <article class="capture-item @(IsRangeEdge(item) || _flowHighlighted == item.StartPosition ? "capture-range-edge" : "")" @key="item.Id">
                         <header>
                             <input type="checkbox" aria-label="この本文を選択" title="選択" checked="@_selected.Contains(item.Id)" @onchange="e => SelectItem(item.Id, e.Value is true)" disabled="@(_busy || !CanEdit)" />
                             <span class="capture-label" title="@(item.LabelName ?? "未判定")">@(item.LabelName ?? "未判定")</span>
@@ -159,6 +179,10 @@
                             {
                                 <button class="secondary-button capture-icon-button" title="@(_rangeId != 0 ? "修正はゲーム全体で" : "修正")" aria-label="修正" @onclick="() => Edit(item)" disabled="@(_busy || !CanEdit)"><CaptureIcon Name="Edit" /></button>
                                 <button class="secondary-button capture-icon-button" title="@(_rangeId != 0 ? "分割はゲーム全体で" : "原文・分割")" aria-label="原文・分割" @onclick="() => OpenPartitionAsync(item)" disabled="@(_busy || !CanEdit)"><CaptureIcon Name="Split" /></button>
+                                @if (!_live)
+                                {
+                                    <button class="secondary-button capture-icon-button" title="ここから別経路（この出現の直前の接続だけを切る）" aria-label="ここから別経路" @onclick="() => CutHistoryOccurrenceAsync(item)" disabled="@_busy"><CaptureIcon Name="PathBreak" /></button>
+                                }
                             }
                         </header>
                         <p>@item.Text</p>
@@ -168,6 +192,16 @@
         </section>
     }
 </section>
+
+@if (_independentFlowConfirm)
+{
+    <div class="modal-backdrop"><section id="capture-editor" class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-independent-title">
+        <header class="capture-dialog-header"><h2 id="capture-independent-title">独立したフローチャートにする</h2><button class="secondary-button capture-icon-button" aria-label="閉じる" title="閉じる" @onclick="CloseEditors"><CaptureIcon Name="Close" /></button></header>
+        <p>@CandidatePreview(_rangeFirst?.Text ?? "") → @CandidatePreview(_rangeLast?.Text ?? "")</p>
+        <p>この範囲の本文・画像・順番は残ります。本編との接続を外し、本編の前後も直結しません。</p>
+        <div class="capture-dialog-actions"><button class="secondary-button" @onclick="CloseEditors" disabled="@_busy">取消</button><button class="launch-button" @onclick="CreateIndependentFlowAsync" disabled="@_busy">独立させる</button></div>
+    </section></div>
+}
 
 @if (_screenshotSettingsOpen)
 {
@@ -477,6 +511,9 @@
 
 @code {
     private CaptureSnapshot _snapshot = new();
+    private bool _flowOpen, _flowMatchingComplete, _independentFlowConfirm;
+    private ScenarioFlowGraph? _flowGraph;
+    private CapturePosition? _flowHighlighted;
     private bool _screenshotSettingsOpen;
     private CaptureTextItem? _screenshotItem;
     private IReadOnlyList<ScenarioScreenshot> _eventScreenshots = [];
@@ -539,7 +576,7 @@
     private CaptureTextItem? _rangeFirst, _rangeLast;
     private CaptureRangeSelection? _rangeSelection;
     private string _rangeName = "";
-    private bool EditorOpen => _exportOpen || _screenshotSettingsOpen || _screenshotItem is not null || _settingsOpen || _bulkOpen || _edit is not null || _partition is not null || _rangeSelection is not null || _historyDialog != HistoryDialog.None;
+    private bool EditorOpen => _independentFlowConfirm || _exportOpen || _screenshotSettingsOpen || _screenshotItem is not null || _settingsOpen || _bulkOpen || _edit is not null || _partition is not null || _rangeSelection is not null || _historyDialog != HistoryDialog.None;
     private bool FollowingView => _live && _rangeId == 0 && !_pickingRange;
     private bool LatestOrder => _live && _rangeId == 0;
     private bool CanEdit => _rangeId == 0 && !_pickingRange;
@@ -638,6 +675,7 @@
     }
     private async Task LoadProfileAsync()
     {
+        _flowOpen = false; _flowGraph = null; _flowHighlighted = null;
         _profile = _profiles.FirstOrDefault(x => x.Id == _profileId);
         _labels = _profile is null ? [] : await Store.GetCaptureLabelsAsync(_profile.Id);
         _ranges = _profile is null ? [] : await Store.GetCaptureRangesAsync(_profile.Id);
@@ -755,7 +793,59 @@
     private Task FilterAsync() => RunAsync(async () => { _offset = 0; _selected.Clear(); await LoadItemsAsync(); _scrollToEnd = FollowingView && _following; });
     private Task PreviousAsync() => RunAsync(async () => { _offset = Math.Max(0, _offset - 200); _selected.Clear(); await LoadItemsAsync(); _scrollToEnd = false; });
     private Task NextAsync() => RunAsync(async () => { _offset += 200; _selected.Clear(); await LoadItemsAsync(); _scrollToEnd = false; });
-    private Task RefreshAsync() => RunAsync(LoadItemsAsync);
+    private Task RefreshAsync() => RunAsync(() => _flowOpen ? LoadFlowAsync() : LoadItemsAsync());
+    private Task ToggleRecordingPauseAsync() => RunAsync(() =>
+    {
+        if (_snapshot.Paused) CaptureService.ResumeRecording(); else CaptureService.PauseRecording();
+        _snapshot = CaptureService.Snapshot; return Task.CompletedTask;
+    });
+    private Task BreakLivePathAsync() => RunAsync(() => { CaptureService.BreakPath(); _snapshot = CaptureService.Snapshot; return Task.CompletedTask; });
+    private Task ToggleFlowAsync() => RunAsync(async () => { _flowOpen = !_flowOpen; if (_flowOpen) { _following = false; await LoadFlowAsync(); } });
+    private async Task LoadFlowAsync()
+    {
+        try
+        {
+            for (var attempt = 0; attempt < 2; attempt++)
+            {
+                var material = await Task.Run(() => MaterialReader.GetScenarioMaterialAsync(_profileId, new()));
+                var overrides = await Store.GetScenarioFlowOverridesAsync(_profileId);
+                var version = await MaterialReader.GetScenarioMaterialVersionAsync(_profileId);
+                if (material.Version != version) continue;
+                _flowGraph = await Task.Run(() => ScenarioFlowMaterialAdapter.Build(material, overrides));
+                _flowMatchingComplete = material.MatchingComplete;
+                return;
+            }
+            throw new InvalidOperationException("記録が更新されました。フローチャートを更新して再試行してください。");
+        }
+        catch { _flowGraph = null; throw; }
+    }
+    private Task CutHistoryOccurrenceAsync(CaptureTextItem item) => RunAsync(async () =>
+    {
+        await Store.SetScenarioFlowCutAsync(_profileId, item.StartPosition);
+    }, "この出現から別経路にしました。");
+    private Task CutFlowOccurrenceAsync(ScenarioFlowOccurrence occurrence) => RunAsync(async () =>
+    {
+        await Store.SetScenarioFlowCutAsync(_profileId, occurrence.Start); await LoadFlowAsync();
+    }, "この出現から別経路にしました。他の周回の接続は残ります。");
+    private Task OpenFlowOccurrenceAsync(ScenarioFlowOccurrence occurrence) => RunAsync(async () =>
+    {
+        var all = await Store.GetGameCaptureItemsAsync(_profileId, limit: 0);
+        var index = all.ToList().FindIndex(x => x.SessionId == occurrence.Start.SessionId && x.Sequence == occurrence.Start.Sequence
+            && x.Start <= occurrence.Start.Offset && x.Start + x.Length > occurrence.Start.Offset);
+        if (index < 0) throw new InvalidOperationException("本文が更新されています。フローチャートを更新してください。");
+        _live = false; _flowOpen = false; _rangeId = 0; _filter = "all";
+        _textSearchInput = _textSearch = _speakerSearchInput = _speakerSearch = "";
+        _selected.Clear(); ClearTextRange(); _following = false; _offset = index;
+        _flowHighlighted = all[index].StartPosition;
+        await LoadItemsAsync(); _scrollToEnd = false;
+    });
+    private void OpenIndependentFlow() { if (!TextRangeValid) return; _independentFlowConfirm = true; _focusEditor = true; }
+    private Task CreateIndependentFlowAsync() => RunAsync(async () =>
+    {
+        if (!TextRangeValid) return;
+        await Store.CreateIndependentScenarioFlowAsync(_profileId, _rangeFirst!.StartPosition, _rangeLast!.EndPosition);
+        CloseEditors(); ClearTextRange(); _flowOpen = true; _following = false; await LoadFlowAsync();
+    });
     private Task ShowHistoryAsync() => RunAsync(async () => { _live = false; _profiles = await Store.GetCaptureProfilesAsync(); await LoadProfileAsync(); _scrollToEnd = false; });
     private Task ShowLiveAsync() => RunAsync(async () => { _snapshot = CaptureService.Snapshot; _live = true; _following = true; _profileId = _snapshot.Profile?.Id ?? 0; _profiles = await Store.GetCaptureProfilesAsync(); await LoadProfileAsync(); _scrollToEnd = true; });
     private Task FollowAsync() => RunAsync(async () => { _following = true; await LoadItemsAsync(); _scrollToEnd = true; });
@@ -909,7 +999,7 @@
     private Task AddBoundaryAsync() => RunAsync(async () => { if (_partition is null || _module is null) return; var position = await _module.InvokeAsync<int>("selectionStart", _rawInput); var next = _boundaries.Append(position).Distinct().Order().ToArray(); ScenarioTextProcessor.ValidateBoundaries(_partition.RawText, next); _boundaries.Clear(); _boundaries.AddRange(next); RebuildParts(); });
     private void RemoveBoundary(int index) { _boundaries.RemoveAt(index); RebuildParts(); }
     private Task SavePartitionAsync() => RunAsync(async () => { if (_partition is null) return; await Store.SplitCaptureEventAsync(_partition.SessionId, _partition.Sequence, _boundaries.ToArray(), _parts.Select(x => new CaptureManualPart(x.Label == 0 ? null : x.Label, IsNarration(x.Label) ? null : string.IsNullOrWhiteSpace(x.Speaker) ? null : x.Speaker.Trim())).ToArray()); CloseEditors(); _selected.Clear(); await LoadItemsAsync(); }, "分割を保存しました。");
-    private void CloseEditors() { CancelWindowPick(); _exportOpen = false; _screenshotSettingsOpen = false; _screenshotItem = null; _eventScreenshots = []; _galleryImage = _galleryError = null; _pausedCandidates = null; _edit = null; _partition = null; _settingsOpen = false; _bulkOpen = false; _rangeSelection = null; _historyDialog = HistoryDialog.None; _deletionTargets = []; _restoreFocus = true; }
+    private void CloseEditors() { CancelWindowPick(); _independentFlowConfirm = false; _exportOpen = false; _screenshotSettingsOpen = false; _screenshotItem = null; _eventScreenshots = []; _galleryImage = _galleryError = null; _pausedCandidates = null; _edit = null; _partition = null; _settingsOpen = false; _bulkOpen = false; _rangeSelection = null; _historyDialog = HistoryDialog.None; _deletionTargets = []; _restoreFocus = true; }
     [JSInvokable] public void CloseEditorFromKeyboard() { if (!_busy) { CloseEditors(); StateHasChanged(); } }
     private void OpenScreenshotSettings() { _screenshotSettingsOpen = true; _focusEditor = true; }
     private Task OpenScreenshotsAsync(CaptureTextItem item) => RunAsync(async () =>

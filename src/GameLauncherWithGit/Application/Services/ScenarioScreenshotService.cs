@@ -126,7 +126,7 @@ public sealed class ScenarioScreenshotService : IAsyncDisposable
             var capture = _capture.Snapshot;
             lock (_gate)
             {
-                if (_windowSession != capture.SessionId || !capture.Recording)
+                if (_windowSession != capture.SessionId || !capture.Active)
                 {
                     _windowSession = capture.Recording ? capture.SessionId : null;
                     _snapshot = _snapshot with { Window = null, ManualWindow = false };
@@ -141,7 +141,7 @@ public sealed class ScenarioScreenshotService : IAsyncDisposable
             else if (!capture.Recording)
             {
                 await _platform.UnregisterHotkeyAsync();
-                Update(s => s with { Registered = false, Status = "正式記録中に撮影できます" });
+                Update(s => s with { Registered = false, Status = capture.Paused ? "記録の一時停止中は撮影しません" : "正式記録中に撮影できます" });
             }
         }
         catch (Exception ex)

@@ -6,7 +6,7 @@ using System.Text.Json;
 
 namespace GameLauncherWithGit.Infrastructure.Services;
 
-public sealed partial class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncHistoryStore, ISaveLinkStore, IScenarioCaptureStore, IScenarioScreenshotStore
+public sealed partial class SqliteGameLibraryStore : IGameLibraryStore, IRepositorySyncHistoryStore, ISaveLinkStore, IScenarioCaptureStore, IScenarioScreenshotStore, IScenarioMaterialReader, IDisposable, IAsyncDisposable
 {
 	private const int DefaultMaxHistoryPerRepository = 50;
 	private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -315,6 +315,7 @@ public sealed partial class SqliteGameLibraryStore : IGameLibraryStore, IReposit
 
 	private async Task EnsureInitializedAsync(CancellationToken cancellationToken)
 	{
+		ObjectDisposedException.ThrowIf(_scenarioMatchingDisposed, this);
 		if (_isInitialized)
 		{
 			return;

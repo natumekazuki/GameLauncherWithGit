@@ -23,7 +23,10 @@ public interface IScenarioCaptureStore
     Task<IReadOnlyList<CaptureRange>> GetCaptureRangesAsync(long profileId);
     Task<long> SaveCaptureRangeAsync(long profileId, string name, CapturePosition start, CapturePosition end, IReadOnlyCollection<string>? tags = null);
     Task<IReadOnlyList<CaptureTextItem>> GetCaptureExportItemsAsync(long profileId, ScenarioArchiveSelection selection);
-    Task<bool> AppendCaptureAsync(long sessionId, CaptureReceived received, CaptureRules rules);
+    Task<bool> AppendCaptureAsync(long sessionId, CaptureReceived received, CaptureRules rules, bool startNewPath = false);
+    Task<ScenarioFlowOverrides> GetScenarioFlowOverridesAsync(long profileId);
+    Task SetScenarioFlowCutAsync(long profileId, CapturePosition before);
+    Task<long> CreateIndependentScenarioFlowAsync(long profileId, CapturePosition start, CapturePosition end);
     Task<IReadOnlyList<CaptureTextItem>> GetCaptureItemsAsync(long sessionId, int limit = 200, int offset = 0, long? labelId = null, bool unclassifiedOnly = false, bool latest = false);
     Task SetCaptureLabelsAsync(long sessionId, IReadOnlyCollection<long> itemIds, long? labelId);
     Task SetCaptureSpeakerAsync(long sessionId, long itemId, string? speaker);
