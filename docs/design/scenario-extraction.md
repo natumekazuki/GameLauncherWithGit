@@ -209,10 +209,13 @@ TXT出力は表示ページの200件制限ではなく、選択したゲーム�
 
 履歴の本文行からその原文に紐づく画像を開く。表示ページの原文key集合の添付件数を1SQLで取得し、画像ボタンに枚数を示す。0枚と取得失敗を区別し、件数表示のために画像本体を読まない。再分割された同じ原文の行にも同じ添付件数を示す。ZIP出力はTXTと同じ適用済みゲーム・区間・分類・名前・本文AND条件の全件を対象とし、表示ページ上限を適用しない。本文・分類・話者・区間・画像関連を同一DB snapshotで確定し、出力中は対象画像の削除と競合させない。ZIPは新規ファイルへ完成してから公開し、既存出力を上書きしない。欠落画像やコピー失敗を成功扱いしない。
 
-- `manifest.json`: format=`GameLauncherWithGit.scenario`、schemaVersion=2、出力時刻、ゲーム、条件snapshot、区間一覧`ranges`、UTF-16 code unit指定、hash方式、画像IDと相対path・寸法・hash。`identifierScope=archive`のIDはそのZIP内の参照に使い、別ZIPやDBとの永続照合には使わない。`selection.rangeId`は選択した区間のID（ゲーム全体はnull）であり、区間定義の複製は持たない。選択しても一致本文がなければ`ranges`は空になり得る。
+- `manifest.json`: format=`GameLauncherWithGit.scenario`、schemaVersion=3、出力時刻、ゲーム、条件snapshot、区間一覧`ranges`、UTF-16 code unit指定、hash方式、画像IDと相対path・寸法・hash。`identifierScope=archive`のIDはそのZIP内の参照に使い、別ZIPやDBとの永続照合には使わない。`selection.rangeId`は選択区間のID（全域ならnull）、`selection.labelId`は分類ID（分類指定なしならnull）。ID/referenceはJSON文字列、受信連番・UTF-16位置などの量はJSON numberとする。区間定義の複製は持たず、選択しても一致本文がなければ`ranges`は空になり得る。
 - `texts.jsonl`: 原文イベントごと1行。取得回・受信連番・原文内開始位置順で、選択された現在のsegmentの開始・長さ・本文・有効分類/ラベル/話者と、画像ID・撮影時刻を記載する。除外部分を含む`rawText`は出力しない。同文別イベントを統合しない。
-- `material.json`: 同じsnapshotの共通資料（上記`version/matchingComplete/contents/occurrences/matches`）。manifestの`materialFile`から参照し、`materialVersion`と`matchingComplete`もmanifestへ記載する。共通本文を一度で読む利用側はこちらを読み、従来の出現ごとの本文が必要なら`texts.jsonl`を使う。schema 2の既存本文・区間・元境界・spans・画像構造を置換しない加算fileで、旧ZIPは変換・上書きしない。
+- `material.json`: 同じsnapshotの共通資料（上記`version/matchingComplete/contents/occurrences/matches`）。manifestの`materialFile`から参照し、`materialVersion`と`matchingComplete`もmanifestへ記載する。共通本文を一度で読む利用側はこちらを読み、従来の出現ごとの本文が必要なら`texts.jsonl`を使う。schema 2で定義した本文・区間・元境界・spans・画像構造を置換しない加算fileで、旧ZIPは変換・上書きしない。
+
 - `images/<id>.png`: 選択本文が参照する画像だけを重複なく収録する。IDは出力内識別子、pathは相対pathとし、端末上の絶対pathは載せない。部分区間でも画像の関連範囲は`capture_event`、方法は`latest_received_body`と明示し、後続本文へ暗黙に持ち越さない。
+
+新規ZIPはschemaVersion=3を使う。schema 2で定義した`texts.jsonl`、`ranges`、元境界、spans、画像metadataと選択動作は維持し、manifestには共通資料への参照を追加する。ID/referenceは文字列で出力する。64bit整数として保持するIDは不変文化の10進文字列とし、既存のopaque ID（例：hex形式の画像ID、`content-N`のcontent/match ID）および複合ID（例：`eventId`、occurrence ID）は元の文字列表現を維持する。`contents[].kind`と出力条件の`kind`は`Dialogue` / `Narration` / `Other`の文字列、未判定は`null`にする。revision、matching revision、受信連番、UTF-16位置と長さなどの量はJSON numberのままにする。ドメインsnapshotを直接JSON化せず、materialは出力専用wire projectionを使い、manifestの`materialVersion`はmaterialの`version`と同じ形・値を持つ。IDを文字列として出力することで64bit値をJSON numberとして読む際の精度損失を避ける。既存schema 2 ZIPは変更・変換しない。
 
 `ranges`の各要素は文字列`id`、`name`、`start`、`end`、文字列配列`tags`、交差範囲配列`spans`を持つ。保存済み区間の開始位置順（同位置はID順）で、同名・重複・隣接区間は独立したIDのまま保持する。区間を追加してもJSONL本文を複製せず、区間外の本文も現在の出力条件に従って出す。
 
@@ -222,9 +225,9 @@ TXT出力は表示ページの200件制限ではなく、選択したゲーム�
 
 区間・タグ・分類・名前・本文の絞込みがないゲーム全体出力は、本文削除で空になったものも含めて全保存区間を収録し、その場合の`spans`は空配列になる。検索の空白だけの値と空のタグ配列は絞込みとしない。それ以外は、すべての出力条件適用後のsegmentと交わる区間だけを収録する。選択区間も例外にせず、無一致時に名前・境界・タグを別経路から出さない。交差する区間の元境界・名前・全タグは出力するが、無関係な区間や除外範囲内だけの区間metadataは出さない。出力条件として指定された検索語・包含/除外タグ名と`rangeId`は条件snapshotに保持する。
 
-schema 2では区間定義を`ranges`へ明示し、選択区間の表現を`selection.rangeId`へ統一する。既存ZIPを上書き・変換せず、新しく出すZIPの契約として適用する。ZIPを読む側は`schemaVersion`を確認する。アプリにはZIP再取込・旧schema読出し・互換出力の経路を設けない。
+schema 3でも区間定義を`ranges`へ明示し、選択区間の表現を`selection.rangeId`へ統一する。ID/referenceは文字列、量は数値というwire型をZIP全体で保つ。既存ZIPを上書き・変換せず、新しく出すZIPの契約として適用する。ZIPを読む側は`schemaVersion`を確認する。アプリにはZIP再取込・旧schema読出し・互換出力の経路を設けない。
 
-schema 2の加算metadataである`manifest.screenshotOccurrences`は、選択済み本文を持つ原文ごとに一要素を持ち、`eventId`、raw取得回の文字列`sessionId`、数値`receiveSequence`、文字列配列`imageIds`を示す。部分event・複数segmentでも一要素で、選択後の原文だけを含む。空配列は確認済みの添付なし、要素不在は選択投影外であり未添付と決めつけない。同じ画像を複数eventが使う場合は各出現を残し、実ファイルと`manifest.images`は画像ごと一つだけにする。対応するJSONLのevent画像集合と一致させ、先行する共通contentの画像を推定で付けない。
+`manifest.screenshotOccurrences`は、選択済み本文を持つ原文ごとに一要素を持ち、`eventId`、raw取得回の文字列`sessionId`、数値`receiveSequence`、文字列配列`imageIds`を示す。部分event・複数segmentでも一要素で、選択後の原文だけを含む。空配列は確認済みの添付なし、要素不在は選択投影外であり未添付と決めつけない。同じ画像を複数eventが使う場合は各出現を残し、実ファイルと`manifest.images`は画像ごと一つだけにする。対応するJSONLのevent画像集合と一致させ、先行する共通contentの画像を推定で付けない。
 
 画像位置を引く側は、本文JSONLやPNGを開かず`sessionId`と`receiveSequence`の両方でこの配列を探し、得た画像IDのpathを`manifest.images`で解決する。ZIPのevent IDはarchive内参照であり永続照合の根拠にしない。内部`IScenarioScreenshotStore.GetEventScreenshotMetadataAsync(captureGameId, events, cancellationToken)`も同じevent粒度で、要求順のID・撮影時刻と添付0件を返す。不在・他作品の原文はエラーとし、0件へ置換しない。本文・PNG本体をSELECTせず、共通readerも同transactionのこのmetadata処理を使う。
 

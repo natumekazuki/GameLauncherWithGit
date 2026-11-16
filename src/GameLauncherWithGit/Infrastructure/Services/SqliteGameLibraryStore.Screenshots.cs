@@ -1,5 +1,6 @@
 using GameLauncherWithGit.Application.Models;
 using Microsoft.Data.Sqlite;
+using System.Globalization;
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
@@ -11,6 +12,7 @@ public sealed partial class SqliteGameLibraryStore
     private const string ImageHashAlgorithm = "sha256-dimensions-rgba8-v1";
     private sealed record ScenarioScreenshotAsset(string ImageId, int Width, int Height, string PixelHash, string FilePath);
     private readonly SemaphoreSlim _screenshotFilesLock = new(1, 1);
+    private static string FormatScenarioId(long id) => id.ToString(CultureInfo.InvariantCulture);
     private string ScreenshotPath(string id) => Path.Combine(Path.GetDirectoryName(Path.GetFullPath(_databasePath))!, "scenario-images", id + ".png");
 
     public async Task<ScenarioScreenshot> SaveScreenshotAsync(ScreenshotTarget target, ScreenshotImageData image, DateTimeOffset capturedAt, CancellationToken cancellationToken = default)
@@ -269,6 +271,7 @@ public sealed partial class SqliteGameLibraryStore
         var ranges = await ReadCaptureRangesAsync(connection, transaction, captureGameId);
         var items = await ReadCaptureExportItemsAsync(connection, transaction, captureGameId, selection, ranges);
         var material = await ReadScenarioMaterialAsync(connection, transaction, captureGameId, selection, ranges, items);
+        var materialWire = ScenarioMaterialWireAdapter.ToWire(material);
         var includeAllRanges = selection.RangeId is null && selection.LabelId is null && !selection.UnclassifiedOnly
             && selection.Kind is null && string.IsNullOrWhiteSpace(selection.TextSearch) && string.IsNullOrWhiteSpace(selection.SpeakerSearch)
             && NormalizeCaptureTags(selection.IncludeTags).Length == 0 && NormalizeCaptureTags(selection.ExcludeTags).Length == 0;
@@ -283,14 +286,14 @@ public sealed partial class SqliteGameLibraryStore
         {
             var key = group.Key;
             var attached = group.SelectMany(x => x.Images).GroupBy(x => x.ImageId).Select(x => x.First()).ToArray();
-            var eventId = $"{group.Key.SessionId}:{group.Key.Sequence}";
-            screenshotOccurrences.Add(new { eventId, sessionId = key.SessionId.ToString(),
+            var eventId = $"{FormatScenarioId(group.Key.SessionId)}:{FormatScenarioId(group.Key.Sequence)}";
+            screenshotOccurrences.Add(new { eventId, sessionId = FormatScenarioId(key.SessionId),
                 receiveSequence = key.Sequence, imageIds = attached.Select(x => x.ImageId).ToArray() });
             rows.Add(new { order = rows.Count + 1, eventId,
-                sessionId = key.SessionId.ToString(), receiveSequence = key.Sequence, receivedAt = group.First().ReceivedAt,
+                sessionId = FormatScenarioId(key.SessionId), receiveSequence = key.Sequence, receivedAt = group.First().ReceivedAt,
                 segments = group.Select(x => new { startUtf16 = x.Source.StartUtf16, lengthUtf16 = x.Source.LengthUtf16,
-                    text = contents[x.ContentId].Text, kind = contents[x.ContentId].Kind?.ToString(),
-                    speaker = x.Speaker, label = x.LabelId is null ? null : new { id = x.LabelId.ToString(), name = x.LabelName } }).ToArray(),
+                    text = contents[x.ContentId].Text, kind = ScenarioMaterialWireAdapter.KindName(contents[x.ContentId].Kind),
+                    speaker = x.Speaker, label = x.LabelId is null ? null : new { id = FormatScenarioId(x.LabelId.Value), name = x.LabelName } }).ToArray(),
                 images = attached.Select(x => new { imageId = x.ImageId, capturedAt = x.CapturedAt, scope = "capture_event", binding = "latest_received_body" }).ToArray() });
         }
         await transaction.CommitAsync();
@@ -304,15 +307,17 @@ public sealed partial class SqliteGameLibraryStore
                 using (var zip = new ZipArchive(file, ZipArchiveMode.Create, leaveOpen: true))
                 {
                     await using (var manifest = zip.CreateEntry("manifest.json").Open())
-                        await JsonSerializer.SerializeAsync(manifest, new { format = "GameLauncherWithGit.scenario", schemaVersion = 2, exportedAt = DateTimeOffset.UtcNow,
-                            identifierScope = "archive", game = new { captureGameId = captureGameId.ToString(), title },
-                            selection = new { scope = selection.RangeId is null ? "game" : "range", rangeId = selection.RangeId?.ToString(), selection.LabelId, selection.UnclassifiedOnly, kind = selection.Kind?.ToString(), selection.TextSearch, selection.SpeakerSearch,
+                        await JsonSerializer.SerializeAsync(manifest, new { format = "GameLauncherWithGit.scenario", schemaVersion = 3, exportedAt = DateTimeOffset.UtcNow,
+                            identifierScope = "archive", game = new { captureGameId = FormatScenarioId(captureGameId), title },
+                            selection = new { scope = selection.RangeId is null ? "game" : "range", rangeId = selection.RangeId is long rangeId ? FormatScenarioId(rangeId) : null,
+                                labelId = selection.LabelId is long labelId ? FormatScenarioId(labelId) : null,
+                                selection.UnclassifiedOnly, kind = ScenarioMaterialWireAdapter.KindName(selection.Kind), selection.TextSearch, selection.SpeakerSearch,
                                 includeTags = NormalizeCaptureTags(selection.IncludeTags), excludeTags = NormalizeCaptureTags(selection.ExcludeTags) },
-                            ranges = archiveRanges, screenshotOccurrences, materialFile = "material.json", materialVersion = material.Version,
+                            ranges = archiveRanges, screenshotOccurrences, materialFile = "material.json", materialVersion = materialWire.Version,
                             matchingComplete = material.MatchingComplete, textFile = "texts.jsonl", textIndexUnit = "utf16_code_unit", imageHashAlgorithm = ImageHashAlgorithm,
                             images = images.Values.Select(x => new { id = x.ImageId, path = $"images/{x.ImageId}.png", mediaType = "image/png", width = x.Width, height = x.Height, pixelHash = x.PixelHash }) }, JsonOptions);
                     await using (var materialFile = zip.CreateEntry("material.json").Open())
-                        await JsonSerializer.SerializeAsync(materialFile, material, JsonOptions);
+                        await JsonSerializer.SerializeAsync(materialFile, materialWire, JsonOptions);
                     await using (var writer = new StreamWriter(zip.CreateEntry("texts.jsonl").Open(), new UTF8Encoding(false)))
                         foreach (var row in rows) await writer.WriteLineAsync(JsonSerializer.Serialize(row, JsonOptions));
                     foreach (var image in images.Values)
@@ -372,7 +377,7 @@ public sealed partial class SqliteGameLibraryStore
     {
         static object Position(CapturePosition position) => new
         {
-            sessionId = position.SessionId.ToString(), receiveSequence = position.Sequence, offsetUtf16 = position.Offset
+            sessionId = FormatScenarioId(position.SessionId), receiveSequence = position.Sequence, offsetUtf16 = position.Offset
         };
         var result = new List<object>();
         foreach (var range in ranges)
@@ -380,10 +385,10 @@ public sealed partial class SqliteGameLibraryStore
             // Intersect with the final slices, not their enclosing bounds: exclusions and searches can leave holes.
             var spans = items.Select(item => (Item: item, Bounds: ClipCaptureInterval(item, range)))
                 .Where(x => x.Bounds.From < x.Bounds.To)
-                .Select(x => new { eventId = $"{x.Item.SessionId}:{x.Item.Sequence}", startUtf16 = x.Bounds.From, lengthUtf16 = x.Bounds.To - x.Bounds.From })
+                .Select(x => new { eventId = $"{FormatScenarioId(x.Item.SessionId)}:{FormatScenarioId(x.Item.Sequence)}", startUtf16 = x.Bounds.From, lengthUtf16 = x.Bounds.To - x.Bounds.From })
                 .ToArray();
             if (includeAll || spans.Length > 0)
-                result.Add(new { id = range.Id.ToString(), name = range.Name, start = Position(range.Start), end = Position(range.End), tags = range.Tags, spans });
+                result.Add(new { id = FormatScenarioId(range.Id), name = range.Name, start = Position(range.Start), end = Position(range.End), tags = range.Tags, spans });
         }
         return result.ToArray();
     }

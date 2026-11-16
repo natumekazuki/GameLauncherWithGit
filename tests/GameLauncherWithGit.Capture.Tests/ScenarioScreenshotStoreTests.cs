@@ -29,6 +29,18 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
     }
     private Task<bool> Append(long session, long sequence, string text = "本文", CaptureRole role = CaptureRole.Body) =>
         _store.AppendCaptureAsync(session, new(sequence, Time.AddSeconds(-sequence), Source, text, role), new());
+    private async Task SeedCaptureLabel(long captureGameId, long labelId, string name, CaptureKind kind)
+    {
+        await using var connection = new SqliteConnection($"Data Source={Path.Combine(_directory, "library.db")}");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "INSERT INTO CaptureLabels(Id,CaptureGameId,Name,Kind) VALUES($id,$game,$name,$kind)";
+        command.Parameters.AddWithValue("$id", labelId);
+        command.Parameters.AddWithValue("$game", captureGameId);
+        command.Parameters.AddWithValue("$name", name);
+        command.Parameters.AddWithValue("$kind", (int)kind);
+        await command.ExecuteNonQueryAsync();
+    }
     private async Task AppendVisit(long session, IEnumerable<string> texts)
     {
         long sequence = 0;
@@ -370,7 +382,7 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         var info = Assert.Single(manifest.RootElement.GetProperty("images").EnumerateArray());
         Assert.NotNull(zip.GetEntry(info.GetProperty("path").GetString()!));
         Assert.Equal("GameLauncherWithGit.scenario", manifest.RootElement.GetProperty("format").GetString());
-        Assert.Equal(2, manifest.RootElement.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(3, manifest.RootElement.GetProperty("schemaVersion").GetInt32());
     }
 
     // @test-value v2
@@ -633,7 +645,7 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         Assert.Equal(new[] { "前😀ABC後", "次本文", "区間外" }, rows.SelectMany(x => x.GetProperty("segments").EnumerateArray()).Select(x => x.GetProperty("text").GetString()));
         using var document = JsonDocument.Parse(zip.GetEntry("manifest.json")!.Open());
         var manifest = document.RootElement;
-        Assert.Equal(2, manifest.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(3, manifest.GetProperty("schemaVersion").GetInt32());
         Assert.Equal("utf16_code_unit", manifest.GetProperty("textIndexUnit").GetString());
         var ranges = manifest.GetProperty("ranges").EnumerateArray().ToArray();
         Assert.Equal(new[] { first, overlap, adjacent, empty }.Select(x => x.ToString()), ranges.Select(x => x.GetProperty("id").GetString()));
@@ -795,7 +807,7 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
 
     // @test-value v2
     // kind = "invariant"
-    // claim = "schema 2 manifestは選択イベントごとにraw位置と一意な画像ID対応を一度だけ示し本文のimagesと一致する"
+    // claim = "schema 3 manifestは選択イベントごとにraw位置と一意な画像ID対応を一度だけ示し本文のimagesと一致する"
     // oracle = { type = "contract", ref = "https://github.com/natumekazuki/GameLauncherWithGit/issues/32" }
     // fault = "未タグの部分・重複区間でevent単位の添付を欠落・複製する、同一画像の別出現を統合する、または範囲外画像を漏らす"
     // observable = "実ZIPのscreenshotOccurrences、texts.jsonl画像ID、ranges.spans、manifest images一覧とPNG entry集合"
@@ -829,7 +841,7 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         var rows = await Rows(zip);
         using var document = JsonDocument.Parse(zip.GetEntry("manifest.json")!.Open());
         var manifest = document.RootElement;
-        Assert.Equal(2, manifest.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(3, manifest.GetProperty("schemaVersion").GetInt32());
         Assert.Equal(new[] { "b", "cd", "ef", "gh", "i" }, rows.SelectMany(x => x.GetProperty("segments").EnumerateArray())
             .Select(x => x.GetProperty("text").GetString()));
 
@@ -870,7 +882,7 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
     // fault = "共通本文の出現を消す、分岐を共通化する、画像を別周へ混ぜる、選択外参照を出す、またはmanifestとmaterialの版がずれる"
     // observable = "material.jsonのcontents/occurrences/matches/version、manifestのmaterial参照、JSONLとの出現・画像対応、tag/UTF-16 partial選択"
     // observation_boundary = "consumer"
-    // scope = "schema 2 ZIP common scenario material projection"
+    // scope = "schema 3 ZIP common scenario material projection"
     // lifecycle = "permanent"
     // impact = "分析側が共通本文を一度だけ読み、選択中の各周・分岐・画像をraw位置から復元できる"
     // distinction = "reader testはsnapshot APIを検証し、このtestはZIP同梱projection・manifest連携・従来本文出力との一致を検証する"
@@ -902,12 +914,14 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         var manifest = manifestDocument.RootElement;
         var material = materialDocument.RootElement;
 
-        Assert.Equal(2, manifest.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(3, manifest.GetProperty("schemaVersion").GetInt32());
         Assert.Equal("material.json", manifest.GetProperty("materialFile").GetString());
         Assert.True(manifest.GetProperty("matchingComplete").GetBoolean());
         Assert.True(material.GetProperty("matchingComplete").GetBoolean());
-        Assert.Equal(manifest.GetProperty("materialVersion").GetProperty("captureGameId").GetInt64(),
-            material.GetProperty("version").GetProperty("captureGameId").GetInt64());
+        Assert.Equal(manifest.GetProperty("game").GetProperty("captureGameId").GetString(),
+            manifest.GetProperty("materialVersion").GetProperty("captureGameId").GetString());
+        Assert.Equal(manifest.GetProperty("materialVersion").GetProperty("captureGameId").GetString(),
+            material.GetProperty("version").GetProperty("captureGameId").GetString());
         Assert.Equal(manifest.GetProperty("materialVersion").GetProperty("revision").GetInt64(),
             material.GetProperty("version").GetProperty("revision").GetInt64());
         Assert.Equal(manifest.GetProperty("materialVersion").GetProperty("matchingRevision").GetInt64(),
@@ -918,6 +932,22 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         var contents = material.GetProperty("contents").EnumerateArray().ToArray();
         var occurrences = material.GetProperty("occurrences").EnumerateArray().ToArray();
         var matches = material.GetProperty("matches").EnumerateArray().ToArray();
+        Assert.All(contents, content => Assert.True(content.GetProperty("id").ValueKind == JsonValueKind.String));
+        Assert.All(contents, content => Assert.True(content.GetProperty("kind").ValueKind is JsonValueKind.String or JsonValueKind.Null));
+        Assert.All(occurrences, occurrence =>
+        {
+            Assert.Equal(JsonValueKind.String, occurrence.GetProperty("id").ValueKind);
+            Assert.Equal(JsonValueKind.String, occurrence.GetProperty("contentId").ValueKind);
+            var source = occurrence.GetProperty("source");
+            Assert.Equal(JsonValueKind.String, source.GetProperty("captureGameId").ValueKind);
+            Assert.Equal(JsonValueKind.String, source.GetProperty("sessionId").ValueKind);
+            Assert.Equal(JsonValueKind.Number, source.GetProperty("receiveSequence").ValueKind);
+            Assert.Equal(JsonValueKind.Number, source.GetProperty("startUtf16").ValueKind);
+            Assert.Equal(JsonValueKind.Number, source.GetProperty("lengthUtf16").ValueKind);
+            Assert.True(occurrence.GetProperty("labelId").ValueKind is JsonValueKind.String or JsonValueKind.Null);
+            Assert.All(occurrence.GetProperty("images").EnumerateArray(), imageRef =>
+                Assert.Equal(JsonValueKind.String, imageRef.GetProperty("imageId").ValueKind));
+        });
         Assert.Equal(8, contents.Length);
         Assert.Equal(21, occurrences.Length);
         Assert.Equal(7, matches.Length);
@@ -926,17 +956,32 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         Assert.Contains(contents, content => content.GetProperty("text").GetString() == "うん");
         var branch = Assert.Single(contents, content => content.GetProperty("text").GetString() == "いや");
         Assert.DoesNotContain(matches, match => match.GetProperty("id").GetString() == branch.GetProperty("id").GetString());
+        Assert.All(matches, match =>
+        {
+            Assert.Equal(JsonValueKind.String, match.GetProperty("id").ValueKind);
+            Assert.All(match.GetProperty("items").EnumerateArray(), pair =>
+            {
+                foreach (var position in new[] { pair.GetProperty("representative"), pair.GetProperty("revisit") })
+                {
+                    Assert.Equal(JsonValueKind.String, position.GetProperty("captureGameId").ValueKind);
+                    Assert.Equal(JsonValueKind.String, position.GetProperty("sessionId").ValueKind);
+                    Assert.Equal(JsonValueKind.Number, position.GetProperty("receiveSequence").ValueKind);
+                    Assert.Equal(JsonValueKind.Number, position.GetProperty("startUtf16").ValueKind);
+                    Assert.Equal(JsonValueKind.Number, position.GetProperty("lengthUtf16").ValueKind);
+                }
+            });
+        });
 
         foreach (var (session, expected) in new[] { (first, common), (second, variant), (third, common) })
         {
-            var actual = occurrences.Where(occurrence => occurrence.GetProperty("source").GetProperty("sessionId").GetInt64() == session)
+            var actual = occurrences.Where(occurrence => occurrence.GetProperty("source").GetProperty("sessionId").GetString() == session.ToString())
                 .Select(occurrence => contents.Single(content => content.GetProperty("id").GetString() == occurrence.GetProperty("contentId").GetString())
                     .GetProperty("text").GetString()).ToArray();
             Assert.Equal(expected, actual);
         }
 
         var pictured = Assert.Single(occurrences, occurrence => occurrence.GetProperty("images").GetArrayLength() > 0);
-        Assert.Equal(second, pictured.GetProperty("source").GetProperty("sessionId").GetInt64());
+        Assert.Equal(second.ToString(), pictured.GetProperty("source").GetProperty("sessionId").GetString());
         Assert.Equal(4, pictured.GetProperty("source").GetProperty("receiveSequence").GetInt64());
         Assert.Equal(image.ImageId, Assert.Single(pictured.GetProperty("images").EnumerateArray()).GetProperty("imageId").GetString());
         Assert.Equal(new[] { image.ImageId }, manifest.GetProperty("images").EnumerateArray().Select(x => x.GetProperty("id").GetString()));
@@ -947,10 +992,14 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         {
             var occurrence = occurrences[index];
             var row = rows[index];
-            Assert.Equal(occurrence.GetProperty("source").GetProperty("sessionId").GetInt64().ToString(), row.GetProperty("sessionId").GetString());
+            Assert.Equal(occurrence.GetProperty("source").GetProperty("sessionId").GetString(), row.GetProperty("sessionId").GetString());
             Assert.Equal(occurrence.GetProperty("source").GetProperty("receiveSequence").GetInt64(), row.GetProperty("receiveSequence").GetInt64());
             Assert.Equal(occurrence.GetProperty("images").EnumerateArray().Select(x => x.GetProperty("imageId").GetString()),
                 row.GetProperty("images").EnumerateArray().Select(x => x.GetProperty("imageId").GetString()));
+            var segment = Assert.Single(row.GetProperty("segments").EnumerateArray());
+            Assert.True(segment.GetProperty("kind").ValueKind is JsonValueKind.String or JsonValueKind.Null);
+            if (segment.GetProperty("label").ValueKind == JsonValueKind.Object)
+                Assert.Equal(JsonValueKind.String, segment.GetProperty("label").GetProperty("id").ValueKind);
         }
 
         await _store.SaveCaptureRangeAsync(game, "二周目", new(second, 1, 0), new(second, 7, variant[6].Length), ["second"]);
@@ -961,7 +1010,7 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
             var selected = taggedMaterial.RootElement;
             Assert.Equal(7, selected.GetProperty("occurrences").GetArrayLength());
             Assert.All(selected.GetProperty("occurrences").EnumerateArray(), occurrence =>
-                Assert.Equal(second, occurrence.GetProperty("source").GetProperty("sessionId").GetInt64()));
+                Assert.Equal(second.ToString(), occurrence.GetProperty("source").GetProperty("sessionId").GetString()));
             Assert.Equal(variant, selected.GetProperty("occurrences").EnumerateArray().Select(occurrence =>
                 selected.GetProperty("contents").EnumerateArray().Single(content => content.GetProperty("id").GetString() == occurrence.GetProperty("contentId").GetString())
                     .GetProperty("text").GetString()));
@@ -973,13 +1022,158 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         using var partialMaterial = JsonDocument.Parse(partialZip.GetEntry("material.json")!.Open());
         var partial = partialMaterial.RootElement;
         var partialOccurrence = Assert.Single(partial.GetProperty("occurrences").EnumerateArray());
-        Assert.Equal(second, partialOccurrence.GetProperty("source").GetProperty("sessionId").GetInt64());
+        Assert.Equal(second.ToString(), partialOccurrence.GetProperty("source").GetProperty("sessionId").GetString());
         Assert.Equal(1, partialOccurrence.GetProperty("source").GetProperty("receiveSequence").GetInt64());
         Assert.Equal(2, partialOccurrence.GetProperty("source").GetProperty("startUtf16").GetInt32());
         Assert.Equal(2, partialOccurrence.GetProperty("source").GetProperty("lengthUtf16").GetInt32());
         Assert.Equal("😀", partial.GetProperty("contents").EnumerateArray().Single().GetProperty("text").GetString());
         Assert.Empty(partial.GetProperty("occurrences").EnumerateArray().SelectMany(x => x.GetProperty("images").EnumerateArray()));
         Assert.DoesNotContain(JsonStrings(partial), text => common.Contains(text) || variant.Contains(text));
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "ZIP内materialとtextsは全公開kind値/nullおよび64bit label IDを精度損失なく同じ文字列表現で出し、版・出現量は数値で保つ"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md: 手動スクリーンショットと分析用ZIP" }
+    // fault = "出力enumが数値化する、IDをJSON numberで出して桁落ちする、またはsequence/UTF-16位置を文字列化する"
+    // observable = "完成ZIPのmaterial.json、manifest.json、texts.jsonlにあるkind・label/source/versionのJSON value kindと正確な値"
+    // observation_boundary = "consumer"
+    // scope = "scenario archive kind and identifier wire format"
+    // lifecycle = "permanent"
+    // impact = "外部JSON consumerがkindとラベル参照を一貫して読み、64bit IDを正確に保持できる"
+    // distinction = "domain-level testsはenum/longの内部値を確認し、このtestは実ZIPへ書かれたJSON wire contractを確認する"
+    // @end-test-value
+    [Fact]
+    public async Task ArchiveMaterialUsesUnifiedWireKindsAndIdentifiers()
+    {
+        const long largeLabelId = 9007199254740993;
+        var (game, session) = await StartAsync();
+        await SeedCaptureLabel(game, largeLabelId, "その他", CaptureKind.Other);
+        await Append(session, 1, "dialogue text");
+        await Append(session, 2, "narration text");
+        await Append(session, 3, "other text");
+        await Append(session, 4, "unclassified text");
+        var items = await _store.GetCaptureItemsAsync(session, 0);
+        var labels = await _store.GetCaptureLabelsAsync(game);
+        await _store.SetCaptureLabelsAsync(session, [items[0].Id], Assert.Single(labels, label => label.Kind == CaptureKind.Dialogue).Id);
+        await _store.SetCaptureLabelsAsync(session, [items[1].Id], Assert.Single(labels, label => label.Kind == CaptureKind.Narration).Id);
+        await _store.SetCaptureLabelsAsync(session, [items[2].Id], largeLabelId);
+        await _store.SetCaptureLabelsAsync(session, [items[3].Id], null);
+
+        var output = Output("material-wire-types");
+        await _store.ExportScenarioArchiveAsync(game, new(), output);
+        using var zip = ZipFile.OpenRead(output);
+        using var manifestDocument = JsonDocument.Parse(zip.GetEntry("manifest.json")!.Open());
+        using var materialDocument = JsonDocument.Parse(zip.GetEntry("material.json")!.Open());
+        var manifest = manifestDocument.RootElement;
+        var material = materialDocument.RootElement;
+        Assert.Equal(JsonValueKind.String, manifest.GetProperty("game").GetProperty("captureGameId").ValueKind);
+        Assert.Equal(JsonValueKind.String, manifest.GetProperty("materialVersion").GetProperty("captureGameId").ValueKind);
+        Assert.Equal(manifest.GetProperty("game").GetProperty("captureGameId").GetString(),
+            manifest.GetProperty("materialVersion").GetProperty("captureGameId").GetString());
+        Assert.Equal(manifest.GetProperty("materialVersion").GetProperty("captureGameId").GetString(),
+            material.GetProperty("version").GetProperty("captureGameId").GetString());
+        Assert.Equal(JsonValueKind.Number, material.GetProperty("version").GetProperty("revision").ValueKind);
+        Assert.Equal(JsonValueKind.Number, material.GetProperty("version").GetProperty("matchingRevision").ValueKind);
+
+        var contents = material.GetProperty("contents").EnumerateArray().ToArray();
+        Assert.Equal(new string?[] { "Dialogue", "Narration", "Other", null }, contents.Select(content =>
+            content.GetProperty("kind").ValueKind == JsonValueKind.Null ? null : content.GetProperty("kind").GetString()));
+        var occurrences = material.GetProperty("occurrences").EnumerateArray().ToArray();
+        Assert.Equal(4, occurrences.Length);
+        Assert.All(occurrences, occurrence =>
+        {
+            var source = occurrence.GetProperty("source");
+            Assert.Equal(JsonValueKind.String, source.GetProperty("captureGameId").ValueKind);
+            Assert.Equal(game.ToString(), source.GetProperty("captureGameId").GetString());
+            Assert.Equal(JsonValueKind.String, source.GetProperty("sessionId").ValueKind);
+            Assert.Equal(session.ToString(), source.GetProperty("sessionId").GetString());
+            Assert.Equal(JsonValueKind.Number, source.GetProperty("receiveSequence").ValueKind);
+            Assert.Equal(JsonValueKind.Number, source.GetProperty("startUtf16").ValueKind);
+            Assert.Equal(JsonValueKind.Number, source.GetProperty("lengthUtf16").ValueKind);
+            Assert.True(occurrence.GetProperty("labelId").ValueKind is JsonValueKind.String or JsonValueKind.Null);
+        });
+        Assert.Equal(largeLabelId.ToString(System.Globalization.CultureInfo.InvariantCulture), occurrences[2].GetProperty("labelId").GetString());
+
+        var rows = await Rows(zip);
+        Assert.Equal(contents.Select(x => x.GetProperty("kind").ValueKind == JsonValueKind.Null ? null : x.GetProperty("kind").GetString()),
+            rows.Select(row => Assert.Single(row.GetProperty("segments").EnumerateArray()).GetProperty("kind").ValueKind == JsonValueKind.Null
+                ? null : Assert.Single(row.GetProperty("segments").EnumerateArray()).GetProperty("kind").GetString()));
+        var thirdLabel = Assert.Single(rows[2].GetProperty("segments").EnumerateArray()).GetProperty("label");
+        Assert.Equal(largeLabelId.ToString(System.Globalization.CultureInfo.InvariantCulture), thirdLabel.GetProperty("id").GetString());
+
+        await _store.ExportScenarioArchiveAsync(game, new(LabelId: largeLabelId), Output("material-wire-selected-label"));
+        using var selectedZip = ZipFile.OpenRead(Output("material-wire-selected-label"));
+        using var selectedManifestDocument = JsonDocument.Parse(selectedZip.GetEntry("manifest.json")!.Open());
+        var selectedManifest = selectedManifestDocument.RootElement;
+        Assert.Equal(3, selectedManifest.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(JsonValueKind.String, selectedManifest.GetProperty("selection").GetProperty("labelId").ValueKind);
+        Assert.Equal(largeLabelId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            selectedManifest.GetProperty("selection").GetProperty("labelId").GetString());
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "material JSON wire projection writes all 64-bit identifiers as exact strings, public kind names or null, and keeps revision/counter/UTF-16 quantities numeric"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md: 手動スクリーンショットと分析用ZIP" }
+    // fault = "default enum/long serialization leaks numeric kinds or loses identifier precision, or stringifies version counters and source offsets"
+    // observable = "serialized JSON property kinds and exact values for content, labels, version, occurrence and match pair references"
+    // observation_boundary = "consumer"
+    // scope = "scenario material archive JSON wire projection"
+    // lifecycle = "permanent"
+    // impact = "JSON consumers can compare every 64-bit ID exactly without confusing counters and UTF-16 positions with identifiers"
+    // distinction = "ZIP integration tests verify projection values from the database; this synthetic exact-value test covers all enum kinds and IDs beyond JavaScript safe integer precision"
+    // @end-test-value
+    [Fact]
+    public void ScenarioMaterialWireProjectionUnifiesIdentifiersKindsAndQuantities()
+    {
+        const long largeId = 9007199254740993;
+        var first = new ScenarioOccurrenceRef(largeId, largeId + 1, 12, 2, 4);
+        var revisit = new ScenarioOccurrenceRef(largeId, largeId + 2, 19, 6, 3);
+        var snapshot = new ScenarioMaterialSnapshot(
+            new(largeId, 41, 37), true,
+            [new("content-dialogue", "セリフ", CaptureKind.Dialogue),
+             new("content-narration", "地の文", CaptureKind.Narration),
+             new("content-other", "その他", CaptureKind.Other),
+             new("content-null", "未判定", null)],
+            [new("occurrence-dialogue", first, "content-dialogue", "話者", largeId + 3, "ラベル", Time,
+                 [new("image-01", Time)]),
+             new("occurrence-revisit", revisit, "content-dialogue", null, null, null, Time.AddSeconds(1), []),
+             new("occurrence-narration", first with { ReceiveSequence = 13 }, "content-narration", null, null, null, Time, []),
+             new("occurrence-other", first with { ReceiveSequence = 14 }, "content-other", null, null, null, Time, []),
+             new("occurrence-null", first with { ReceiveSequence = 15 }, "content-null", null, null, null, Time, [])],
+            [new("match-dialogue", [new(first, revisit)])]);
+
+        var json = JsonSerializer.Serialize(ScenarioMaterialWireAdapter.ToWire(snapshot), new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        using var document = JsonDocument.Parse(json);
+        var material = document.RootElement;
+        var version = material.GetProperty("version");
+        Assert.Equal(largeId.ToString(System.Globalization.CultureInfo.InvariantCulture), version.GetProperty("captureGameId").GetString());
+        Assert.Equal(JsonValueKind.Number, version.GetProperty("revision").ValueKind);
+        Assert.Equal(41, version.GetProperty("revision").GetInt64());
+        Assert.Equal(JsonValueKind.Number, version.GetProperty("matchingRevision").ValueKind);
+        Assert.Equal(37, version.GetProperty("matchingRevision").GetInt64());
+        Assert.Equal(new string?[] { "Dialogue", "Narration", "Other", null },
+            material.GetProperty("contents").EnumerateArray().Select(content =>
+                content.GetProperty("kind").ValueKind == JsonValueKind.Null ? null : content.GetProperty("kind").GetString()));
+
+        var occurrences = material.GetProperty("occurrences").EnumerateArray().ToArray();
+        var source = occurrences[0].GetProperty("source");
+        Assert.Equal(largeId.ToString(System.Globalization.CultureInfo.InvariantCulture), source.GetProperty("captureGameId").GetString());
+        Assert.Equal((largeId + 1).ToString(System.Globalization.CultureInfo.InvariantCulture), source.GetProperty("sessionId").GetString());
+        Assert.Equal(12, source.GetProperty("receiveSequence").GetInt64());
+        Assert.Equal(2, source.GetProperty("startUtf16").GetInt32());
+        Assert.Equal(4, source.GetProperty("lengthUtf16").GetInt32());
+        Assert.Equal((largeId + 3).ToString(System.Globalization.CultureInfo.InvariantCulture), occurrences[0].GetProperty("labelId").GetString());
+        Assert.Equal(JsonValueKind.Null, occurrences[1].GetProperty("labelId").ValueKind);
+        Assert.Equal("image-01", Assert.Single(occurrences[0].GetProperty("images").EnumerateArray()).GetProperty("imageId").GetString());
+
+        var pair = Assert.Single(Assert.Single(material.GetProperty("matches").EnumerateArray()).GetProperty("items").EnumerateArray());
+        Assert.Equal((largeId + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            pair.GetProperty("representative").GetProperty("sessionId").GetString());
+        Assert.Equal((largeId + 2).ToString(System.Globalization.CultureInfo.InvariantCulture),
+            pair.GetProperty("revisit").GetProperty("sessionId").GetString());
+        Assert.Equal(19, pair.GetProperty("revisit").GetProperty("receiveSequence").GetInt64());
     }
 
     // @test-value v2
