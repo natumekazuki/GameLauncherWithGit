@@ -49,6 +49,8 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
                 new() { OutsideIsNarration = true });
     }
     private string Output(string name) => Path.Combine(_directory, name + ".zip");
+    private Task ExportFullAsync(long game, ScenarioArchiveSelection selection, string output) =>
+        _store.ExportScenarioArchiveAsync(game, selection, output, ScenarioMaterialAccessLevel.Full);
     private static async Task<JsonElement[]> Rows(ZipArchive zip)
     {
         using var reader = new StreamReader(zip.GetEntry("texts.jsonl")!.Open());
@@ -62,6 +64,14 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         JsonValueKind.Array => value.EnumerateArray().SelectMany(JsonStrings),
         JsonValueKind.String => [value.GetString()!],
         _ => []
+    };
+
+    private static bool HasJsonProperty(JsonElement value, string name) => value.ValueKind switch
+    {
+        JsonValueKind.Object => value.EnumerateObject().Any(property => string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase)
+            || HasJsonProperty(property.Value, name)),
+        JsonValueKind.Array => value.EnumerateArray().Any(item => HasJsonProperty(item, name)),
+        _ => false
     };
 
     // @test-value v2
@@ -361,7 +371,7 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         var image = await _store.SaveScreenshotAsync(new(game, new(session, 1)), Image(), Time);
         await _store.SaveScreenshotAsync(new(game, new(session, 2)), Image('b'), Time);
         var output = Output("clipped");
-        await _store.ExportScenarioArchiveAsync(game, new(range, Kind: CaptureKind.Dialogue, TextSearch: "abc", SpeakerSearch: "花"), output);
+        await ExportFullAsync(game, new(range, Kind: CaptureKind.Dialogue, TextSearch: "abc", SpeakerSearch: "花"), output);
         using var zip = ZipFile.OpenRead(output);
         var row = Assert.Single(await Rows(zip));
         Assert.Equal(1, row.GetProperty("receiveSequence").GetInt64());
@@ -403,7 +413,7 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         await _store.SaveScreenshotAsync(new(game, new(session, 1)), Image(), Time);
         await _store.SaveScreenshotAsync(new(game, new(session, 205)), Image(), Time.AddSeconds(1));
         var output = Output("all");
-        await _store.ExportScenarioArchiveAsync(game, new(TextSearch: "一致"), output);
+        await ExportFullAsync(game, new(TextSearch: "一致"), output);
         using var zip = ZipFile.OpenRead(output);
         var rows = await Rows(zip);
         Assert.Equal(Enumerable.Range(1, 205).Select(x => (long)x), rows.Select(x => x.GetProperty("receiveSequence").GetInt64()));
@@ -433,7 +443,7 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         using var start = new ManualResetEventSlim();
         var output = Output("snapshot");
         var change = Task.Run(async () => { start.Wait(); await _store.SetCaptureLabelsAsync(session, ids, narration.Id); });
-        var export = Task.Run(async () => { start.Wait(); await _store.ExportScenarioArchiveAsync(game, new(), output); });
+        var export = Task.Run(async () => { start.Wait(); await ExportFullAsync(game, new(), output); });
         start.Set();
         await Task.WhenAll(change, export);
         using var zip = ZipFile.OpenRead(output);
@@ -461,18 +471,18 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         await Append(session, 1);
         var image = await _store.SaveScreenshotAsync(new(game, new(session, 1)), Image(), Time);
         var output = Output("existing");
-        await _store.ExportScenarioArchiveAsync(game, new(), output);
+        await ExportFullAsync(game, new(), output);
         var original = await File.ReadAllBytesAsync(output);
-        await Assert.ThrowsAsync<IOException>(() => _store.ExportScenarioArchiveAsync(game, new(), output));
+        await Assert.ThrowsAsync<IOException>(() => ExportFullAsync(game, new(), output));
         Assert.Equal(original, await File.ReadAllBytesAsync(output));
         var lockedOutput = Output("locked");
         using (var locked = new FileStream(image.FilePath, FileMode.Open, FileAccess.Read, FileShare.None))
-            await Assert.ThrowsAsync<IOException>(() => _store.ExportScenarioArchiveAsync(game, new(), lockedOutput));
+            await Assert.ThrowsAsync<IOException>(() => ExportFullAsync(game, new(), lockedOutput));
         Assert.False(File.Exists(lockedOutput));
         File.Delete(image.FilePath);
         await Assert.ThrowsAsync<FileNotFoundException>(() => _store.SaveScreenshotAsync(new(game, new(session, 1)), Image(), Time));
         var missingOutput = Output("missing");
-        await Assert.ThrowsAsync<FileNotFoundException>(() => _store.ExportScenarioArchiveAsync(game, new(), missingOutput));
+        await Assert.ThrowsAsync<FileNotFoundException>(() => ExportFullAsync(game, new(), missingOutput));
         Assert.False(File.Exists(missingOutput));
         Assert.Empty(Directory.GetFiles(_directory, "*.tmp"));
     }
@@ -594,7 +604,7 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         await _store.SaveCaptureRangeAsync(game, "部分", new(session, 1, 1), new(session, 1, 3), ["除外"]);
         await _store.SaveCaptureRangeAsync(game, "全体", new(session, 2, 0), new(session, 2, 3), ["除外"]);
         var selection = new ScenarioArchiveSelection(IncludeTags: ["出力"], ExcludeTags: ["除外"]);
-        await _store.ExportScenarioArchiveAsync(game, selection, Output("tags"));
+        await ExportFullAsync(game, selection, Output("tags"));
         using (var zip = ZipFile.OpenRead(Output("tags")))
         {
             var row = Assert.Single(await Rows(zip));
@@ -606,7 +616,7 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
             Assert.Equal("出力", manifest.RootElement.GetProperty("selection").GetProperty("includeTags")[0].GetString());
             Assert.Equal("除外", manifest.RootElement.GetProperty("selection").GetProperty("excludeTags")[0].GetString());
         }
-        await _store.ExportScenarioArchiveAsync(game, selection with { IncludeTags = ["なし"] }, Output("empty-tags"));
+        await ExportFullAsync(game, selection with { IncludeTags = ["なし"] }, Output("empty-tags"));
         using var empty = ZipFile.OpenRead(Output("empty-tags"));
         Assert.Empty(await Rows(empty));
         Assert.DoesNotContain(empty.Entries, x => x.FullName.StartsWith("images/", StringComparison.Ordinal));
@@ -639,7 +649,7 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         var (other, otherSession) = await StartAsync("other");
         await Append(otherSession, 1);
         await _store.SaveCaptureRangeAsync(other, "別ゲーム", new(otherSession, 1, 0), new(otherSession, 1, 2));
-        await _store.ExportScenarioArchiveAsync(game, new(), Output("ranges"));
+        await ExportFullAsync(game, new(), Output("ranges"));
         using var zip = ZipFile.OpenRead(Output("ranges"));
         var rows = await Rows(zip);
         Assert.Equal(new[] { "前😀ABC後", "次本文", "区間外" }, rows.SelectMany(x => x.GetProperty("segments").EnumerateArray()).Select(x => x.GetProperty("text").GetString()));
@@ -738,7 +748,7 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
             "empty" => selection with { RangeId = selected, TextSearch = "SECRET" },
             _ => selection
         };
-        await _store.ExportScenarioArchiveAsync(game, selection, Output(filter));
+        await ExportFullAsync(game, selection, Output(filter));
         using var zip = ZipFile.OpenRead(Output(filter));
         var rows = await Rows(zip);
         using var document = JsonDocument.Parse(zip.GetEntry("manifest.json")!.Open());
@@ -798,7 +808,7 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
     {
         var (game, session) = await StartAsync();
         await Append(session, 1, "未割当本文");
-        await _store.ExportScenarioArchiveAsync(game, new(TextSearch: " ", IncludeTags: []), Output("no-ranges"));
+        await ExportFullAsync(game, new(TextSearch: " ", IncludeTags: []), Output("no-ranges"));
         using var zip = ZipFile.OpenRead(Output("no-ranges"));
         using var manifest = JsonDocument.Parse(zip.GetEntry("manifest.json")!.Open());
         Assert.Empty(manifest.RootElement.GetProperty("ranges").EnumerateArray());
@@ -836,7 +846,7 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         await _store.SaveCaptureRangeAsync(game, "重なり",
             new(session, 1, 2), new(session, 2, 1));
 
-        await _store.ExportScenarioArchiveAsync(game, new(RangeId: selectedRange), Output("screenshot-occurrences"));
+        await ExportFullAsync(game, new(RangeId: selectedRange), Output("screenshot-occurrences"));
         using var zip = ZipFile.OpenRead(Output("screenshot-occurrences"));
         var rows = await Rows(zip);
         using var document = JsonDocument.Parse(zip.GetEntry("manifest.json")!.Open());
@@ -900,14 +910,14 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         await AppendVisit(third, common);
 
         var beforeImage = Output("material-before-image");
-        await _store.ExportScenarioArchiveAsync(game, new(), beforeImage);
+        await ExportFullAsync(game, new(), beforeImage);
         using var beforeZip = ZipFile.OpenRead(beforeImage);
         using var beforeManifestDocument = JsonDocument.Parse(beforeZip.GetEntry("manifest.json")!.Open());
         var beforeVersion = beforeManifestDocument.RootElement.GetProperty("materialVersion");
 
         var image = await _store.SaveScreenshotAsync(new(game, new(second, 4)), Image(), Time);
         var fullOutput = Output("material-all-visits");
-        await _store.ExportScenarioArchiveAsync(game, new(), fullOutput);
+        await ExportFullAsync(game, new(), fullOutput);
         using var fullZip = ZipFile.OpenRead(fullOutput);
         using var manifestDocument = JsonDocument.Parse(fullZip.GetEntry("manifest.json")!.Open());
         using var materialDocument = JsonDocument.Parse(fullZip.GetEntry("material.json")!.Open());
@@ -1003,7 +1013,7 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         }
 
         await _store.SaveCaptureRangeAsync(game, "二周目", new(second, 1, 0), new(second, 7, variant[6].Length), ["second"]);
-        await _store.ExportScenarioArchiveAsync(game, new(IncludeTags: ["second"]), Output("material-second-visit"));
+        await ExportFullAsync(game, new(IncludeTags: ["second"]), Output("material-second-visit"));
         using (var taggedZip = ZipFile.OpenRead(Output("material-second-visit")))
         using (var taggedMaterial = JsonDocument.Parse(taggedZip.GetEntry("material.json")!.Open()))
         {
@@ -1017,7 +1027,7 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         }
 
         await _store.SaveCaptureRangeAsync(game, "UTF-16 partial", new(second, 1, 2), new(second, 1, 4), ["partial"]);
-        await _store.ExportScenarioArchiveAsync(game, new(IncludeTags: ["partial"]), Output("material-partial"));
+        await ExportFullAsync(game, new(IncludeTags: ["partial"]), Output("material-partial"));
         using var partialZip = ZipFile.OpenRead(Output("material-partial"));
         using var partialMaterial = JsonDocument.Parse(partialZip.GetEntry("material.json")!.Open());
         var partial = partialMaterial.RootElement;
@@ -1061,7 +1071,7 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         await _store.SetCaptureLabelsAsync(session, [items[3].Id], null);
 
         var output = Output("material-wire-types");
-        await _store.ExportScenarioArchiveAsync(game, new(), output);
+        await ExportFullAsync(game, new(), output);
         using var zip = ZipFile.OpenRead(output);
         using var manifestDocument = JsonDocument.Parse(zip.GetEntry("manifest.json")!.Open());
         using var materialDocument = JsonDocument.Parse(zip.GetEntry("material.json")!.Open());
@@ -1102,7 +1112,7 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         var thirdLabel = Assert.Single(rows[2].GetProperty("segments").EnumerateArray()).GetProperty("label");
         Assert.Equal(largeLabelId.ToString(System.Globalization.CultureInfo.InvariantCulture), thirdLabel.GetProperty("id").GetString());
 
-        await _store.ExportScenarioArchiveAsync(game, new(LabelId: largeLabelId), Output("material-wire-selected-label"));
+        await ExportFullAsync(game, new(LabelId: largeLabelId), Output("material-wire-selected-label"));
         using var selectedZip = ZipFile.OpenRead(Output("material-wire-selected-label"));
         using var selectedManifestDocument = JsonDocument.Parse(selectedZip.GetEntry("manifest.json")!.Open());
         var selectedManifest = selectedManifestDocument.RootElement;
@@ -1110,6 +1120,168 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         Assert.Equal(JsonValueKind.String, selectedManifest.GetProperty("selection").GetProperty("labelId").ValueKind);
         Assert.Equal(largeLabelId.ToString(System.Globalization.CultureInfo.InvariantCulture),
             selectedManifest.GetProperty("selection").GetProperty("labelId").GetString());
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "構造ZIPは本文・話者・検索語・画像path・PNGを省きつつ、完全ZIPと同じ選択資料の版とIDを出力する"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md: 手動スクリーンショットと分析用ZIP" }
+    // fault = "構造出力から機密propertyを出す、完全版と違う資料を再採番する、またはPNG/本文ファイルを含める"
+    // observable = "両ZIPの実JSON projection、manifest contentMode/selection fields、ZIP entry names、合成本文/話者/検索語の出現"
+    // observation_boundary = "consumer"
+    // scope = "structure and full scenario archive exports"
+    // lifecycle = "permanent"
+    // impact = "構造専用exportが本文情報を漏らさず、両export間で同じ選択済み出現を対応付けられる"
+    // distinction = "共通projection testはDTO単体を確認し、このtestは選択条件・画像・manifestとZIP entryを含む実出力境界を確認する"
+    // @end-test-value
+    [Fact]
+    public async Task StructureArchiveOmitsContentAndImageBodiesWhileSharingFullProjectionIds()
+    {
+        const string body = "BODY_MARKER_51fa82_visible_only_in_full";
+        const string speaker = "SPEAKER_MARKER_c173a9_visible_only_in_full";
+        var (game, session) = await StartAsync();
+        await Append(session, 1, $"prefix {body} suffix");
+        var item = Assert.Single(await _store.GetGameCaptureItemsAsync(game));
+        var label = (await _store.GetCaptureLabelsAsync(game)).Single(x => x.Kind == CaptureKind.Dialogue);
+        await _store.SetCaptureLabelsAsync(session, [item.Id], label.Id);
+        await _store.SetCaptureSpeakerAsync(session, item.Id, speaker);
+        var rangeId = await _store.SaveCaptureRangeAsync(game, "Structure range", new(session, 1, 0),
+            new(session, 1, item.Text.Length), ["structure-tag"]);
+        var image = await _store.SaveScreenshotAsync(new(game, new(session, 1)), Image(), Time);
+        var selection = new ScenarioArchiveSelection(RangeId: rangeId, TextSearch: "BODY_MARKER_51fa82",
+            SpeakerSearch: "SPEAKER_MARKER_c173a9");
+        var expectedStructure = await _store.GetScenarioProjectionAsync(game, selection, ScenarioMaterialAccessLevel.Structure);
+        var expectedFull = await _store.GetScenarioProjectionAsync(game, selection, ScenarioMaterialAccessLevel.Full);
+
+        var structurePath = Output("structure-material");
+        var fullPath = Output("full-material");
+        await _store.ExportScenarioArchiveAsync(game, selection, structurePath, ScenarioMaterialAccessLevel.Structure);
+        await _store.ExportScenarioArchiveAsync(game, selection, fullPath, ScenarioMaterialAccessLevel.Full);
+
+        using var structureZip = ZipFile.OpenRead(structurePath);
+        using var fullZip = ZipFile.OpenRead(fullPath);
+        Assert.Equal(new[] { "manifest.json", "material.json" }, structureZip.Entries.Select(x => x.FullName));
+        Assert.NotNull(fullZip.GetEntry("texts.jsonl"));
+        Assert.NotNull(fullZip.GetEntry($"images/{image.ImageId}.png"));
+        using var structureManifestDocument = JsonDocument.Parse(structureZip.GetEntry("manifest.json")!.Open());
+        using var structureMaterialDocument = JsonDocument.Parse(structureZip.GetEntry("material.json")!.Open());
+        using var fullManifestDocument = JsonDocument.Parse(fullZip.GetEntry("manifest.json")!.Open());
+        using var fullMaterialDocument = JsonDocument.Parse(fullZip.GetEntry("material.json")!.Open());
+        var structureManifest = structureManifestDocument.RootElement;
+        var structureMaterial = structureMaterialDocument.RootElement;
+        var fullManifest = fullManifestDocument.RootElement;
+        var fullMaterial = fullMaterialDocument.RootElement;
+        var webOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+
+        Assert.Equal("structure", structureManifest.GetProperty("contentMode").GetString());
+        Assert.Equal("full", fullManifest.GetProperty("contentMode").GetString());
+        Assert.False(structureManifest.GetProperty("selection").TryGetProperty("textSearch", out _));
+        Assert.False(structureManifest.GetProperty("selection").TryGetProperty("speakerSearch", out _));
+        Assert.False(structureManifest.TryGetProperty("textFile", out _));
+        Assert.False(HasJsonProperty(structureMaterial, "text"));
+        Assert.False(HasJsonProperty(structureMaterial, "speaker"));
+        Assert.False(HasJsonProperty(structureMaterial, "preview"));
+        Assert.False(HasJsonProperty(structureMaterial, "path"));
+        Assert.False(HasJsonProperty(structureMaterial, "thumbnail"));
+        Assert.Equal("texts.jsonl", fullManifest.GetProperty("textFile").GetString());
+
+        var expectedStructureJson = JsonSerializer.Serialize(expectedStructure, expectedStructure.GetType(), webOptions);
+        var expectedFullJson = JsonSerializer.Serialize(expectedFull, expectedFull.GetType(), webOptions);
+        using var expectedStructureDocument = JsonDocument.Parse(expectedStructureJson);
+        using var expectedFullDocument = JsonDocument.Parse(expectedFullJson);
+        Assert.Equal(expectedStructureDocument.RootElement.GetRawText(), structureMaterial.GetRawText());
+        Assert.Equal(expectedFullDocument.RootElement.GetRawText(), fullMaterial.GetRawText());
+        Assert.Equal(fullMaterial.GetProperty("version").GetRawText(), structureMaterial.GetProperty("version").GetRawText());
+        Assert.Equal(fullMaterial.GetProperty("selectionVersion").GetRawText(), structureMaterial.GetProperty("selectionVersion").GetRawText());
+        Assert.Equal(fullMaterial.GetProperty("contents").EnumerateArray().Select(x => x.GetProperty("id").GetString()),
+            structureMaterial.GetProperty("contents").EnumerateArray().Select(x => x.GetProperty("id").GetString()));
+        Assert.Equal(fullMaterial.GetProperty("occurrences").EnumerateArray().Select(x => x.GetProperty("id").GetString()),
+            structureMaterial.GetProperty("occurrences").EnumerateArray().Select(x => x.GetProperty("id").GetString()));
+        Assert.Equal(fullManifest.GetProperty("materialVersion").GetRawText(), structureManifest.GetProperty("materialVersion").GetRawText());
+        Assert.Equal(fullMaterial.GetProperty("images").GetRawText(), structureMaterial.GetProperty("images").GetRawText());
+        Assert.Equal(image.ImageId, Assert.Single(structureManifest.GetProperty("images").EnumerateArray()).GetProperty("id").GetString());
+        Assert.False(structureManifest.GetProperty("images").EnumerateArray().Single().TryGetProperty("path", out _));
+        var structureImageIds = structureMaterial.GetProperty("images").EnumerateArray()
+            .Select(x => x.GetProperty("id").GetString()).ToHashSet(StringComparer.Ordinal);
+        Assert.All(structureMaterial.GetProperty("occurrences").EnumerateArray(), occurrence =>
+            Assert.All(occurrence.GetProperty("images").EnumerateArray(), imageReference =>
+                Assert.Contains(imageReference.GetProperty("imageId").GetString(), structureImageIds)));
+        Assert.Contains("structure-tag", structureMaterial.GetProperty("ranges").EnumerateArray()
+            .SelectMany(x => x.GetProperty("tags").EnumerateArray()).Select(x => x.GetString()));
+        Assert.DoesNotContain(JsonStrings(structureMaterial), x => x.Contains(body, StringComparison.Ordinal)
+            || x.Contains(speaker, StringComparison.Ordinal));
+        Assert.DoesNotContain(JsonStrings(structureManifest), x => x.Contains("BODY_MARKER_51fa82", StringComparison.Ordinal)
+            || x.Contains("SPEAKER_MARKER_c173a9", StringComparison.Ordinal));
+        Assert.Contains(JsonStrings(fullMaterial), x => x.Contains(body, StringComparison.Ordinal));
+        Assert.Contains(JsonStrings(fullMaterial), x => x == speaker);
+        Assert.Contains(JsonStrings(fullManifest), x => x == "BODY_MARKER_51fa82");
+        Assert.Contains(JsonStrings(fullManifest), x => x == "SPEAKER_MARKER_c173a9");
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "画像bytesはFull levelと一致する資料版・選択scope・選択内Occurrence/ImageId関連が揃った時だけ返る"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md: 手動スクリーンショットと分析用ZIP" }
+    // fault = "構造権限・古いsnapshot・別selection・無関係な画像IDでPNG bytesを返す"
+    // observable = "読取結果bytes、Structure/不一致requestの拒否、添付追加後に旧version requestが拒否されること"
+    // observation_boundary = "public-boundary"
+    // scope = "versioned selected occurrence screenshot byte reader"
+    // lifecycle = "permanent"
+    // impact = "構造キーや古い/別出現の参照が画像本体を取得できない"
+    // distinction = "MCP auth testsはhostがtrusted levelを選ぶことを検証し、このtestはstoreのgate内scope/version/link検証を検証する"
+    // @end-test-value
+    [Fact]
+    public async Task ReadsScenarioImageOnlyForFullMatchingVersionSelectionAndOccurrence()
+    {
+        var (game, session) = await StartAsync();
+        await Append(session, 1, "image access body");
+        var image = await _store.SaveScreenshotAsync(new(game, new(session, 1)), Image(), Time);
+        var selection = new ScenarioArchiveSelection();
+        var full = (ScenarioFullProjection)await _store.GetScenarioProjectionAsync(game, selection, ScenarioMaterialAccessLevel.Full);
+        var occurrence = Assert.Single(full.Occurrences);
+        var request = new ScenarioMaterialImageRequest(game, selection, full.Version, full.SelectionVersion,
+            occurrence.Id, image.ImageId);
+
+        Assert.Equal(Png, await _store.ReadScenarioImageAsync(ScenarioMaterialAccessLevel.Full, request));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            _store.ReadScenarioImageAsync(ScenarioMaterialAccessLevel.Structure, request));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            _store.ReadScenarioImageAsync(ScenarioMaterialAccessLevel.Full, request with { ImageId = "not-linked" }));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _store.ReadScenarioImageAsync(ScenarioMaterialAccessLevel.Full,
+                request with { Selection = new ScenarioArchiveSelection(TextSearch: "not present") }));
+
+        await _store.SaveScreenshotAsync(new(game, new(session, 1)), Image('b'), Time.AddMinutes(1));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _store.ReadScenarioImageAsync(ScenarioMaterialAccessLevel.Full, request));
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "Structureまたは未定義levelの画像要求はgame・版・selection照会やmatching準備より先に拒否される"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md: 手動スクリーンショットと分析用ZIP" }
+    // fault = "構造権限が無効なgame/referenceを渡して画像APIの準備・資料読取経路へ到達できる"
+    // observable = "非Full levelでUnauthorizedAccessExceptionとなり、SQLite database fileが作成されない"
+    // observation_boundary = "public-boundary"
+    // scope = "scenario image API authorization order"
+    // lifecycle = "permanent"
+    // impact = "構造専用権限は対象の存在・version・画像関連を調べる前に画像取得を拒否する"
+    // distinction = "共通image-access testは同snapshot内のFull version/selection/linkを検証し、このtestは権限拒否がDB準備に先行することを検証する"
+    // @end-test-value
+    [Fact]
+    public async Task RejectsNonFullImageRequestsBeforeDatabaseOrMaterialPreparation()
+    {
+        var request = new ScenarioMaterialImageRequest(long.MinValue, new ScenarioArchiveSelection(),
+            new ScenarioMaterialWireVersion("not-a-game-id", 10, 20), new ScenarioMaterialSelectionVersion([], []),
+            "not-a-selected-occurrence", "not-an-image");
+        var databasePath = Path.Combine(_directory, "library.db");
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            _store.ReadScenarioImageAsync(ScenarioMaterialAccessLevel.Structure, request));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            _store.ReadScenarioImageAsync((ScenarioMaterialAccessLevel)int.MaxValue, request));
+
+        Assert.False(File.Exists(databasePath));
     }
 
     // @test-value v2
@@ -1200,7 +1372,7 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         try
         {
             var beforeOutput = Output("material-pending-before-image");
-            await _store.ExportScenarioArchiveAsync(game, new(), beforeOutput);
+            await ExportFullAsync(game, new(), beforeOutput);
             using var beforeZip = ZipFile.OpenRead(beforeOutput);
             using var beforeManifestDocument = JsonDocument.Parse(beforeZip.GetEntry("manifest.json")!.Open());
             using var beforeMaterialDocument = JsonDocument.Parse(beforeZip.GetEntry("material.json")!.Open());
@@ -1214,7 +1386,7 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
 
             var image = await _store.SaveScreenshotAsync(new(game, new(session, 1)), Image(), Time);
             var afterOutput = Output("material-pending-after-image");
-            await _store.ExportScenarioArchiveAsync(game, new(), afterOutput);
+            await ExportFullAsync(game, new(), afterOutput);
             using var afterZip = ZipFile.OpenRead(afterOutput);
             using var afterManifestDocument = JsonDocument.Parse(afterZip.GetEntry("manifest.json")!.Open());
             using var afterMaterialDocument = JsonDocument.Parse(afterZip.GetEntry("material.json")!.Open());

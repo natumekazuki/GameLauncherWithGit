@@ -1,4 +1,5 @@
 using GameLauncherWithGit.Application.Models;
+using GameLauncherWithGit.Application.Services;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
 using System.IO.Compression;
@@ -252,34 +253,70 @@ public sealed partial class SqliteGameLibraryStore
         return new(failures.Count, failures);
     }
 
-    public async Task ExportScenarioArchiveAsync(long captureGameId, ScenarioArchiveSelection selection, string outputPath)
+    public async Task ExportScenarioArchiveAsync(long captureGameId, ScenarioArchiveSelection selection, string outputPath,
+        ScenarioMaterialAccessLevel accessLevel, CancellationToken cancellationToken = default)
     {
-        await PrepareScenarioMaterialAsync(captureGameId);
-        await _screenshotFilesLock.WaitAsync();
-        try { await ExportScenarioArchiveCoreAsync(captureGameId, selection, outputPath); }
+        if (!Enum.IsDefined(accessLevel)) throw new ArgumentOutOfRangeException(nameof(accessLevel));
+        await PrepareScenarioMaterialAsync(captureGameId, cancellationToken);
+        await _screenshotFilesLock.WaitAsync(cancellationToken);
+        try { await ExportScenarioArchiveCoreAsync(captureGameId, selection, outputPath, accessLevel, cancellationToken); }
         finally { _screenshotFilesLock.Release(); }
     }
 
-    private async Task ExportScenarioArchiveCoreAsync(long captureGameId, ScenarioArchiveSelection selection, string outputPath)
+    public async Task<byte[]> ReadScenarioImageAsync(ScenarioMaterialAccessLevel level, ScenarioMaterialImageRequest request,
+        CancellationToken cancellationToken = default)
     {
-        await EnsureInitializedAsync(default);
-        await using var connection = await OpenConnectionAsync(default);
+        if (level != ScenarioMaterialAccessLevel.Full)
+            throw new UnauthorizedAccessException("画像本体の読取権限がありません。");
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(request.SelectionVersion);
+        await PrepareScenarioMaterialAsync(request.CaptureGameId, cancellationToken);
+        await _screenshotFilesLock.WaitAsync(cancellationToken);
+        try
+        {
+            await EnsureInitializedAsync(cancellationToken);
+            await using var connection = await OpenConnectionAsync(cancellationToken);
+            await using var transaction = connection.BeginTransaction(deferred: true);
+            var ranges = await ReadCaptureRangesAsync(connection, transaction, request.CaptureGameId);
+            var items = await ReadCaptureExportItemsAsync(connection, transaction, request.CaptureGameId, request.Selection, ranges);
+            var material = await ReadScenarioMaterialAsync(connection, transaction, request.CaptureGameId,
+                request.Selection, ranges, items, cancellationToken);
+            var eventKey = ScenarioMaterialImageAccess.Validate(material, level, request);
+            var image = (await ReadEventScreenshotsAsync(connection, transaction, eventKey))
+                .SingleOrDefault(x => string.Equals(x.ImageId, request.ImageId, StringComparison.Ordinal))
+                ?? throw new UnauthorizedAccessException("選択した出現の添付画像ではありません。");
+            var bytes = await File.ReadAllBytesAsync(image.FilePath, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return bytes;
+        }
+        finally { _screenshotFilesLock.Release(); }
+    }
+
+    private async Task ExportScenarioArchiveCoreAsync(long captureGameId, ScenarioArchiveSelection selection, string outputPath,
+        ScenarioMaterialAccessLevel accessLevel, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
         // Read all selected data in one snapshot; the file gate retains its images while copying.
         await using var transaction = connection.BeginTransaction(deferred: true);
         await using var gameQuery = CaptureCommand(connection, transaction, "SELECT Title FROM CaptureGames WHERE Id=$game", ("$game", captureGameId));
-        var title = await gameQuery.ExecuteScalarAsync() as string ?? throw new ArgumentException("ゲームの履歴が見つかりません。");
+        var title = await gameQuery.ExecuteScalarAsync(cancellationToken) as string ?? throw new ArgumentException("ゲームの履歴が見つかりません。");
         var ranges = await ReadCaptureRangesAsync(connection, transaction, captureGameId);
         var items = await ReadCaptureExportItemsAsync(connection, transaction, captureGameId, selection, ranges);
-        var material = await ReadScenarioMaterialAsync(connection, transaction, captureGameId, selection, ranges, items);
-        var materialWire = ScenarioMaterialWireAdapter.ToWire(material);
+        var material = await ReadScenarioMaterialAsync(connection, transaction, captureGameId, selection, ranges, items, cancellationToken);
+        var materialProjection = ScenarioMaterialWireAdapter.ToWire(material, accessLevel);
         var includeAllRanges = selection.RangeId is null && selection.LabelId is null && !selection.UnclassifiedOnly
             && selection.Kind is null && string.IsNullOrWhiteSpace(selection.TextSearch) && string.IsNullOrWhiteSpace(selection.SpeakerSearch)
             && NormalizeCaptureTags(selection.IncludeTags).Length == 0 && NormalizeCaptureTags(selection.ExcludeTags).Length == 0;
         var archiveRanges = CreateArchiveRanges(ranges, items, includeAllRanges);
-        var contents = material.Contents.ToDictionary(x => x.Id);
+        var contents = accessLevel == ScenarioMaterialAccessLevel.Full
+            ? material.Contents.ToDictionary(x => x.Id, StringComparer.Ordinal)
+            : null;
         var eventGroups = material.Occurrences.GroupBy(x => new CaptureEventKey(x.Source.SessionId, x.Source.ReceiveSequence)).ToArray();
         var imageReferences = eventGroups.SelectMany(x => x.SelectMany(occurrence => occurrence.Images)).ToArray();
-        var images = await ReadScreenshotAssetsAsync(connection, transaction, imageReferences);
+        var images = accessLevel == ScenarioMaterialAccessLevel.Full
+            ? await ReadScreenshotAssetsAsync(connection, transaction, imageReferences, cancellationToken)
+            : new Dictionary<string, ScenarioScreenshotAsset>(StringComparer.Ordinal);
         var rows = new List<object>();
         var screenshotOccurrences = new List<object>();
         foreach (var group in eventGroups)
@@ -289,14 +326,18 @@ public sealed partial class SqliteGameLibraryStore
             var eventId = $"{FormatScenarioId(group.Key.SessionId)}:{FormatScenarioId(group.Key.Sequence)}";
             screenshotOccurrences.Add(new { eventId, sessionId = FormatScenarioId(key.SessionId),
                 receiveSequence = key.Sequence, imageIds = attached.Select(x => x.ImageId).ToArray() });
-            rows.Add(new { order = rows.Count + 1, eventId,
-                sessionId = FormatScenarioId(key.SessionId), receiveSequence = key.Sequence, receivedAt = group.First().ReceivedAt,
-                segments = group.Select(x => new { startUtf16 = x.Source.StartUtf16, lengthUtf16 = x.Source.LengthUtf16,
-                    text = contents[x.ContentId].Text, kind = ScenarioMaterialWireAdapter.KindName(contents[x.ContentId].Kind),
-                    speaker = x.Speaker, label = x.LabelId is null ? null : new { id = FormatScenarioId(x.LabelId.Value), name = x.LabelName } }).ToArray(),
-                images = attached.Select(x => new { imageId = x.ImageId, capturedAt = x.CapturedAt, scope = "capture_event", binding = "latest_received_body" }).ToArray() });
+            if (accessLevel == ScenarioMaterialAccessLevel.Full)
+            {
+                rows.Add(new { order = rows.Count + 1, eventId,
+                    sessionId = FormatScenarioId(key.SessionId), receiveSequence = key.Sequence, receivedAt = group.First().ReceivedAt,
+                    segments = group.Select(x => new { startUtf16 = x.Source.StartUtf16, lengthUtf16 = x.Source.LengthUtf16,
+                        text = contents![x.ContentId].Text,
+                        kind = ScenarioMaterialWireAdapter.KindName(contents[x.ContentId].Kind),
+                        speaker = x.Speaker, label = x.LabelId is null ? null : new { id = FormatScenarioId(x.LabelId.Value), name = x.LabelName } }).ToArray(),
+                    images = attached.Select(x => new { imageId = x.ImageId, capturedAt = x.CapturedAt, scope = "capture_event", binding = "latest_received_body" }).ToArray() });
+            }
         }
-        await transaction.CommitAsync();
+        await transaction.CommitAsync(cancellationToken);
         var temporary = outputPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         var temporaryCreated = false;
         try
@@ -306,25 +347,23 @@ public sealed partial class SqliteGameLibraryStore
                 temporaryCreated = true;
                 using (var zip = new ZipArchive(file, ZipArchiveMode.Create, leaveOpen: true))
                 {
-                    await using (var manifest = zip.CreateEntry("manifest.json").Open())
-                        await JsonSerializer.SerializeAsync(manifest, new { format = "GameLauncherWithGit.scenario", schemaVersion = 3, exportedAt = DateTimeOffset.UtcNow,
-                            identifierScope = "archive", game = new { captureGameId = FormatScenarioId(captureGameId), title },
-                            selection = new { scope = selection.RangeId is null ? "game" : "range", rangeId = selection.RangeId is long rangeId ? FormatScenarioId(rangeId) : null,
-                                labelId = selection.LabelId is long labelId ? FormatScenarioId(labelId) : null,
-                                selection.UnclassifiedOnly, kind = ScenarioMaterialWireAdapter.KindName(selection.Kind), selection.TextSearch, selection.SpeakerSearch,
-                                includeTags = NormalizeCaptureTags(selection.IncludeTags), excludeTags = NormalizeCaptureTags(selection.ExcludeTags) },
-                            ranges = archiveRanges, screenshotOccurrences, materialFile = "material.json", materialVersion = materialWire.Version,
-                            matchingComplete = material.MatchingComplete, textFile = "texts.jsonl", textIndexUnit = "utf16_code_unit", imageHashAlgorithm = ImageHashAlgorithm,
-                            images = images.Values.Select(x => new { id = x.ImageId, path = $"images/{x.ImageId}.png", mediaType = "image/png", width = x.Width, height = x.Height, pixelHash = x.PixelHash }) }, JsonOptions);
+                    var manifest = CreateScenarioArchiveManifest(captureGameId, title, selection, archiveRanges, screenshotOccurrences,
+                        materialProjection, images, accessLevel);
+                    await using (var manifestStream = zip.CreateEntry("manifest.json").Open())
+                        await JsonSerializer.SerializeAsync(manifestStream, manifest, manifest.GetType(), JsonOptions, cancellationToken);
                     await using (var materialFile = zip.CreateEntry("material.json").Open())
-                        await JsonSerializer.SerializeAsync(materialFile, materialWire, JsonOptions);
-                    await using (var writer = new StreamWriter(zip.CreateEntry("texts.jsonl").Open(), new UTF8Encoding(false)))
-                        foreach (var row in rows) await writer.WriteLineAsync(JsonSerializer.Serialize(row, JsonOptions));
-                    foreach (var image in images.Values)
+                        await JsonSerializer.SerializeAsync(materialFile, materialProjection, materialProjection.GetType(), JsonOptions, cancellationToken);
+                    if (accessLevel == ScenarioMaterialAccessLevel.Full)
                     {
-                        await using var input = new FileStream(image.FilePath, FileMode.Open, FileAccess.Read, FileShare.Read);
-                        await using var entry = zip.CreateEntry($"images/{image.ImageId}.png").Open();
-                        await input.CopyToAsync(entry);
+                        await using (var writer = new StreamWriter(zip.CreateEntry("texts.jsonl").Open(), new UTF8Encoding(false)))
+                            foreach (var row in rows) await writer.WriteLineAsync(JsonSerializer.Serialize(row, JsonOptions));
+                        foreach (var image in images.Values)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            await using var input = new FileStream(image.FilePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                            await using var entry = zip.CreateEntry($"images/{image.ImageId}.png").Open();
+                            await input.CopyToAsync(entry, cancellationToken);
+                        }
                     }
                 }
             }
@@ -333,8 +372,84 @@ public sealed partial class SqliteGameLibraryStore
         finally { if (temporaryCreated) File.Delete(temporary); }
     }
 
+    private static object CreateScenarioArchiveManifest(long captureGameId, string title, ScenarioArchiveSelection selection,
+        object[] archiveRanges, List<object> screenshotOccurrences, ScenarioMaterialProjection materialProjection,
+        IReadOnlyDictionary<string, ScenarioScreenshotAsset> images, ScenarioMaterialAccessLevel accessLevel)
+    {
+        var common = new
+        {
+            format = "GameLauncherWithGit.scenario",
+            schemaVersion = 3,
+            exportedAt = DateTimeOffset.UtcNow,
+            identifierScope = "archive",
+            game = new { captureGameId = FormatScenarioId(captureGameId), title }
+        };
+        if (accessLevel == ScenarioMaterialAccessLevel.Structure)
+        {
+            var structure = (ScenarioStructureProjection)materialProjection;
+            return new
+            {
+                common.format,
+                common.schemaVersion,
+                common.exportedAt,
+                common.identifierScope,
+                common.game,
+                contentMode = "structure",
+                selection = new
+                {
+                    scope = selection.RangeId is null ? "game" : "range",
+                    rangeId = selection.RangeId is long structureRangeId ? FormatScenarioId(structureRangeId) : null,
+                    labelId = selection.LabelId is long structureLabelId ? FormatScenarioId(structureLabelId) : null,
+                    selection.UnclassifiedOnly,
+                    kind = ScenarioMaterialWireAdapter.KindName(selection.Kind),
+                    includeTags = NormalizeCaptureTags(selection.IncludeTags),
+                    excludeTags = NormalizeCaptureTags(selection.ExcludeTags)
+                },
+                ranges = archiveRanges,
+                screenshotOccurrences,
+                materialFile = "material.json",
+                materialVersion = structure.Version,
+                matchingComplete = structure.MatchingComplete,
+                imageHashAlgorithm = ImageHashAlgorithm,
+                images = structure.Images.Select(x => new { id = x.Id, mediaType = "image/png", width = x.Width, height = x.Height, pixelHash = x.PixelHash }).ToArray()
+            };
+        }
+
+        var full = (ScenarioFullProjection)materialProjection;
+        return new
+        {
+            common.format,
+            common.schemaVersion,
+            common.exportedAt,
+            common.identifierScope,
+            common.game,
+            contentMode = "full",
+            selection = new
+            {
+                scope = selection.RangeId is null ? "game" : "range",
+                rangeId = selection.RangeId is long fullRangeId ? FormatScenarioId(fullRangeId) : null,
+                labelId = selection.LabelId is long fullLabelId ? FormatScenarioId(fullLabelId) : null,
+                selection.UnclassifiedOnly,
+                kind = ScenarioMaterialWireAdapter.KindName(selection.Kind),
+                selection.TextSearch,
+                selection.SpeakerSearch,
+                includeTags = NormalizeCaptureTags(selection.IncludeTags),
+                excludeTags = NormalizeCaptureTags(selection.ExcludeTags)
+            },
+            ranges = archiveRanges,
+            screenshotOccurrences,
+            materialFile = "material.json",
+            materialVersion = full.Version,
+            matchingComplete = full.MatchingComplete,
+            textFile = "texts.jsonl",
+            textIndexUnit = "utf16_code_unit",
+            imageHashAlgorithm = ImageHashAlgorithm,
+            images = images.Values.Select(x => new { id = x.ImageId, path = $"images/{x.ImageId}.png", mediaType = "image/png", width = x.Width, height = x.Height, pixelHash = x.PixelHash }).ToArray()
+        };
+    }
+
     private async Task<Dictionary<string, ScenarioScreenshotAsset>> ReadScreenshotAssetsAsync(SqliteConnection connection,
-        SqliteTransaction transaction, IReadOnlyCollection<ScenarioOccurrenceImage> imageReferences)
+        SqliteTransaction transaction, IReadOnlyCollection<ScenarioOccurrenceImage> imageReferences, CancellationToken cancellationToken = default)
     {
         var imageIds = imageReferences.Select(x => x.ImageId).Distinct().ToArray();
         var result = new Dictionary<string, ScenarioScreenshotAsset>(StringComparer.Ordinal);
@@ -357,9 +472,9 @@ public sealed partial class SqliteGameLibraryStore
                 LEFT JOIN CaptureImages i ON i.Id=r.ImageId
                 ORDER BY r.Ordinal
                 """;
-            await using var reader = await command.ExecuteReaderAsync();
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             var found = new HashSet<string>(StringComparer.Ordinal);
-            while (await reader.ReadAsync())
+            while (await reader.ReadAsync(cancellationToken))
             {
                 if (reader.IsDBNull(0))
                     throw new InvalidOperationException("ZIPの添付metadataが参照する画像が見つかりません。");

@@ -33,6 +33,8 @@
 
         <!-- To develop, package, and publish an app to the Microsoft Store, see: https://aka.ms/MauiTemplateUnpackaged -->
         <WindowsPackageType>None</WindowsPackageType>
+        <!-- Include both .NET and the loopback MCP host's ASP.NET runtime on Windows. -->
+        <SelfContained Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">true</SelfContained>
 
         <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'">15.0</SupportedOSPlatformVersion>
         <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">15.0</SupportedOSPlatformVersion>
@@ -61,9 +63,15 @@
     </ItemGroup>
 
     <ItemGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">
+        <FrameworkReference Include="Microsoft.AspNetCore.App" />
+        <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.4.0" />
         <None Include="Resources\TrayIcon\*.ico" CopyToOutputDirectory="PreserveNewest" Link="TrayIcon\%(Filename)%(Extension)" />
         <None Include="..\..\artifacts\luna-native\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Link="Luna\%(Filename)%(Extension)" />
         <None Include="..\..\LICENSE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Link="LICENSE.txt" />
+    </ItemGroup>
+
+    <ItemGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) != 'windows'">
+        <Compile Remove="Infrastructure\Mcp\**\*.cs" />
     </ItemGroup>
 
     <ItemGroup>

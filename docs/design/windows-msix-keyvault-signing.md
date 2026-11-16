@@ -165,6 +165,7 @@ Add-AppxPackage -Path $msix -ForceApplicationShutdown
 ```
 
 ## 5. 運用上の注意
+- Windows は Debug/Release と Unpackaged/MSIX のいずれも `SelfContained=true` を既定とし、MCP host が必要とする .NET / ASP.NET Core runtime を同梱する。配布先で ASP.NET Core runtime の追加導入は不要だが、配布容量は増え、runtime の修正もアプリを再発行して届ける。`WindowsAppSDKSelfContained`、RID、署名方式とは別の設定であり、それらの既存運用は変えない。
 - .NET 9 の MAUI Windows MSIX 発行では `-r` 指定を避け、`RuntimeIdentifierOverride=win10-x64`（または `win10-arm64` / `win10-x86`）を使用する。
 - 本番配布で警告を抑えるには、公開信頼チェーンを持つコード署名証明書（CA発行）を使う。
 - Key Vault で自己署名を使う場合、配布先PCへの信頼証明書配布が必須。

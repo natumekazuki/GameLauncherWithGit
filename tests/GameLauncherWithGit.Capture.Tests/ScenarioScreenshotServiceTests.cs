@@ -457,7 +457,8 @@ public sealed class ScenarioScreenshotServiceTests : IAsyncDisposable
         public Task<IReadOnlyList<ScenarioScreenshotEventMetadata>> GetEventScreenshotMetadataAsync(long game, IReadOnlyCollection<CaptureEventKey> keys, CancellationToken cancellationToken = default) => inner.GetEventScreenshotMetadataAsync(game, keys, cancellationToken);
         public Task<IReadOnlyDictionary<CaptureEventKey, int>> GetScreenshotCountsAsync(long game, IReadOnlyCollection<CaptureEventKey> keys) => inner.GetScreenshotCountsAsync(game, keys);
         public Task<ScreenshotCleanupResult> CleanupUnreferencedScreenshotsAsync() => inner.CleanupUnreferencedScreenshotsAsync();
-        public Task ExportScenarioArchiveAsync(long game, ScenarioArchiveSelection selection, string output) => inner.ExportScenarioArchiveAsync(game, selection, output);
+        public Task<byte[]> ReadScenarioImageAsync(ScenarioMaterialAccessLevel level, ScenarioMaterialImageRequest request, CancellationToken cancellationToken = default) => inner.ReadScenarioImageAsync(level, request, cancellationToken);
+        public Task ExportScenarioArchiveAsync(long game, ScenarioArchiveSelection selection, string output, ScenarioMaterialAccessLevel accessLevel, CancellationToken cancellationToken = default) => inner.ExportScenarioArchiveAsync(game, selection, output, accessLevel, cancellationToken);
     }
 
     private sealed class FakeHost : ILunaCaptureHost

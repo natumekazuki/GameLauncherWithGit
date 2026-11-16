@@ -15,5 +15,13 @@ public sealed record ScenarioMatch(string Id, IReadOnlyList<ScenarioOccurrencePa
 public sealed record ScenarioOccurrencePair(ScenarioOccurrenceRef Representative, ScenarioOccurrenceRef Revisit);
 public sealed record ScenarioMaterialSnapshot(ScenarioMaterialVersion Version, bool MatchingComplete,
     IReadOnlyList<ScenarioContent> Contents, IReadOnlyList<ScenarioOccurrence> Occurrences,
-    IReadOnlyList<ScenarioMatch> Matches);
+    IReadOnlyList<ScenarioMatch> Matches)
+{
+    public IReadOnlyList<ScenarioMaterialRange> Ranges { get; init; } = [];
+    public IReadOnlyList<ScenarioMaterialClassification> Classifications { get; init; } = [];
+    public IReadOnlyList<ScenarioMaterialImageMetadata> Images { get; init; } = [];
+    public ScenarioFlowGraph Graph { get; init; } = new([], [], [], []);
+}
+public sealed record ScenarioMaterialRange(string Id, string Name, CapturePosition Start, CapturePosition End,
+    IReadOnlyList<string> Tags, IReadOnlyList<ScenarioOccurrenceRef> Spans);
 public sealed record ScenarioMatchingBatchResult(int ProcessedItems, bool HasMore, bool DeferredForCapture);

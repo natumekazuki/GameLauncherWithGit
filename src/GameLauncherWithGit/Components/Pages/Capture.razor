@@ -120,8 +120,8 @@
                     <button class="secondary-button capture-icon-button" title="フローチャート" aria-label="フローチャートを表示" aria-pressed="@(_flowOpen ? "true" : "false")" @onclick="ToggleFlowAsync" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Flow" /></button>
                     <button class="secondary-button capture-icon-button" title="スクリーンショット設定" aria-label="スクリーンショット設定" @onclick="OpenScreenshotSettings" disabled="@_busy"><CaptureIcon Name="Camera" /></button>
                     <button class="secondary-button capture-icon-button" title="抽出設定" aria-label="抽出設定" @onclick="OpenSettings" disabled="@_busy"><CaptureIcon Name="Settings" /></button>
-                    <button class="secondary-button capture-icon-button" title="TXT出力（条件の全件）" aria-label="条件の全件をTXT出力" @onclick="() => OpenExportAsync(false)" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Export" /></button>
-                    <button class="secondary-button capture-icon-button" title="ZIP出力（条件の全件・画像付き）" aria-label="条件の全件を画像付きZIP出力" @onclick="() => OpenExportAsync(true)" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Archive" /></button>
+                    <button class="secondary-button capture-icon-button" title="本文TXT出力（条件の全件）" aria-label="条件の全本文をTXT出力" @onclick="() => OpenExportAsync(false)" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Export" /></button>
+                    <button class="secondary-button capture-icon-button" title="ZIP出力（構造情報・完全版）" aria-label="条件の全件をZIP出力" @onclick="() => OpenExportAsync(true)" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Archive" /></button>
                 </div>
             </div>
             <div class="capture-screenshot-status" role="status" aria-busy="@(Screenshots.Snapshot.Busy ? "true" : "false")"><CaptureIcon Name="Camera" /><span title="@Screenshots.Snapshot.Status">@Screenshots.Snapshot.Status</span><span class="capture-screenshot-count" title="アプリ起動中の撮影保存の成功回数（同一画像の再利用を含む）" aria-label="@($"アプリ起動中の撮影保存の成功回数 {Screenshots.Snapshot.SavedCount}回、同一画像の再利用を含む")">@Screenshots.Snapshot.SavedCount</span></div>
@@ -496,8 +496,16 @@
 @if (_exportOpen)
 {
     <div class="modal-backdrop"><section id="capture-editor" class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-export-title">
-        <header class="capture-dialog-header"><h2 id="capture-export-title">@(_exportArchive ? "画像付きZIP出力" : "TXT出力")</h2><button class="secondary-button capture-icon-button" title="キャンセル" aria-label="キャンセル" @onclick="CloseEditors" disabled="@_busy"><CaptureIcon Name="Close" /></button></header>
+        <header class="capture-dialog-header"><h2 id="capture-export-title">@(_exportArchive ? "ZIP出力" : "本文TXT出力")</h2><button class="secondary-button capture-icon-button" title="キャンセル" aria-label="キャンセル" @onclick="CloseEditors" disabled="@_busy"><CaptureIcon Name="Close" /></button></header>
         <p class="capture-export-scope">@ExportScope</p>
+        @if (_exportArchive)
+        {
+            <fieldset class="capture-export-mode" disabled="@_busy">
+                <legend>出力内容</legend>
+                <label><input type="radio" name="capture-export-content" checked="@(_exportAccessLevel == ScenarioMaterialAccessLevel.Structure)" @onchange="() => _exportAccessLevel = ScenarioMaterialAccessLevel.Structure" /><span>構造情報のみ（本文・画像本体なし）</span></label>
+                <label><input type="radio" name="capture-export-content" checked="@(_exportAccessLevel == ScenarioMaterialAccessLevel.Full)" @onchange="() => _exportAccessLevel = ScenarioMaterialAccessLevel.Full" /><span>本文・画像を含む完全版</span></label>
+            </fieldset>
+        }
         @if (AvailableRangeTags.Length > 0)
         {
             <CaptureTagsEditor Label="このタグの区間だけ含める" @bind-Tags="_exportIncludeTags" AvailableTags="AvailableRangeTags" AllowCreate="false" Disabled="_busy" />
@@ -545,6 +553,7 @@
     private string _managedRangeName = "";
     private string[] _managedRangeTags = [], _rangeTags = [], _exportIncludeTags = [], _exportExcludeTags = [];
     private bool _exportOpen, _exportArchive;
+    private ScenarioMaterialAccessLevel _exportAccessLevel = ScenarioMaterialAccessLevel.Structure;
     private string[] AvailableRangeTags => _ranges.SelectMany(x => x.Tags).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
     private string ExportScope => string.Join(" · ", new[] { _profile?.Title ?? "", _ranges.FirstOrDefault(x => x.Id == _rangeId) is { } range ? RangeName(range) : "ゲーム全体", _filter switch { "dialogue" => "セリフ", "narration" => "地の文", "none" => "未判定", _ => "分類すべて" } }
         .Concat(_speakerSearch.Length > 0 ? [$"名前：{_speakerSearch}"] : Array.Empty<string>())
@@ -1032,22 +1041,25 @@
         _ranges = await Store.GetCaptureRangesAsync(_profileId);
         _exportIncludeTags = _exportIncludeTags.Intersect(AvailableRangeTags, StringComparer.Ordinal).ToArray();
         _exportExcludeTags = _exportExcludeTags.Intersect(AvailableRangeTags, StringComparer.Ordinal).ToArray();
-        _exportArchive = archive; _exportOpen = true; _focusEditor = true;
+        _exportArchive = archive; _exportAccessLevel = ScenarioMaterialAccessLevel.Structure;
+        _exportOpen = true; _focusEditor = true;
     });
     private Task SaveExportAsync() => RunAsync(async () =>
     {
         if (_profile is null) return;
         var profileId = _profileId;
         var archive = _exportArchive;
+        var accessLevel = _exportAccessLevel;
         var selection = new ScenarioArchiveSelection(RangeId: _rangeId == 0 ? null : _rangeId,
             UnclassifiedOnly: _filter == "none", Kind: FilterKind, TextSearch: _textSearch, SpeakerSearch: _speakerSearch,
             IncludeTags: _exportIncludeTags.ToArray(), ExcludeTags: _exportExcludeTags.ToArray());
-        var format = archive ? "ZIP" : "TXT";
+        var format = archive ? accessLevel == ScenarioMaterialAccessLevel.Structure ? "構造情報ZIP" : "完全版ZIP" : "本文TXT";
         var folder = await Picker.PickFolderPathAsync($"{format}の保存先フォルダを選択");
         if (folder is null) return;
         var title = string.Concat((_profile.Title + (_ranges.FirstOrDefault(x => x.Id == _rangeId) is { } range ? "-" + range.Name : "")).Select(x => Path.GetInvalidFileNameChars().Contains(x) ? '_' : x));
-        var path = Path.Combine(folder, $"{title}-{DateTime.Now:yyyyMMdd-HHmmss-fff}.{(archive ? "zip" : "txt")}");
-        if (archive) await Task.Run(() => ScreenshotStore.ExportScenarioArchiveAsync(profileId, selection, path));
+        var modeSuffix = archive ? accessLevel == ScenarioMaterialAccessLevel.Structure ? "-structure" : "-full" : "";
+        var path = Path.Combine(folder, $"{title}{modeSuffix}-{DateTime.Now:yyyyMMdd-HHmmss-fff}.{(archive ? "zip" : "txt")}");
+        if (archive) await Task.Run(() => ScreenshotStore.ExportScenarioArchiveAsync(profileId, selection, path, accessLevel));
         else
         {
             var items = await Task.Run(() => Store.GetCaptureExportItemsAsync(profileId, selection));

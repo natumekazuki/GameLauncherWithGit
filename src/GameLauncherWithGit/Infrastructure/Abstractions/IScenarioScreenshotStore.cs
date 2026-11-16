@@ -11,5 +11,8 @@ public interface IScenarioScreenshotStore
         IReadOnlyCollection<CaptureEventKey> events, CancellationToken cancellationToken = default);
     Task<IReadOnlyDictionary<CaptureEventKey, int>> GetScreenshotCountsAsync(long captureGameId, IReadOnlyCollection<CaptureEventKey> events);
     Task<ScreenshotCleanupResult> CleanupUnreferencedScreenshotsAsync();
-    Task ExportScenarioArchiveAsync(long captureGameId, ScenarioArchiveSelection selection, string outputPath);
+    Task<byte[]> ReadScenarioImageAsync(ScenarioMaterialAccessLevel level, ScenarioMaterialImageRequest request,
+        CancellationToken cancellationToken = default);
+    Task ExportScenarioArchiveAsync(long captureGameId, ScenarioArchiveSelection selection, string outputPath,
+        ScenarioMaterialAccessLevel accessLevel, CancellationToken cancellationToken = default);
 }

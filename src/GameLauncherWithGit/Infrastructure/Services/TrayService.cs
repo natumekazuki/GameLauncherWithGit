@@ -314,6 +314,11 @@ public sealed class TrayService : ITrayService, IDisposable
 	{
 		try
 		{
+			await _serviceProvider.GetRequiredService<GameLauncherWithGit.Infrastructure.Mcp.ScenarioMcpHost>().DisposeAsync();
+		}
+		catch { _logger.LogWarning("Scenario MCP shutdown did not finish."); }
+		try
+		{
 			await _serviceProvider.GetRequiredService<ScenarioScreenshotService>().DisposeAsync();
 			await Task.Run(() => _serviceProvider.GetRequiredService<ScenarioCaptureService>().FinishAsync()).WaitAsync(TimeSpan.FromSeconds(3));
 		}

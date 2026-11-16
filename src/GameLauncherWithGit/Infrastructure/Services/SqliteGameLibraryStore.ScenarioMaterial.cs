@@ -1,4 +1,5 @@
 using GameLauncherWithGit.Application.Models;
+using GameLauncherWithGit.Application.Services;
 using Microsoft.Data.Sqlite;
 
 namespace GameLauncherWithGit.Infrastructure.Services;
@@ -34,6 +35,13 @@ public sealed partial class SqliteGameLibraryStore
         var items = await ReadCaptureExportItemsAsync(connection, transaction, captureGameId, selection, ranges);
         return await ReadScenarioMaterialAsync(connection, transaction, captureGameId, selection, ranges, items, cancellationToken);
     }, cancellationToken);
+
+    public async Task<ScenarioMaterialProjection> GetScenarioProjectionAsync(long captureGameId, ScenarioArchiveSelection selection,
+        ScenarioMaterialAccessLevel level, CancellationToken cancellationToken = default)
+    {
+        if (!Enum.IsDefined(level)) throw new ArgumentOutOfRangeException(nameof(level));
+        return ScenarioMaterialWireAdapter.ToWire(await GetScenarioMaterialAsync(captureGameId, selection, cancellationToken), level);
+    }
 
     // Call before opening the export snapshot, not while holding the screenshot file gate.
     private async Task PrepareScenarioMaterialAsync(long captureGameId, CancellationToken cancellationToken = default)
@@ -90,22 +98,90 @@ public sealed partial class SqliteGameLibraryStore
             var key = (canonical, item.Start - originalStart, item.Length);
             if (!groups.TryGetValue(key, out var contentId))
             {
-                contentId = "content-" + (contents.Count + 1);
+                contentId = ScenarioMaterialIds.Content(new(captureGameId, item.SessionId, item.Sequence, item.Start, item.Length));
                 groups.Add(key, contentId);
                 contents.Add(new(contentId, item.Text, item.Kind));
             }
             var eventKey = new CaptureEventKey(item.SessionId, item.Sequence);
             var images = eventImages[eventKey];
             var source = new ScenarioOccurrenceRef(captureGameId, item.SessionId, item.Sequence, item.Start, item.Length);
-            occurrences.Add(new($"{captureGameId}:{item.SessionId}:{item.Sequence}:{item.Start}:{item.Length}", source,
+            occurrences.Add(new(ScenarioMaterialIds.Occurrence(source), source,
                 contentId, item.Speaker, item.LabelId, item.LabelName, item.ReceivedAt, images));
         }
         // Pair selected occurrences, including a selected revisit when its historical representative was excluded.
         var matches = occurrences.GroupBy(x => x.ContentId).Where(x => x.Count() > 1).Select(group =>
         {
             var first = group.First();
-            return new ScenarioMatch(group.Key, group.Skip(1).Select(x => new ScenarioOccurrencePair(first.Source, x.Source)).ToArray());
+            return new ScenarioMatch("match:" + group.Key, group.Skip(1).Select(x => new ScenarioOccurrencePair(first.Source, x.Source)).ToArray());
         }).ToArray();
-        return new(version, complete, contents, occurrences, matches);
+        var includeAllRanges = selection.RangeId is null && selection.LabelId is null && !selection.UnclassifiedOnly
+            && selection.Kind is null && string.IsNullOrWhiteSpace(selection.TextSearch) && string.IsNullOrWhiteSpace(selection.SpeakerSearch)
+            && NormalizeCaptureTags(selection.IncludeTags).Length == 0 && NormalizeCaptureTags(selection.ExcludeTags).Length == 0;
+        var selectedRanges = ranges.Select(range => new ScenarioMaterialRange(range.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            range.Name, range.Start, range.End, range.Tags,
+            items.Select(item => (Item: item, Bounds: ClipCaptureInterval(item, range))).Where(x => x.Bounds.From < x.Bounds.To)
+                .Select(x => new ScenarioOccurrenceRef(captureGameId, x.Item.SessionId, x.Item.Sequence,
+                    x.Bounds.From, x.Bounds.To - x.Bounds.From)).ToArray()))
+            .Where(range => includeAllRanges || range.Spans.Count > 0).ToArray();
+        var classifications = items.Where(x => x.LabelId is not null).GroupBy(x => x.LabelId!.Value)
+            .Select(group => new ScenarioMaterialClassification(group.Key.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                group.First().LabelName!, ScenarioMaterialWireAdapter.KindName(group.First().Kind))).ToArray();
+        var imageIds = occurrences.SelectMany(x => x.Images).Select(x => x.ImageId).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        var imageAssets = await ReadScenarioMaterialImagesAsync(connection, transaction, imageIds, cancellationToken);
+        var snapshot = new ScenarioMaterialSnapshot(version, complete, contents, occurrences, matches)
+        { Ranges = selectedRanges, Classifications = classifications, Images = imageAssets };
+        var flowOverrides = await ReadScenarioFlowOverridesAsync(connection, transaction, captureGameId, cancellationToken);
+        var selectionCuts = await ReadScenarioSelectionCutsAsync(connection, transaction, captureGameId, items, cancellationToken);
+        return snapshot with { Graph = ScenarioFlowMaterialAdapter.Build(snapshot,
+            flowOverrides with { Cuts = flowOverrides.Cuts.Concat(selectionCuts).Distinct().ToArray() }) };
+    }
+
+    private static async Task<IReadOnlyList<ScenarioMaterialImageMetadata>> ReadScenarioMaterialImagesAsync(SqliteConnection connection,
+        SqliteTransaction transaction, IReadOnlyList<string> ids, CancellationToken cancellationToken)
+    {
+        var images = new List<ScenarioMaterialImageMetadata>();
+        foreach (var batch in ids.Chunk(400))
+        {
+            await using var query = connection.CreateCommand();
+            query.Transaction = transaction;
+            var parameters = batch.Select((id, index) => (Name: "$image" + index, Id: id)).ToArray();
+            query.CommandText = $"SELECT Id,Width,Height,PixelHash FROM CaptureImages WHERE Id IN ({string.Join(',', parameters.Select(x => x.Name))}) ORDER BY Id";
+            foreach (var parameter in parameters) query.Parameters.AddWithValue(parameter.Name, parameter.Id);
+            await using var reader = await query.ExecuteReaderAsync(cancellationToken);
+            var count = 0;
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                images.Add(new(reader.GetString(0), reader.GetInt32(1), reader.GetInt32(2), reader.GetString(3)));
+                count++;
+            }
+            if (count != batch.Length) throw new InvalidOperationException("添付画像のmetadataが見つかりません。");
+        }
+        return images;
+    }
+
+    private static async Task<IReadOnlyList<CapturePosition>> ReadScenarioSelectionCutsAsync(SqliteConnection connection,
+        SqliteTransaction transaction, long game, IReadOnlyList<CaptureTextItem> selected, CancellationToken cancellationToken)
+    {
+        // Filtering may leave holes. Do not turn two selected but originally non-adjacent items into an observed edge.
+        var original = new Dictionary<long, (int Ordinal, int Start, int End)>();
+        await using (var query = CaptureCommand(connection, transaction, """
+            SELECT i.Id,i.StartUtf16,i.LengthUtf16 FROM CaptureItems i JOIN CaptureSessions s ON s.Id=i.SessionId
+            WHERE s.CaptureGameId=$game ORDER BY i.SessionId,i.ReceiveSequence,i.StartUtf16
+            """, ("$game", game)))
+        await using (var reader = await query.ExecuteReaderAsync(cancellationToken))
+            while (await reader.ReadAsync(cancellationToken))
+                original.Add(reader.GetInt64(0), (original.Count, reader.GetInt32(1), reader.GetInt32(1) + reader.GetInt32(2)));
+        var cuts = new List<CapturePosition>();
+        for (var index = 1; index < selected.Count; index++)
+        {
+            var previous = selected[index - 1]; var current = selected[index];
+            if (previous.SessionId != current.SessionId) continue;
+            var adjacent = previous.Id == current.Id
+                ? previous.Start + previous.Length == current.Start
+                : original[previous.Id].Ordinal + 1 == original[current.Id].Ordinal
+                    && previous.Start + previous.Length == original[previous.Id].End && current.Start == original[current.Id].Start;
+            if (!adjacent) cuts.Add(current.StartPosition);
+        }
+        return cuts;
     }
 }

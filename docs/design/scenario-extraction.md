@@ -141,19 +141,28 @@ TXT・画像付きZIPの出力操作では、現在のゲーム・区間・分�
 
 本文保存は照合を待たない。アプリのDIでstore寿命のworkerを明示起動し、初回は既存の永続未処理分、以後は保存commit後の追加分を処理する。既定32件（API上限128件）の短transactionとbatch間の待機を使い、本文書込み待ちがあれば照合を延期する。workerの取消・終了は保持Taskをjoinし、未完了transactionはrollback、処理済み位置は次の起動で再開する。既存の本文受信queueや未保存件数の契約は変えない。訂正・再分類・話者更新・再分割・削除は同transactionのtriggerで作品の照合を失効させ、再構築までは古い対応を読取へ使わない。変更がなければ再出力時に過去の全件を再照合しない。本文保存失敗を照合で救済しない。
 
-`IScenarioMaterialReader.GetScenarioMaterialAsync`はUI thread外で準備し、既存の区間・タグ・分類・名前・本文条件を適用してから共通資料へ投影する。ZIPも同じ`ReadScenarioMaterialAsync`を既存のconnection/transaction内で使う。画像対応はmetadataだけのbatch読取を再利用し、PNG本体を読まない。返却は次の構成となる。
+`IScenarioMaterialReader.GetScenarioProjectionAsync`はUI thread外で資料を準備し、選択条件を先に適用してから共通の`ScenarioMaterialProjection`へ投影する。MCP hostは各HTTP要求の認証から`ScenarioMaterialAccessLevel`を決定し、tool/resource引数から権限を選ばせない。ZIPとMCPは同じprojection DTO・識別子を使い、ZIPは既存connection/transaction内のsnapshotから組み立てる。MCP transportと設定は[シナリオ MCP](scenario-mcp.md)を参照する。
 
-- `version`: `ScenarioMaterialVersion(captureGameId, revision, matchingRevision)`。本文・有効分類/話者・境界・区間タグ・画像関連・経路指定の変更は`revision`、照合batchの反映は`matchingRevision`を更新する。同じDB snapshotの両世代を揃え、独自の整合性hash台帳は作らない。
+内部の完全snapshotは本文・出現と照合に加え、区間の元境界・選択本文との`spans`・タグ、選択内分類、画像metadata、flowを同じSQLite transactionから読む。`ScenarioMaterialWireAdapter.ToWire(snapshot, level)`がallowlist DTOの`ScenarioStructureProjection`または`ScenarioFullProjection`へ変換し、`ScenarioMaterialProjection`はこの二型だけをJSON polymorphismへ登録する。内部snapshot自体を返却projectionのpropertyとして公開しない。ZIPの`material.json`もMCPの読取と同じprojectionを使う。
+
+- `version`: wire形式の`ScenarioMaterialWireVersion(captureGameId, revision, matchingRevision)`。`captureGameId`は文字列、revisionは数値。本文・有効分類/話者・境界・区間タグ・画像関連・経路指定の変更は`revision`、照合batchの反映は`matchingRevision`を更新する。同じDB snapshotの両世代を揃え、独自の整合性hash台帳は作らない。
+- `selectionVersion`: 選択後の順序付き`occurrenceIds`と`rangeIds`。検索語を含めず、同じ資料版に対する選択結果scopeを示す。
 - `matchingComplete`: snapshot内の未処理の有無。記録が優先され未完了の場合も原記録を出し、未確認の一致は使わない。
-- `contents`: 選択されたitem/部分segmentの共通本文。`id/text/kind`を持ち、照合で確認した同じ並びだけが同一contentを参照する。文字列だけの重複排除ではない。
-- `occurrences`: 原記録順の出現。選択内の`source/contentId/speaker/labelId/labelName/receivedAt/images`を持つ。話者・ラベル・画像はその出現自身の値で、他周回の値を持ち越さない。
-- `matches`: 選択内の同じcontentの代表出現と再訪出現の対応pair。初出が選択外なら選択内の最初の出現を代表にし、選択外のイベント参照も出さない。
+- `contents`: 選択されたitem/部分segment。Structureでは`id/kind`だけ、Fullでは`id/text/kind`を持つ。照合で確認した同じ並びだけが同一contentを参照し、文字列だけで重複排除しない。
+- `occurrences`: 原記録順の出現。Structureは`source/contentId/labelId/labelName/receivedAt/images`、Fullはそれらに`speaker`を加えた情報を持つ。ラベル・画像はその出現自身の値で、他周回の値を持ち越さない。
+- `matches`, `ranges`, `classifications`, `images`, `graph`: 同じ選択範囲の対応、元区間/タグ/分類、画像寸法/hash、フロー構造を表す。Structureでは本文や話者を持つpropertyを含めない。
 
-`source`は`ScenarioOccurrenceRef(captureGameId, sessionId, receiveSequence, startUtf16, lengthUtf16)`で、item IDやZIP内IDでなく原文位置を根拠にする。再利用する側は資料版全体を照合し、訂正・再分割・削除後に旧参照を新しい資料へ無断で付け替えない。content/match IDはその選択投影内だけのIDであり、永続的な場面IDではない。部分選択は原文内の半開区間を保ち、元の一致itemの相対開始位置・長さが同じ選択sliceだけでcontentを共有する。
+`source`は`ScenarioMaterialWireReference(captureGameId, sessionId, receiveSequence, startUtf16, lengthUtf16)`で、item IDやZIP内で再採番したIDでなく原文位置を根拠にする。occurrence IDは`occ:<captureGameId>:<sessionId>:<receiveSequence>:<startUtf16>:<lengthUtf16>`、content IDは選択内代表のoccurrence IDに`content:`を付け、match IDはcontent IDに`match:`を付ける。先行要素数で増える`content-N`形式は使わない。flow出現IDもraw spanから同じ関数で作り、node IDは`node:<game>:<blockId>`（内部`/`は`~`）、chart IDは`flow:<game>:<chartId>`とする。64bit整数のIDは不変文化の10進文字列、受信連番・UTF-16位置・長さ・資料世代などの量は数値とする。opaque image IDは元の文字列を維持する。これらのIDは同じ作品・Version・SelectionVersionのMCP/ZIP間では同値だが、古い資料版へ新しい結果を無断で付け替えない。部分選択は原文内の半開区間を保ち、元の一致itemの相対開始位置・長さが同じ選択sliceだけでcontentを共有する。
+
+`ScenarioMaterialSelectionVersion`は選択後の安定順`occurrenceIds/rangeIds`を持つ構造recordで、検索語や単調counterではなく結果scopeを表す。`SameSelection`は両配列をOrdinalの値列で比較し、配列instanceの参照同一性を使わない。異なる条件でも二つのID列が同じなら同scopeで、画像読取では`Version`と併せて照合する。別hash、可逆encoding、ID台帳、永続selection状態は作らない。
 
 たとえばタグなしの3周が共通の冒頭3件を通り、2周目だけ「うん」が「いや」に変わり、共通の後半3件へ戻る場合、共通本文6件と各返答2件をcontentsへ一度ずつ置く。occurrencesのcontent参照を各回の順に辿れば分岐と再合流を復元でき、2周目の返答だけに付いた画像もその出現だけから参照できる。2周目のタグだけを選べば、初出が範囲外でも2周目の本文・話者・画像・位置だけを出す。
 
-外部資料MCPは未提供。現時点の`ScenarioMaterialAccessService`は、信頼済みの現在権限・Session/Turn/推論先・資料版・出現/画像対応を入力とする内部pure policyだけで、listener、credential発行/配送、実reader接続、画像配送、実行環境隔離は持たない。アプリ間authority・失効・transportの合意と結合検証なしにこのpolicyを外部公開の認可保証として使わない。
+Structure projectionはflow構造・接続・出現位置・タグ/範囲/分類・画像一覧metadataに限定し、本文・抜粋・話者・preview・画像bytes・thumbnail・端末path・本文/話者検索語のpropertyを出さない。機密値をmaskしたりnullへ置換したりせず、property自体を省略する。明示された範囲/タグ/分類名はそのまま扱い、本文や話者から名前やpreviewを生成しない。ローカルUIは適用済み本文/話者検索を選択条件に使えるが、Structure出力は検索語をmanifestへ含めない。MCPのStructure権限では本文/話者検索を無視でなく拒否し、検索結果の有無から内容を推測させない。Full projectionは本文・話者も含む。
+
+画像本体は`IScenarioScreenshotStore.ReadScenarioImageAsync(level, request, cancellationToken)`でFull権限だけに返す。要求は作品ID、元selection、wire版、`SelectionVersion`、occurrence ID、image IDからなり、外部projectionの版をそのまま渡せる。Structureと未定義levelはrequest/game/資料準備より先に拒否する。Fullは画像gate内の同一transactionで元selectionを再投影し、`ScenarioMaterialImageAccess.Validate(currentSnapshot, level, request)`で全Version・scopeの値列・選択内出現とimage IDのexact関連を検証してからbytesを読む。graph内のcutで分割された出現IDはraw spanが選択本文内に含まれ、その原文に画像が関連する場合だけ解決する。共通contentだけを根拠に別出現の画像を付け替えず、file pathは返さない。これはAPI認可であり、同一ユーザーのfile/shell/SSHアクセスを隔離するものではない。
+
+Full/Structureのどちらも区間・タグ・分類・検索条件を先に適用し、選択内だけをprojectionする。絞込み後に間が空いた場合は元のitem位置と隣接情報を使ってread-time cutを置き、選択外の本文、話者、画像、原代表イベント参照を出さず、実際には観測されていない接続を追加しない。このcutはDBへ保存せず、raw `ScenarioFlowOverrides`や既存境界を変更しない。
 
 ## 経路図と出現ごとの区切り
 
@@ -209,27 +218,35 @@ TXT出力は表示ページの200件制限ではなく、選択したゲーム�
 
 履歴の本文行からその原文に紐づく画像を開く。表示ページの原文key集合の添付件数を1SQLで取得し、画像ボタンに枚数を示す。0枚と取得失敗を区別し、件数表示のために画像本体を読まない。再分割された同じ原文の行にも同じ添付件数を示す。ZIP出力はTXTと同じ適用済みゲーム・区間・分類・名前・本文AND条件の全件を対象とし、表示ページ上限を適用しない。本文・分類・話者・区間・画像関連を同一DB snapshotで確定し、出力中は対象画像の削除と競合させない。ZIPは新規ファイルへ完成してから公開し、既存出力を上書きしない。欠落画像やコピー失敗を成功扱いしない。
 
-- `manifest.json`: format=`GameLauncherWithGit.scenario`、schemaVersion=3、出力時刻、ゲーム、条件snapshot、区間一覧`ranges`、UTF-16 code unit指定、hash方式、画像IDと相対path・寸法・hash。`identifierScope=archive`のIDはそのZIP内の参照に使い、別ZIPやDBとの永続照合には使わない。`selection.rangeId`は選択区間のID（全域ならnull）、`selection.labelId`は分類ID（分類指定なしならnull）。ID/referenceはJSON文字列、受信連番・UTF-16位置などの量はJSON numberとする。区間定義の複製は持たず、選択しても一致本文がなければ`ranges`は空になり得る。
-- `texts.jsonl`: 原文イベントごと1行。取得回・受信連番・原文内開始位置順で、選択された現在のsegmentの開始・長さ・本文・有効分類/ラベル/話者と、画像ID・撮影時刻を記載する。除外部分を含む`rawText`は出力しない。同文別イベントを統合しない。
-- `material.json`: 同じsnapshotの共通資料（上記`version/matchingComplete/contents/occurrences/matches`）。manifestの`materialFile`から参照し、`materialVersion`と`matchingComplete`もmanifestへ記載する。共通本文を一度で読む利用側はこちらを読み、従来の出現ごとの本文が必要なら`texts.jsonl`を使う。schema 2で定義した本文・区間・元境界・spans・画像構造を置換しない加算fileで、旧ZIPは変換・上書きしない。
+- `manifest.json`: format=`GameLauncherWithGit.scenario`、schemaVersion=3、`contentMode`（`structure`または`full`）、出力時刻、ゲーム、条件snapshot、区間一覧`ranges`、hash方式、画像metadataを持つ。位置はUTF-16 code unitで表す。`identifierScope=archive`はarchive文書内のmanifest参照を表し、共通`material.json`のraw由来IDを別値へ変換する指定ではない。`selection.rangeId`は選択区間のID（全域ならnull）、`selection.labelId`は分類ID（分類指定なしならnull）。ID/referenceはJSON文字列、受信連番・UTF-16位置などの量はJSON numberとする。区間定義の複製は持たず、選択しても一致本文がなければ`ranges`は空になり得る。Structureでは`textSearch`/`speakerSearch`のpropertyを省略し、`images`へpathを含めない。Fullでは`textFile`/`textIndexUnit`と画像pathを記録する。
+- `texts.jsonl`（Fullのみ）: 原文イベントごと1行。取得回・受信連番・原文内開始位置順で、選択された現在のsegmentの開始・長さ・本文・有効分類/ラベル/話者と、画像ID・撮影時刻を記載する。除外部分を含む`rawText`は出力しない。同文別イベントを統合しない。
+- `material.json`: 同じsnapshot/selectionの共通`ScenarioMaterialProjection`。manifestの`materialFile`から参照し、`materialVersion`と`matchingComplete`もmanifestへ記載する。Structureでは`ScenarioStructureProjection`を直接JSON化し、本文・話者・preview・path等のpropertyを持たない。Fullでは`ScenarioFullProjection`を出す。共通本文を一度で読む利用側はこちらを読み、従来の出現ごとの本文が必要ならFullの`texts.jsonl`を使う。schema 2で定義した本文・区間・元境界・spans・画像構造を置換しない加算fileで、旧ZIPは変換・上書きしない。
 
-- `images/<id>.png`: 選択本文が参照する画像だけを重複なく収録する。IDは出力内識別子、pathは相対pathとし、端末上の絶対pathは載せない。部分区間でも画像の関連範囲は`capture_event`、方法は`latest_received_body`と明示し、後続本文へ暗黙に持ち越さない。
+- `images/<id>.png`（Fullのみ）: 選択本文が参照する画像だけを重複なく収録する。IDは出力内識別子、pathは相対pathとし、端末上の絶対pathは載せない。Structureは画像ID・媒体形式・寸法・pixel hashをmetadataとして示すが、pathと画像entryを作らない。部分区間でも画像の関連範囲は`capture_event`、方法は`latest_received_body`と明示し、後続本文へ暗黙に持ち越さない。
 
-新規ZIPはschemaVersion=3を使う。schema 2で定義した`texts.jsonl`、`ranges`、元境界、spans、画像metadataと選択動作は維持し、manifestには共通資料への参照を追加する。ID/referenceは文字列で出力する。64bit整数として保持するIDは不変文化の10進文字列とし、既存のopaque ID（例：hex形式の画像ID、`content-N`のcontent/match ID）および複合ID（例：`eventId`、occurrence ID）は元の文字列表現を維持する。`contents[].kind`と出力条件の`kind`は`Dialogue` / `Narration` / `Other`の文字列、未判定は`null`にする。revision、matching revision、受信連番、UTF-16位置と長さなどの量はJSON numberのままにする。ドメインsnapshotを直接JSON化せず、materialは出力専用wire projectionを使い、manifestの`materialVersion`はmaterialの`version`と同じ形・値を持つ。IDを文字列として出力することで64bit値をJSON numberとして読む際の精度損失を避ける。既存schema 2 ZIPは変更・変換しない。
+二つのmodeとも同じ選択scopeと`ScenarioMaterialProjection`を使い、同一作品・資料版・SelectionVersionならoccurrence/content/match/flow/image IDは一致する。Structure ZIPは本文や抜粋を含むpropertyを追加せず、検索語も保存しない。Full ZIPは既存の本文・画像出力を維持する。`IScenarioScreenshotStore.ExportScenarioArchiveAsync`は`ScenarioMaterialAccessLevel`を受け、`Structure`/`Full`を明示して既存ZIP writerへ渡す。
 
-`ranges`の各要素は文字列`id`、`name`、`start`、`end`、文字列配列`tags`、交差範囲配列`spans`を持つ。保存済み区間の開始位置順（同位置はID順）で、同名・重複・隣接区間は独立したIDのまま保持する。区間を追加してもJSONL本文を複製せず、区間外の本文も現在の出力条件に従って出す。
+新規ZIPはschemaVersion=3を使う。schema 2で定義したFullの`texts.jsonl`、`ranges`、元境界、spans、画像metadataと選択動作は維持し、manifestには共通資料への参照を追加する。ID/referenceは文字列で出力する。64bit整数として保持するIDは不変文化の10進文字列とし、opaque ID（例：hex形式の画像ID）およびraw由来の複合ID（occurrence/content/match/flow ID）はそれぞれの共通projectionで定義する文字列表現を維持する。`eventId`は`<sessionId>:<receiveSequence>`、occurrence IDは`occ:<captureGameId>:<sessionId>:<receiveSequence>:<startUtf16>:<lengthUtf16>`、content IDは`content:`と代表occurrence IDの連結、match IDは`match:`とcontent IDの連結である。`contents[].kind`と出力条件の`kind`は`Dialogue` / `Narration` / `Other`の文字列、未判定は`null`にする。revision、matching revision、受信連番、UTF-16位置と長さなどの量はJSON numberのままにする。manifestの`materialVersion`はmaterialの`version`と同じ形・値を持ち、domain snapshotを直接JSON化しない。既存schema 2 ZIPは変更・変換しない。
 
-`start`と`end`は保存された元境界で、`{ sessionId: string, receiveSequence: number, offsetUtf16: number }`。位置は取得回IDの数値順、受信連番順、原文内UTF-16 offset順に比較し、開始を含み終了を含まない。取得回は時刻順やJSON文字列の辞書順で比較しない。`sessionId`はJSONLの同名fieldと一致し、`eventId`は`sessionId:receiveSequence`。開始/終了イベントが削除済み・選択外の場合や、取得回先頭の`receiveSequence=0, offsetUtf16=0`を境界とする場合もある。元境界は本文の収録を保証せず、出力対象に合わせて移動しない。
+`ranges`の各要素は文字列`id`、`name`、`start`、`end`、文字列配列`tags`、交差範囲配列`spans`を持つ。保存済み区間の開始位置順（同位置はID順）で、同名・重複・隣接区間は独立したIDのまま保持する。区間metadataを加えてもFullの`texts.jsonl`本文を複製せず、Fullでは区間外の本文も現在の出力条件に従って出す。Structureには本文を出さない。
 
-`spans`は区間と実際に出力された各segmentとの交差で、`{ eventId: string, startUtf16: number, lengthUtf16: number }`をJSONLと同じ位置順に持つ。segmentと同様に原文内の半開区間`[startUtf16, startUtf16 + lengthUtf16)`を表す。各spanは対応eventの一つの出力segment内に収まり、segment本文内の相対位置は`span.startUtf16 - segment.startUtf16`で得る。区間がsegmentの途中で始まる場合も本文を再分割しない。分類分割・除外・検索・削除による穴をspan間へ補完したり、両端間の全文が収録済みと解釈したりしない。タグや分類・有効話者はそれぞれ区間とsegmentの情報であり、一方を他方へ自動付与しない。
+`start`と`end`は保存された元境界で、`{ sessionId: string, receiveSequence: number, offsetUtf16: number }`。位置は取得回IDの数値順、受信連番順、原文内UTF-16 offset順に比較し、開始を含み終了を含まない。取得回は時刻順やJSON文字列の辞書順で比較しない。`sessionId`はFull JSONLにある同名fieldと一致し、`eventId`は`sessionId:receiveSequence`。StructureではJSONLを出さないが、metadataの参照は同じrawイベント位置を使う。開始/終了イベントが削除済み・選択外の場合や、取得回先頭の`receiveSequence=0, offsetUtf16=0`を境界とする場合もある。元境界は本文の収録を保証せず、出力対象に合わせて移動しない。
 
-区間・タグ・分類・名前・本文の絞込みがないゲーム全体出力は、本文削除で空になったものも含めて全保存区間を収録し、その場合の`spans`は空配列になる。検索の空白だけの値と空のタグ配列は絞込みとしない。それ以外は、すべての出力条件適用後のsegmentと交わる区間だけを収録する。選択区間も例外にせず、無一致時に名前・境界・タグを別経路から出さない。交差する区間の元境界・名前・全タグは出力するが、無関係な区間や除外範囲内だけの区間metadataは出さない。出力条件として指定された検索語・包含/除外タグ名と`rangeId`は条件snapshotに保持する。
+`spans`は区間と実際に出力された各segmentとの交差で、`{ eventId: string, startUtf16: number, lengthUtf16: number }`を取得回・受信連番・原文位置順に持つ。Fullでは`texts.jsonl`と同じ順序で、Structureでは選択済みprojectionの出現順に対応する。segmentと同様に原文内の半開区間`[startUtf16, startUtf16 + lengthUtf16)`を表す。各spanは対応eventの一つの選択segment内に収まり、segment本文内の相対位置は`span.startUtf16 - segment.startUtf16`で得る。区間がsegmentの途中で始まる場合も本文を再分割しない。分類分割・除外・検索・削除による穴をspan間へ補完したり、両端間の全文が収録済みと解釈したりしない。タグや分類・有効話者はそれぞれ区間とsegmentの情報であり、一方を他方へ自動付与しない。
+
+区間・タグ・分類・名前・本文の絞込みがないゲーム全体出力は、本文削除で空になったものも含めて全保存区間を収録し、その場合の`spans`は空配列になる。検索の空白だけの値と空のタグ配列は絞込みとしない。それ以外は、すべての出力条件適用後のsegmentと交わる区間だけを収録する。選択区間も例外にせず、無一致時に名前・境界・タグを別経路から出さない。交差する区間の元境界・名前・全タグは出力するが、無関係な区間や除外範囲内だけの区間metadataは出さない。Fullは出力条件の検索語・包含/除外タグ名・`rangeId`を条件snapshotへ記録する。Structureは本文/話者検索語のpropertyを省略し、選択済みIDとVersion/SelectionVersionで結果scopeを示す。
 
 schema 3でも区間定義を`ranges`へ明示し、選択区間の表現を`selection.rangeId`へ統一する。ID/referenceは文字列、量は数値というwire型をZIP全体で保つ。既存ZIPを上書き・変換せず、新しく出すZIPの契約として適用する。ZIPを読む側は`schemaVersion`を確認する。アプリにはZIP再取込・旧schema読出し・互換出力の経路を設けない。
 
-`manifest.screenshotOccurrences`は、選択済み本文を持つ原文ごとに一要素を持ち、`eventId`、raw取得回の文字列`sessionId`、数値`receiveSequence`、文字列配列`imageIds`を示す。部分event・複数segmentでも一要素で、選択後の原文だけを含む。空配列は確認済みの添付なし、要素不在は選択投影外であり未添付と決めつけない。同じ画像を複数eventが使う場合は各出現を残し、実ファイルと`manifest.images`は画像ごと一つだけにする。対応するJSONLのevent画像集合と一致させ、先行する共通contentの画像を推定で付けない。
+`manifest.screenshotOccurrences`は選択済み出現を持つ原文ごとに一要素を持ち、`eventId`、raw取得回の文字列`sessionId`、数値`receiveSequence`、文字列配列`imageIds`を示す。部分event・複数segmentでも一要素で、選択後の原文だけを含む。空配列は確認済みの添付なし、要素不在は選択projection外であり未添付と決めつけない。同じ画像を複数eventが使う場合は各出現を残し、Fullの実ファイルと両modeの`manifest.images` metadataは画像ごと一つだけにする。FullのJSONL event画像集合および共通material occurrenceの画像参照と一致させ、先行する共通contentの画像を推定で付けない。
 
-画像位置を引く側は、本文JSONLやPNGを開かず`sessionId`と`receiveSequence`の両方でこの配列を探し、得た画像IDのpathを`manifest.images`で解決する。ZIPのevent IDはarchive内参照であり永続照合の根拠にしない。内部`IScenarioScreenshotStore.GetEventScreenshotMetadataAsync(captureGameId, events, cancellationToken)`も同じevent粒度で、要求順のID・撮影時刻と添付0件を返す。不在・他作品の原文はエラーとし、0件へ置換しない。本文・PNG本体をSELECTせず、共通readerも同transactionのこのmetadata処理を使う。
+Structureの利用側は`material.json`のraw source位置・occurrenceごとのimageIdsとmanifest画像metadataを使い、ZIP内に画像path/PNGがあると仮定しない。Fullの利用側は`sessionId`と`receiveSequence`で`screenshotOccurrences`を引き、得た画像IDのpathをmanifestで解決できる。MCPは同じprojectionを使い、Full画像APIも作品・selection・資料版・SelectionVersion・Occurrence ID・Image IDをgate内で検証してbytesだけを返す。内部`IScenarioScreenshotStore.GetEventScreenshotMetadataAsync(captureGameId, events, cancellationToken)`も同じevent粒度で、要求順のID・撮影時刻と添付0件を返す。不在・他作品の原文はエラーとし、0件へ置換しない。metadata読取は本文・PNG本体をSELECTしない。
+
+### ZIPの出力UI
+
+ZIP出力画面では「構造情報のみ（本文・画像本体なし）」と「本文・画像を含む完全版」を選べ、開いた時点では構造情報が選択される。現在適用済みのゲーム・区間・分類・名前/本文検索と、出力画面の包含/除外タグを条件にし、表示ページに限らず一致する全件を出力する。ローカル画面で適用した内容検索は選別に使えるが、構造情報ZIPには検索語を含めない。完全版は本文と関連画像も含み、本文TXT出力とは別のZIP出力として扱う。
+
+保存先選択を取り消すと出力画面と選択内容を保つ。出力に失敗した場合は成功通知を出さず、選択を保ったまま再試行できる。画面を閉じて開き直すと構造情報が初期選択になる。保存名には`-structure`または`-full`が付き、保存完了通知にも出力種別を示す。本文TXTは従来どおり独立した操作として残す。この画面はAPIキー認可やOS/file/shell/SSH隔離を設定するものではない。
 
 ## ネイティブbuild・安全境界
 
@@ -242,5 +259,7 @@ build手順は[README](../../README.md#windows-での-ui-確認)、依存版と�
 ## 検証境界
 
 自動testは原文・順序・同文別受信、分類/話者、手動値と範囲、登録削除/再登録、OFFと候補保持を一時DBで確認する。UIは実データを持たない隔離環境で実描画と操作を確認する。実ユーザープロファイルのアプリ起動は登録repositoryの監視・同期を伴うため、検証目的で安易に起動しない。
+
+共通projectionの自動testでは、実JSON上で権限ごとの省略propertyとID/版/selection scopeの一致、SelectionVersionの値列比較、絞込みによるread-time cutと保存済みflow cutの不変、Full限定画像読取の版・scope・出現/画像関係検証を対象とする。ZIP実体とMCP transportはそれぞれの実経路を使って検証する。
 
 synthetic processでのC#接続確認と、実ゲーム本文の画面照合・全作品対応は異なる。実ゲームの精度、長時間負荷、MSIX配布の成立はそれぞれ対象環境と条件を定めて確認し、build成功だけで確認済みとしない。

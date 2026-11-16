@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="../../scripts/configure-scenario-mcp.ps1" Link="configure-scenario-mcp.ps1" CopyToOutputDirectory="PreserveNewest" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.4.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../../src/GameLauncherWithGit/Application/Models/Scenario*.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Application/Models/AppSettings.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Application/Models/GameCard*.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Application/Models/GameSaveLinkItem.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Application/Models/RepositorySyncHistory*.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Application/Services/Scenario*.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Application/Abstractions/IAppSettingsService.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Mcp/*.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Services/SqliteGameLibraryStore*.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Services/LunaCaptureHost.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/IGameLibraryStore.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/ISaveLinkStore.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/IRepositorySyncHistoryStore.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/IScenarioCaptureStore.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/IScenarioMaterialReader.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/IScenarioScreenshot*.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/ILunaCaptureHost.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/INotificationService.cs" />
+  </ItemGroup>
+</Project>

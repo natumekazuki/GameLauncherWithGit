@@ -14,12 +14,21 @@ public partial class App : Microsoft.Maui.Controls.Application
 
 	private readonly IAppSettingsService _appSettings;
 	private CancellationTokenSource? _windowSizeSaveCancellation;
+#if WINDOWS
+	private readonly GameLauncherWithGit.Infrastructure.Mcp.ScenarioMcpHost _mcp;
+	private readonly Task _mcpStartup;
+#endif
 
-	public App(IAppSettingsService appSettings, GameLauncherWithGit.Application.Services.ScenarioScreenshotService screenshots)
+	public App(IAppSettingsService appSettings, GameLauncherWithGit.Application.Services.ScenarioScreenshotService screenshots,
+		IServiceProvider services)
 	{
 		_appSettings = appSettings;
 		InitializeComponent();
 		EnsureSingleInstance();
+#if WINDOWS
+		_mcp = services.GetRequiredService<GameLauncherWithGit.Infrastructure.Mcp.ScenarioMcpHost>();
+		_mcpStartup = StartMcpAsync(services);
+#endif
 	}
 
 	protected override Window CreateWindow(IActivationState? activationState)
@@ -41,9 +50,32 @@ public partial class App : Microsoft.Maui.Controls.Application
 				QueueWindowSizeSave(window);
 			}
 		};
+#if WINDOWS
+		window.Destroying += async (_, _) =>
+		{
+			await _mcpStartup;
+			try { await _mcp.DisposeAsync(); }
+			catch { Trace.WriteLine("Scenario MCP shutdown failed."); }
+		};
+#endif
 
 		return window;
 	}
+
+#if WINDOWS
+	private async Task StartMcpAsync(IServiceProvider services)
+	{
+		try
+		{
+			var configuration = GameLauncherWithGit.Infrastructure.Mcp.ScenarioMcpConfiguration.Load(
+				Path.Combine(GameLauncherWithGit.Application.Services.AppDataPaths.Directory, "scenario-mcp.json"));
+			if (!configuration.Enabled) return;
+			var store = services.GetRequiredService<GameLauncherWithGit.Infrastructure.Services.SqliteGameLibraryStore>();
+			await _mcp.StartAsync(configuration, store, store, store);
+		}
+		catch { Trace.WriteLine("Scenario MCP unavailable. Check the local MCP configuration and port."); }
+	}
+#endif
 
 	private void QueueWindowSizeSave(Window window)
 	{
