@@ -8,6 +8,7 @@
 @inject IScenarioCaptureStore Store
 @inject IScenarioScreenshotStore ScreenshotStore
 @inject IScenarioMaterialReader MaterialReader
+@inject IScenarioSceneFlowStore SceneStore
 @inject ScenarioScreenshotService Screenshots
 @inject ScenarioCaptureService CaptureService
 @inject IPathPickerService Picker
@@ -117,7 +118,8 @@
                     }
                 </div>
                 <div class="capture-tool-group capture-utilities">
-                    <button class="secondary-button capture-icon-button" title="フローチャート" aria-label="フローチャートを表示" aria-pressed="@(_flowOpen ? "true" : "false")" @onclick="ToggleFlowAsync" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Flow" /></button>
+                    <button class="secondary-button capture-icon-button" title="観測した経路" aria-label="観測した経路を表示" aria-pressed="@(_flowOpen ? "true" : "false")" @onclick="ToggleFlowAsync" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Flow" /></button>
+                    <button class="secondary-button capture-icon-button" title="場面フローを編集" aria-label="場面フローを編集" @onclick="OpenSceneEditor" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Edit" /></button>
                     <button class="secondary-button capture-icon-button" title="スクリーンショット設定" aria-label="スクリーンショット設定" @onclick="OpenScreenshotSettings" disabled="@_busy"><CaptureIcon Name="Camera" /></button>
                     <button class="secondary-button capture-icon-button" title="抽出設定" aria-label="抽出設定" @onclick="OpenSettings" disabled="@_busy"><CaptureIcon Name="Settings" /></button>
                     <button class="secondary-button capture-icon-button" title="本文TXT出力（条件の全件）" aria-label="条件の全本文をTXT出力" @onclick="() => OpenExportAsync(false)" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Export" /></button>
@@ -193,6 +195,11 @@
     }
 </section>
 
+@if (_sceneEditorOpen)
+{
+    <SceneFlowEditor @ref="_sceneEditor" CaptureGameId="_profileId" Title="@(_profile?.Title ?? string.Empty)" Closed="CloseSceneEditorAsync" Changed="SceneFlowChangedAsync" OpenRange="OpenSceneRangeAsync" />
+}
+
 @if (_independentFlowConfirm)
 {
     <div class="modal-backdrop"><section id="capture-editor" class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-independent-title">
@@ -247,7 +254,7 @@
                             @foreach (var range in _ranges) { <option value="@range.Id">@RangeName(range)</option> }
                         </select>
                         <label>区間名<input @bind="_managedRangeName" disabled="@_busy" /></label>
-                        <CaptureTagsEditor Label="区間タグ" @bind-Tags="_managedRangeTags" AvailableTags="AvailableRangeTags" Disabled="_busy" />
+                        <CaptureTagsEditor Label="区間タグ" @bind-Tags="_managedRangeTags" AvailableTags="AvailableRangeTags" SuggestedTags="_gameSpeakers" Disabled="_busy" />
                         <div class="capture-history-actions">
                             <button class="secondary-button capture-text-button" @onclick="SaveManagedRangeAsync" disabled="@_busy"><CaptureIcon Name="Check" />名前とタグを保存</button>
                             <button class="secondary-button capture-text-button" @onclick="() => SetHistoryDialog(HistoryDialog.DeleteRange)" disabled="@_busy"><CaptureIcon Name="Trash" />区間を削除</button>
@@ -256,7 +263,7 @@
                 </section>
                 <section class="capture-history-section">
                     <h3>ゲームの全履歴</h3>
-                    <p class="capture-muted">本文・名前の原文・区間を消去します。ゲーム登録と抽出設定は残ります。</p>
+                    <p class="capture-muted">本文・名前の原文・区間を消去します。ゲーム登録・抽出設定・手動場面・接続・作品タグは残ります。</p>
                     <button class="secondary-button capture-text-button capture-danger" @onclick="PrepareClearHistoryAsync" disabled="@(_busy || (_historyCounts.Events == 0 && _historyCounts.Ranges == 0))"><CaptureIcon Name="Trash" />全履歴を消去…</button>
                 </section>
                 <section class="capture-history-section">
@@ -283,12 +290,13 @@
             {
                 <p>このゲームの本文 @_historyCounts.Items 件、原文 @_historyCounts.Events 件（名前の受信を含む）、区間 @_historyCounts.Ranges 件をすべて消去します。</p>
                 <p class="capture-warning">検索・分類・選択中の区間に関係なく、このゲームの全履歴が対象です。元に戻せません。</p>
+                <p class="capture-warning">手動場面・接続・作品タグは残ります。消去した区間との関連は外れます。</p>
                 <p>ゲーム登録・セーブデータ・抽出設定・他のゲームの履歴は変更しません。</p>
             }
             else if (_historyDialog == HistoryDialog.DeleteRange)
             {
                 <p>区間「@ManagedRangeDisplayName」を削除します。</p>
-                <p>区間の名前と範囲だけを削除し、本文は残ります。区間の削除は元に戻せません。</p>
+                <p>区間と場面・タグとの関連だけを削除します。本文・画像・手動場面・接続・作品タグは残ります。区間の削除は元に戻せません。</p>
             }
             @if (_historyDialog is HistoryDialog.DeleteSelected or HistoryDialog.Clear && HistoryCaptureActive)
             {
@@ -321,7 +329,7 @@
     <div class="modal-backdrop"><section id="capture-editor" class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-range-title">
         <header class="capture-dialog-header"><h2 id="capture-range-title">区間</h2><button class="secondary-button capture-icon-button" title="キャンセル" aria-label="キャンセル" @onclick="CloseEditors" disabled="@_busy"><CaptureIcon Name="Close" /></button></header>
         <label>名前<input @bind="_rangeName" /></label>
-        <CaptureTagsEditor Label="区間タグ" @bind-Tags="_rangeTags" AvailableTags="AvailableRangeTags" Disabled="_busy" />
+        <CaptureTagsEditor Label="区間タグ" @bind-Tags="_rangeTags" AvailableTags="AvailableRangeTags" SuggestedTags="_gameSpeakers" Disabled="_busy" />
         <div class="capture-dialog-actions"><button class="launch-button capture-icon-button" title="保存" aria-label="保存" @onclick="SaveRangeAsync" disabled="@_busy"><CaptureIcon Name="Check" /></button></div>
     </section></div>
 }
@@ -519,7 +527,10 @@
 
 @code {
     private CaptureSnapshot _snapshot = new();
-    private bool _flowOpen, _flowMatchingComplete, _independentFlowConfirm;
+    private bool _flowOpen, _flowMatchingComplete, _independentFlowConfirm, _sceneEditorOpen;
+    private SceneFlowEditor? _sceneEditor;
+    private IReadOnlyList<ScenarioGameTag> _gameTags = [];
+    private IReadOnlyList<string> _gameSpeakers = [];
     private ScenarioFlowGraph? _flowGraph;
     private CapturePosition? _flowHighlighted;
     private bool _screenshotSettingsOpen;
@@ -554,7 +565,7 @@
     private string[] _managedRangeTags = [], _rangeTags = [], _exportIncludeTags = [], _exportExcludeTags = [];
     private bool _exportOpen, _exportArchive;
     private ScenarioMaterialAccessLevel _exportAccessLevel = ScenarioMaterialAccessLevel.Structure;
-    private string[] AvailableRangeTags => _ranges.SelectMany(x => x.Tags).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+    private string[] AvailableRangeTags => _gameTags.Select(x => x.Name).Concat(_ranges.SelectMany(x => x.Tags)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
     private string ExportScope => string.Join(" · ", new[] { _profile?.Title ?? "", _ranges.FirstOrDefault(x => x.Id == _rangeId) is { } range ? RangeName(range) : "ゲーム全体", _filter switch { "dialogue" => "セリフ", "narration" => "地の文", "none" => "未判定", _ => "分類すべて" } }
         .Concat(_speakerSearch.Length > 0 ? [$"名前：{_speakerSearch}"] : Array.Empty<string>())
         .Concat(_textSearch.Length > 0 ? [$"本文：{_textSearch}"] : Array.Empty<string>()));
@@ -585,7 +596,7 @@
     private CaptureTextItem? _rangeFirst, _rangeLast;
     private CaptureRangeSelection? _rangeSelection;
     private string _rangeName = "";
-    private bool EditorOpen => _independentFlowConfirm || _exportOpen || _screenshotSettingsOpen || _screenshotItem is not null || _settingsOpen || _bulkOpen || _edit is not null || _partition is not null || _rangeSelection is not null || _historyDialog != HistoryDialog.None;
+    private bool EditorOpen => _sceneEditorOpen || _independentFlowConfirm || _exportOpen || _screenshotSettingsOpen || _screenshotItem is not null || _settingsOpen || _bulkOpen || _edit is not null || _partition is not null || _rangeSelection is not null || _historyDialog != HistoryDialog.None;
     private bool FollowingView => _live && _rangeId == 0 && !_pickingRange;
     private bool LatestOrder => _live && _rangeId == 0;
     private bool CanEdit => _rangeId == 0 && !_pickingRange;
@@ -684,10 +695,11 @@
     }
     private async Task LoadProfileAsync()
     {
-        _flowOpen = false; _flowGraph = null; _flowHighlighted = null;
+        _sceneEditorOpen = false; _flowOpen = false; _flowGraph = null; _flowHighlighted = null;
         _profile = _profiles.FirstOrDefault(x => x.Id == _profileId);
         _labels = _profile is null ? [] : await Store.GetCaptureLabelsAsync(_profile.Id);
         _ranges = _profile is null ? [] : await Store.GetCaptureRangesAsync(_profile.Id);
+        await LoadTagChoicesAsync();
         _rangeId = 0; _rangeFirst = _rangeLast = null; _pickingRange = false;
         _offset = 0; _selected.Clear(); _filter = "all";
         _textSearchInput = _textSearch = _speakerSearchInput = _speakerSearch = "";
@@ -781,7 +793,7 @@
                 _message = $"原文 {_deletionTargets.Count} 件を削除しました。"; break;
             case HistoryDialog.Clear:
                 _screenshotCleanup = (await Store.ClearCaptureHistoryAsync(_profileId)).ScreenshotCleanup; _rangeId = 0;
-                _message = "全履歴を消去しました。ゲーム登録と抽出設定は保持しています。"; break;
+                _message = "全履歴を消去しました。ゲーム登録・抽出設定・手動場面・接続・作品タグは保持しています。"; break;
             case HistoryDialog.DeleteRange:
                 await Store.DeleteCaptureRangeAsync(_profileId, _managedRangeId);
                 if (_rangeId == _managedRangeId) _rangeId = 0;
@@ -803,6 +815,21 @@
     private Task PreviousAsync() => RunAsync(async () => { _offset = Math.Max(0, _offset - 200); _selected.Clear(); await LoadItemsAsync(); _scrollToEnd = false; });
     private Task NextAsync() => RunAsync(async () => { _offset += 200; _selected.Clear(); await LoadItemsAsync(); _scrollToEnd = false; });
     private Task RefreshAsync() => RunAsync(() => _flowOpen ? LoadFlowAsync() : LoadItemsAsync());
+    private void OpenSceneEditor() { _sceneEditorOpen = true; _following = false; _focusEditor = true; }
+    private async Task LoadTagChoicesAsync()
+    {
+        _gameTags = _profileId == 0 ? [] : (await SceneStore.GetScenarioSceneFlowAsync(_profileId)).Tags;
+        _gameSpeakers = _profileId == 0 ? [] : await Store.GetGameCaptureSpeakersAsync(_profileId);
+    }
+    private async Task SceneFlowChangedAsync() { await LoadTagChoicesAsync(); _ranges = await Store.GetCaptureRangesAsync(_profileId); }
+    private async Task CloseSceneEditorAsync() { _sceneEditorOpen = false; _restoreFocus = true; await SceneFlowChangedAsync(); }
+    private Task OpenSceneRangeAsync(long rangeId) => RunAsync(async () =>
+    {
+        _sceneEditorOpen = false; _restoreFocus = true; _live = false; _flowOpen = false; _following = false;
+        _rangeId = rangeId; _filter = "all"; _offset = 0; _selected.Clear(); ClearTextRange();
+        _textSearchInput = _textSearch = _speakerSearchInput = _speakerSearch = "";
+        await SceneFlowChangedAsync(); await LoadItemsAsync(); _scrollToEnd = false;
+    });
     private Task ToggleRecordingPauseAsync() => RunAsync(() =>
     {
         if (_snapshot.Paused) CaptureService.ResumeRecording(); else CaptureService.PauseRecording();
@@ -1009,7 +1036,7 @@
     private void RemoveBoundary(int index) { _boundaries.RemoveAt(index); RebuildParts(); }
     private Task SavePartitionAsync() => RunAsync(async () => { if (_partition is null) return; await Store.SplitCaptureEventAsync(_partition.SessionId, _partition.Sequence, _boundaries.ToArray(), _parts.Select(x => new CaptureManualPart(x.Label == 0 ? null : x.Label, IsNarration(x.Label) ? null : string.IsNullOrWhiteSpace(x.Speaker) ? null : x.Speaker.Trim())).ToArray()); CloseEditors(); _selected.Clear(); await LoadItemsAsync(); }, "分割を保存しました。");
     private void CloseEditors() { CancelWindowPick(); _independentFlowConfirm = false; _exportOpen = false; _screenshotSettingsOpen = false; _screenshotItem = null; _eventScreenshots = []; _galleryImage = _galleryError = null; _pausedCandidates = null; _edit = null; _partition = null; _settingsOpen = false; _bulkOpen = false; _rangeSelection = null; _historyDialog = HistoryDialog.None; _deletionTargets = []; _restoreFocus = true; }
-    [JSInvokable] public void CloseEditorFromKeyboard() { if (!_busy) { CloseEditors(); StateHasChanged(); } }
+    [JSInvokable] public async Task CloseEditorFromKeyboard() { if (_sceneEditorOpen && _sceneEditor is not null) { await _sceneEditor.RequestCloseAsync(); StateHasChanged(); } else if (!_busy) { CloseEditors(); StateHasChanged(); } }
     private void OpenScreenshotSettings() { _screenshotSettingsOpen = true; _focusEditor = true; }
     private Task OpenScreenshotsAsync(CaptureTextItem item) => RunAsync(async () =>
     {

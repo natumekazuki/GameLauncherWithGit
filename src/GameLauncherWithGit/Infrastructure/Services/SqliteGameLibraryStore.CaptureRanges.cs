@@ -28,8 +28,8 @@ public sealed partial class SqliteGameLibraryStore
             new(reader.GetInt64(2), reader.GetInt64(3), reader.GetInt32(4)), new(reader.GetInt64(5), reader.GetInt64(6), reader.GetInt32(7))));
         await reader.DisposeAsync();
         await using var tagsQuery = CaptureCommand(connection, transaction, """
-            SELECT t.RangeId,t.Tag FROM CaptureRangeTags t JOIN CaptureRanges r ON r.Id=t.RangeId
-            WHERE r.CaptureGameId=$game ORDER BY t.Tag
+            SELECT t.RangeId,g.Name FROM CaptureRangeTags t JOIN CaptureRanges r ON r.Id=t.RangeId
+            JOIN ScenarioGameTags g ON g.Id=t.TagId WHERE r.CaptureGameId=$game ORDER BY g.Name
             """, ("$game", profileId));
         await using var tagsReader = await tagsQuery.ExecuteReaderAsync();
         var tags = new Dictionary<long, List<string>>();
@@ -55,12 +55,22 @@ public sealed partial class SqliteGameLibraryStore
 
     private static async Task WriteCaptureTagsAsync(SqliteConnection connection, SqliteTransaction transaction, long rangeId, string[] tags)
     {
+        await using var owner = CaptureCommand(connection, transaction, "SELECT CaptureGameId FROM CaptureRanges WHERE Id=$id", ("$id", rangeId));
+        var game = (long)(await owner.ExecuteScalarAsync())!;
+        var existing = new List<string>();
+        await using (var query = CaptureCommand(connection, transaction, """
+            SELECT g.Name FROM CaptureRangeTags t JOIN ScenarioGameTags g ON g.Id=t.TagId WHERE t.RangeId=$id
+            """, ("$id", rangeId)))
+        await using (var reader = await query.ExecuteReaderAsync())
+            while (await reader.ReadAsync()) existing.Add(reader.GetString(0));
+        if (existing.Order(StringComparer.Ordinal).SequenceEqual(tags, StringComparer.Ordinal)) return;
         await using var delete = CaptureCommand(connection, transaction, "DELETE FROM CaptureRangeTags WHERE RangeId=$id", ("$id", rangeId));
         await delete.ExecuteNonQueryAsync();
         foreach (var tag in tags)
         {
+            var resolved = await GetOrCreateSceneTagAsync(connection, transaction, game, tag);
             await using var insert = CaptureCommand(connection, transaction,
-                "INSERT INTO CaptureRangeTags(RangeId,Tag) VALUES($id,$tag)", ("$id", rangeId), ("$tag", tag));
+                "INSERT INTO CaptureRangeTags(RangeId,TagId) VALUES($id,$tag)", ("$id", rangeId), ("$tag", resolved.Id));
             await insert.ExecuteNonQueryAsync();
         }
     }

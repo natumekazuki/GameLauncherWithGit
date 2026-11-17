@@ -10,13 +10,13 @@ StructureKey はフロー構造・接続・出現位置・タグ・範囲・分�
 
 ## 共通 snapshot と参照
 
-MCP は共通 `GetScenarioProjectionAsync` の型別 allowlist DTO を使用する。同一 snapshot/selection の対象 ID、Version、SelectionVersion は権限や export の形式によって採番し直さない。ID は取得した資料版と組にして使用し、訂正・削除後に古い参照を別本文へ付け替えない。
+MCP は共通 `GetScenarioProjectionAsync` の型別 allowlist DTO を使用する。同一 snapshot/selection の対象 ID、Version、SelectionVersion は権限や export の形式によって採番し直さない。ID は取得した資料版と組にして使用し、訂正・削除後に古い参照を別本文へ付け替えない。手動場面構造の保存・全域/絞込み時の範囲・場面・tag・接続の選択規則と観測済み`graph`との区別は[手動場面フロー](scenario-extraction.md#手動場面フロー)を正本とする。`sceneFlow`の`scenes`/`tags`も同じ選択済みprojectionのIDで直接参照する。
 
 外部の作品・取得回・分類・範囲等の64bit整数IDは入出力とも十進文字列とし、JSON number にしない。返却された `source` と `version` をコピーして次の要求へ使用できる。受信連番・UTF16位置/長さ・revision counter は数値を保つ。入力境界で正の整数文字列を InvariantCulture で解決し、内部DB/storeのlong型は維持する。例えば `"9007199254740993"` のようなIDも丸めない。
 
-SelectionVersion は順序付き `occurrenceIds` と `rangeIds` の結果scopeであり、世代counterや検索条件そのものではない。異なる条件でも両値列が同じなら同scope。全Versionと合わせて値列比較する。内部完全snapshotを外部DTOへ埋め込まず、画像metadataと画像本体を分離する。区間・分類等で選択に穴が開いた場合は共通readerがread-time cutを入れ、保存済みのcutを変えず架空の経路接続を防ぐ。
+SelectionVersion は順序付き `occurrenceIds`、`rangeIds`、`sceneIds`、`tagIds` の結果scopeであり、世代counterや検索条件そのものではない。異なる条件でも四つの値列が同じなら同scope。全Versionと合わせて値列比較する。内部完全snapshotを外部DTOへ埋め込まず、画像metadataと画像本体を分離する。区間・分類等で選択に穴が開いた場合は共通readerがread-time cutを入れ、保存済みのcutを変えず架空の経路接続を防ぐ。
 
-`scenario_games` は捕捉作品 ID 一覧だけを返す。`scenario_snapshot` は選択された資料、`scenario_export_json` は同じ JSON の出力、`scenario_by_id` は collection と ID、`scenario_by_source` は元出現参照を受け取る。直接参照も同じ認可・selection 境界を通し、版不一致や選択外の対象はエラーとする。本文断片による対象指定は使用しない。JSON export はサーバー側ファイルを書かない。ZIP はローカル UI の共通二種 writer を使用し、MCP 用の別 ZIP writer は持たない。
+`scenario_games` は捕捉作品 ID 一覧だけを返す。`scenario_snapshot` は選択された資料、`scenario_export_json` は同じ JSON の出力、`scenario_by_id` は collection と ID、`scenario_by_source` は元出現参照を受け取る。`scenario_by_id` の `scenes` と `tags` は共通projectionの `sceneFlow` から選択内IDを解決する。直接参照も同じ認可・selection 境界を通し、版不一致や選択外の対象はエラーとする。本文断片による対象指定は使用しない。JSON export はサーバー側ファイルを書かない。ZIP はローカル UI の共通二種 writer を使用し、MCP 用の別 ZIP writer は持たない。
 
 resource template `scenario://material/{gameId}/{revision}/{matchingRevision}` は全体 selection の資料、`scenario://item/{gameId}/{revision}/{matchingRevision}/{collection}/{id}` はその中の対象を返す。filtered selection は tools の selection 引数を使用する。
 

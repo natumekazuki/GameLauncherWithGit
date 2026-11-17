@@ -967,9 +967,11 @@ public sealed class ScenarioCaptureTests : IDisposable
             await using var command = connection.CreateCommand();
             command.CommandText = """
                 PRAGMA foreign_keys=OFF;
+                DROP TABLE ScenarioSceneConnections; DROP TABLE ScenarioSceneTags; DROP TABLE ScenarioSceneRanges; DROP TABLE ScenarioScenes;
+                DROP TABLE CaptureRangeTags; DROP TABLE ScenarioGameTags;
                 DROP TABLE ScenarioMatchProgress; DROP TABLE ScenarioMatchRanges; DROP TABLE ScenarioSequenceIndex; DROP TABLE ScenarioMaterialState;
                 DROP TABLE ScenarioFlowRegions; DROP TABLE ScenarioFlowCuts;
-                DROP TABLE CaptureEventImages; DROP TABLE CaptureImages; DROP TABLE CaptureRangeTags;
+                DROP TABLE CaptureEventImages; DROP TABLE CaptureImages;
                 DROP TABLE CaptureRanges; DROP TABLE CaptureItems; DROP TABLE CaptureEvents; DROP TABLE CaptureSources;
                 DROP TABLE CaptureSessions; DROP TABLE CaptureLabels; DROP TABLE CaptureGames;
                 """;

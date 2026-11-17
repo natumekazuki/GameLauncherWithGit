@@ -112,9 +112,12 @@ public sealed partial class SqliteGameLibraryStore
         await EnsureInitializedAsync(default);
         await using var connection = await OpenConnectionAsync(default);
         await using var transaction = connection.BeginTransaction();
+        await using var current = CaptureCommand(connection, transaction,
+            "SELECT Name FROM CaptureRanges WHERE Id=$id AND CaptureGameId=$game", ("$id", rangeId), ("$game", profileId));
+        if (await current.ExecuteScalarAsync() is not string currentName) throw new ArgumentException("このゲームの区間を選んでください。");
         await using var command = CaptureCommand(connection, transaction,
-            "UPDATE CaptureRanges SET Name=$name WHERE Id=$id AND CaptureGameId=$game", ("$name", name), ("$id", rangeId), ("$game", profileId));
-        if (await command.ExecuteNonQueryAsync() != 1) throw new ArgumentException("このゲームの区間を選んでください。");
+            "UPDATE CaptureRanges SET Name=$name WHERE Id=$id AND Name IS NOT $name", ("$name", name), ("$id", rangeId));
+        if (currentName != name) await command.ExecuteNonQueryAsync();
         await WriteCaptureTagsAsync(connection, transaction, rangeId, normalizedTags);
         await transaction.CommitAsync();
     }

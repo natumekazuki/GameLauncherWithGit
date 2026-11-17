@@ -21,6 +21,7 @@ public sealed record ScenarioMaterialSnapshot(ScenarioMaterialVersion Version, b
     public IReadOnlyList<ScenarioMaterialClassification> Classifications { get; init; } = [];
     public IReadOnlyList<ScenarioMaterialImageMetadata> Images { get; init; } = [];
     public ScenarioFlowGraph Graph { get; init; } = new([], [], [], []);
+    public ScenarioSceneFlowSnapshot SceneFlow { get; init; } = new(Version.CaptureGameId, Version, [], [], [], []);
 }
 public sealed record ScenarioMaterialRange(string Id, string Name, CapturePosition Start, CapturePosition End,
     IReadOnlyList<string> Tags, IReadOnlyList<ScenarioOccurrenceRef> Spans);

@@ -68,7 +68,7 @@ callback内で文字列と取得元をmanaged値へコピーし、取得回内�
 
 区間名と別に、自由な名前のタグを任意で複数付けられる。区間作成時と履歴管理で追加・解除でき、区間名とタグは同じtransactionで保存する。タグ名はtrim後の非空・改行なしの単一行とし、表記を自動統合せず完全一致で区別する。同じ区間の同じタグは一つだけ保持する。既存区間はタグなしで利用できる。
 
-同じゲームの区間に付いているタグを候補として再利用する。区間とタグの関係を正本とし、独立したタグマスタや未使用タグの管理は設けない。人物名は本文の名前検索で扱え、タグへの二重登録・自動付与は必要としない。タグは本文の分類・話者・原文を変更しない。
+区間と場面は同じゲーム単位の作品タグを共有する。既存の区間タグ名は作品タグへ正規化し、区間・場面の両方から同じタグIDを参照する。場面タグは明示的に保存されたものだけを使い、記録済みの話者候補を自動登録・付与しない。タグは本文の分類・話者・原文を変更しない。
 
 TXT・画像付きZIPの出力操作では、現在のゲーム・区間・分類・適用済みの名前/本文検索に加え、包含タグと除外タグを選ぶ。各欄の複数タグはいずれかに一致する区間を対象とする。包含タグ指定時はその区間の和集合だけを出し、未指定時はゲーム全体または選択中の区間を対象とする。その後、除外タグの区間の和集合を差し引く。重なる部分は除外を優先し、包含区間同士の重複で本文を二重出力しない。タグ未指定は従来の条件と同じで、条件に一致する本文がない出力も許可する。
 
@@ -112,7 +112,12 @@ TXT・画像付きZIPの出力操作では、現在のゲーム・区間・分�
 | CaptureLabels | 所有者別の名称と用途種別 |
 | CaptureItems | 原文内UTF-16範囲、自動ラベル/話者、手動上書きフラグと値 |
 | CaptureRanges | 所有者別の自由名と原文上の開始/終了位置 |
-| CaptureRangeTags | 区間に付けた自由タグ。区間削除とともに関係を削除 |
+| ScenarioGameTags | 作品共通のタグ名。区間・場面から参照し、未使用タグも保持 |
+| CaptureRangeTags | 区間と作品タグの関係。区間またはタグ削除とともに関係を削除 |
+| ScenarioScenes | 手動場面の作品ID、主ラベル、表示番号、章、配置 |
+| ScenarioSceneRanges | 手動場面と既存区間の関係。区間削除後も場面を残して関係だけを外す |
+| ScenarioSceneTags | 手動場面と作品共通タグの関係 |
+| ScenarioSceneConnections | 利用者が編集する有向の場面接続。端点場面の削除で関係を削除 |
 
 原文追加と本文範囲作成は同じtransactionでcommitし、それ以前を保存済みとしない。同一取得回の取得元・原文・itemは複合FKで結び、書込み境界で同一所有者のラベルと範囲を検証する。
 
@@ -145,16 +150,16 @@ TXT・画像付きZIPの出力操作では、現在のゲーム・区間・分�
 
 内部の完全snapshotは本文・出現と照合に加え、区間の元境界・選択本文との`spans`・タグ、選択内分類、画像metadata、flowを同じSQLite transactionから読む。`ScenarioMaterialWireAdapter.ToWire(snapshot, level)`がallowlist DTOの`ScenarioStructureProjection`または`ScenarioFullProjection`へ変換し、`ScenarioMaterialProjection`はこの二型だけをJSON polymorphismへ登録する。内部snapshot自体を返却projectionのpropertyとして公開しない。ZIPの`material.json`もMCPの読取と同じprojectionを使う。
 
-- `version`: wire形式の`ScenarioMaterialWireVersion(captureGameId, revision, matchingRevision)`。`captureGameId`は文字列、revisionは数値。本文・有効分類/話者・境界・区間タグ・画像関連・経路指定の変更は`revision`、照合batchの反映は`matchingRevision`を更新する。同じDB snapshotの両世代を揃え、独自の整合性hash台帳は作らない。
-- `selectionVersion`: 選択後の順序付き`occurrenceIds`と`rangeIds`。検索語を含めず、同じ資料版に対する選択結果scopeを示す。
+- `version`: wire形式の`ScenarioMaterialWireVersion(captureGameId, revision, matchingRevision)`。`captureGameId`は文字列、revisionは数値。本文・有効分類/話者・境界・区間タグ・画像関連・観測経路指定・手動場面/作品タグ/手編集接続の変更は`revision`、照合batchの反映は`matchingRevision`を更新する。手動metadataだけの変更では照合世代・未処理状態を変えない。同じDB snapshotの両世代を揃え、独自の整合性hash台帳は作らない。
+- `selectionVersion`: 選択後の順序付き`occurrenceIds`、`rangeIds`、`sceneIds`、`tagIds`。検索語を含めず、同じ資料版に対する選択結果scopeを示す。
 - `matchingComplete`: snapshot内の未処理の有無。記録が優先され未完了の場合も原記録を出し、未確認の一致は使わない。
 - `contents`: 選択されたitem/部分segment。Structureでは`id/kind`だけ、Fullでは`id/text/kind`を持つ。照合で確認した同じ並びだけが同一contentを参照し、文字列だけで重複排除しない。
 - `occurrences`: 原記録順の出現。Structureは`source/contentId/labelId/labelName/receivedAt/images`、Fullはそれらに`speaker`を加えた情報を持つ。ラベル・画像はその出現自身の値で、他周回の値を持ち越さない。
-- `matches`, `ranges`, `classifications`, `images`, `graph`: 同じ選択範囲の対応、元区間/タグ/分類、画像寸法/hash、フロー構造を表す。Structureでは本文や話者を持つpropertyを含めない。
+- `matches`, `ranges`, `classifications`, `images`, `graph`, `sceneFlow`: 同じ選択範囲の対応、元区間/タグ/分類、画像寸法/hash、観測経路、手動場面構造を表す。Structureでは本文や話者を持つpropertyを含めない。
 
-`source`は`ScenarioMaterialWireReference(captureGameId, sessionId, receiveSequence, startUtf16, lengthUtf16)`で、item IDやZIP内で再採番したIDでなく原文位置を根拠にする。occurrence IDは`occ:<captureGameId>:<sessionId>:<receiveSequence>:<startUtf16>:<lengthUtf16>`、content IDは選択内代表のoccurrence IDに`content:`を付け、match IDはcontent IDに`match:`を付ける。先行要素数で増える`content-N`形式は使わない。flow出現IDもraw spanから同じ関数で作り、node IDは`node:<game>:<blockId>`（内部`/`は`~`）、chart IDは`flow:<game>:<chartId>`とする。64bit整数のIDは不変文化の10進文字列、受信連番・UTF-16位置・長さ・資料世代などの量は数値とする。opaque image IDは元の文字列を維持する。これらのIDは同じ作品・Version・SelectionVersionのMCP/ZIP間では同値だが、古い資料版へ新しい結果を無断で付け替えない。部分選択は原文内の半開区間を保ち、元の一致itemの相対開始位置・長さが同じ選択sliceだけでcontentを共有する。
+`source`は`ScenarioMaterialWireReference(captureGameId, sessionId, receiveSequence, startUtf16, lengthUtf16)`で、item IDやZIP内で再採番したIDでなく原文位置を根拠にする。occurrence IDは`occ:<captureGameId>:<sessionId>:<receiveSequence>:<startUtf16>:<lengthUtf16>`、content IDは選択内代表のoccurrence IDに`content:`を付け、match IDはcontent IDに`match:`を付ける。先行要素数で増える`content-N`形式は使わない。flow出現IDもraw spanから同じ関数で作り、node IDは`node:<game>:<blockId>`（内部`/`は`~`）、chart IDは`flow:<game>:<chartId>`とする。64bit整数のIDは不変文化の10進文字列、受信連番・UTF-16位置・長さ・資料世代などの量は数値とする。手動場面・作品タグIDとその参照も保存longの10進文字列で、文字列へprefixを付けない。game IDは所属検証のcontextとして別に照合する。opaque image IDは元の文字列を維持する。これらのIDは同じ作品・Version・SelectionVersionのMCP/ZIP間では同値だが、古い資料版へ新しい結果を無断で付け替えない。部分選択は原文内の半開区間を保ち、元の一致itemの相対開始位置・長さが同じ選択sliceだけでcontentを共有する。
 
-`ScenarioMaterialSelectionVersion`は選択後の安定順`occurrenceIds/rangeIds`を持つ構造recordで、検索語や単調counterではなく結果scopeを表す。`SameSelection`は両配列をOrdinalの値列で比較し、配列instanceの参照同一性を使わない。異なる条件でも二つのID列が同じなら同scopeで、画像読取では`Version`と併せて照合する。別hash、可逆encoding、ID台帳、永続selection状態は作らない。
+`ScenarioMaterialSelectionVersion`は選択後の安定順`occurrenceIds/rangeIds/sceneIds/tagIds`を持つ構造recordで、検索語や単調counterではなく結果scopeを表す。`SameSelection`は四つの配列をOrdinalの値列で比較し、配列instanceの参照同一性を使わない。異なる条件でも四つのID列が同じなら同scopeで、画像読取では`Version`と併せて照合する。別hash、可逆encoding、ID台帳、永続selection状態は作らない。
 
 たとえばタグなしの3周が共通の冒頭3件を通り、2周目だけ「うん」が「いや」に変わり、共通の後半3件へ戻る場合、共通本文6件と各返答2件をcontentsへ一度ずつ置く。occurrencesのcontent参照を各回の順に辿れば分岐と再合流を復元でき、2周目の返答だけに付いた画像もその出現だけから参照できる。2周目のタグだけを選べば、初出が範囲外でも2周目の本文・話者・画像・位置だけを出す。
 
@@ -162,7 +167,7 @@ Structure projectionはflow構造・接続・出現位置・タグ/範囲/分類
 
 画像本体は`IScenarioScreenshotStore.ReadScenarioImageAsync(level, request, cancellationToken)`でFull権限だけに返す。要求は作品ID、元selection、wire版、`SelectionVersion`、occurrence ID、image IDからなり、外部projectionの版をそのまま渡せる。Structureと未定義levelはrequest/game/資料準備より先に拒否する。Fullは画像gate内の同一transactionで元selectionを再投影し、`ScenarioMaterialImageAccess.Validate(currentSnapshot, level, request)`で全Version・scopeの値列・選択内出現とimage IDのexact関連を検証してからbytesを読む。graph内のcutで分割された出現IDはraw spanが選択本文内に含まれ、その原文に画像が関連する場合だけ解決する。共通contentだけを根拠に別出現の画像を付け替えず、file pathは返さない。これはAPI認可であり、同一ユーザーのfile/shell/SSHアクセスを隔離するものではない。
 
-Full/Structureのどちらも区間・タグ・分類・検索条件を先に適用し、選択内だけをprojectionする。絞込み後に間が空いた場合は元のitem位置と隣接情報を使ってread-time cutを置き、選択外の本文、話者、画像、原代表イベント参照を出さず、実際には観測されていない接続を追加しない。このcutはDBへ保存せず、raw `ScenarioFlowOverrides`や既存境界を変更しない。
+Full/Structureのどちらも区間・タグ・分類・検索条件を先に適用し、選択内だけをprojectionする。絞込み後に間が空いた場合は元のitem位置と隣接情報を使ってread-time cutを置き、選択外の本文、話者、画像、原代表イベント参照を出さず、実際には観測されていない接続を追加しない。このcutはDBへ保存せず、raw `ScenarioFlowOverrides`や既存境界を変更しない。手動場面も同じ選択済み区間・出現との交差から投影し、端点が残らない手編集接続は出さない。
 
 ## 経路図と出現ごとの区切り
 
@@ -171,6 +176,18 @@ Full/Structureのどちらも区間・タグ・分類・検索条件を先に適
 取得中の経路区切りは、記録を続けたまま次の本文の直前だけを切る。一時停止からの再開も同じ新経路を作る。受付epochを保存queueへ渡し、writerは最後に保存成功した非空本文のepochを追う。名前・空本文・同じ受信の再投入（`inserted=false`）では区切りを消費せず、新経路の最初の本文とcutを同じtransactionで保存する。履歴本文またはgraphの「ここから別経路」は、選んだ出現のincoming traversalだけを除き、他周回の同じ辺やその出現からの後続辺は残す。原文・画像・同周回の再訪は削除しない。
 
 `ScenarioFlowCuts`は取得回・受信連番・UTF-16 offsetによる出現直前のcutを、`ScenarioFlowRegions`は独立所属のraw開始/終了位置を保存する。可変のitem IDや手動区間を所属の正本にせず、同じcutの追加は冪等とする。独立範囲は確認後に別block scopeへ分け、本編との自動接続を外す。前後の本編を飛び越して直結せず、範囲内本文を全削除した後も境界越えの架空の辺を作らない。既存の独立範囲との重なりは拒否する。確認済み共通対応へ分割点を伝播させ、同じ原記録位置の訂正・再分割と両立させる。cut/所属の更新は同transactionの資料版更新helperを呼ぶ。全履歴消去では取得回の削除に伴いcut/独立所属も消え、原記録の個別削除では保存した境界を維持する。
+
+## 手動場面フロー
+
+`sceneFlow`は手動で保存した場面構造で、`graph`が表す観測済みの本文出現と遷移とは別の情報である。手動接続を記録上の遷移として扱ったり、観測graphのread-time cutを手動接続へ補間したりしない。手動場面は作成時の機械IDを保ち、主ラベル・表示用番号・任意の章見出し・X/Y配置、既存区間ID、明示した作品タグIDを持つ。表示番号は識別子ではなく一意である必要もない。有向の手編集接続は分岐・合流を表せる。
+
+場面は本文・raw span・画像linkを複製しない。既存`CaptureRanges`を場面へ関連付け、画像はその範囲内で選択された既存出現と`CaptureEventImages`の関係から導出する。作品共通の`ScenarioGameTags`は`CaptureRangeTags`と場面の双方から参照される。話者候補は自動的にtag masterへ登録せず、明示保存されたタグだけを場面・区間へ関連付ける。
+
+全域選択では、区間に関連付いていない独立場面と、どの場面・区間にも未使用の明示tag masterも含め、保存済み場面・タグ構造を返す。有効な絞込みがある場合は、区間の選択済み本文との交差から場面を絞り、場面の`rangeIds`は交差した区間に限定する。選択区間の`rangeTags`と、それらの区間または残った場面から参照されるタグだけを返す。手編集接続は両端の場面が残る場合だけ返し、選択外の欠落を飛び越える接続は生成しない。包含/除外タグ条件は従来どおり区間タグを対象とし、場面タグ検索へ拡張しない。空白だけの本文検索や空タグ配列は絞込みにしない。
+
+`ScenarioStructureProjection`と`ScenarioFullProjection`は同じ`sceneFlow` metadata DTOを持つ。`tags`、`rangeTags`、`scenes`、`connections`の各IDと参照は保存longのprefixなし10進文字列とし、作品所属は別途検証する。`sceneIds`と`tagIds`は`SelectionVersion`へ選択結果の順序付き値列として含めるため、両権限・MCP・ZIPで同一資料版と四つのscope列を照合できる。Structureにも手動入力のタイトル、表示番号、章、座標、タグ/区間参照、手編集接続を出せるが、本文・抜粋・画像bytes・画像pathは含めない。画像本体は既存のFull専用出現画像gateからのみ取得し、場面専用の画像保存/APIは設けない。
+
+手動場面・作品タグ・手編集接続の実変更は同じtransactionで資料`Revision`だけを進め、本文照合の`MatchingRevision`、Dirty状態、処理済みcursorは変更しない。区間タグは既存の資料版更新経路で管理し、同じ変更に新たな重複更新を加えない。表示名・番号・配置を変更しても機械IDは変えない。場面またはタグの削除ではその関連だけを解消し、場面削除で元区間・本文・画像を削除しない。区間削除や全履歴消去では該当する場面-区間リンクだけを外し、手動場面・手編集接続・作品タグmasterを保持する。本文や画像を別の出現へ付け替えない。
 
 ## UIとTXT
 

@@ -5,11 +5,14 @@ namespace GameLauncherWithGit.Application.Models;
 public enum ScenarioMaterialAccessLevel { Structure, Full }
 
 /// <summary>Identifies the selected result set without revealing text or speaker search terms.</summary>
-public sealed record ScenarioMaterialSelectionVersion(IReadOnlyList<string> OccurrenceIds, IReadOnlyList<string> RangeIds)
+public sealed record ScenarioMaterialSelectionVersion(IReadOnlyList<string> OccurrenceIds, IReadOnlyList<string> RangeIds,
+    IReadOnlyList<string> SceneIds, IReadOnlyList<string> TagIds)
 {
     public bool SameSelection(ScenarioMaterialSelectionVersion other) =>
         OccurrenceIds.SequenceEqual(other.OccurrenceIds, StringComparer.Ordinal)
-        && RangeIds.SequenceEqual(other.RangeIds, StringComparer.Ordinal);
+        && RangeIds.SequenceEqual(other.RangeIds, StringComparer.Ordinal)
+        && SceneIds.SequenceEqual(other.SceneIds, StringComparer.Ordinal)
+        && TagIds.SequenceEqual(other.TagIds, StringComparer.Ordinal);
 }
 
 [JsonDerivedType(typeof(ScenarioStructureProjection))]
@@ -22,14 +25,24 @@ public sealed record ScenarioStructureProjection(ScenarioMaterialWireVersion Ver
     IReadOnlyList<ScenarioStructureContent> Contents, IReadOnlyList<ScenarioStructureOccurrence> Occurrences,
     IReadOnlyList<ScenarioMaterialWireMatch> Matches, IReadOnlyList<ScenarioMaterialWireRange> Ranges,
     IReadOnlyList<ScenarioMaterialClassification> Classifications, IReadOnlyList<ScenarioMaterialImageMetadata> Images,
-    ScenarioStructureFlow Graph) : ScenarioMaterialProjection(Version, SelectionVersion, MatchingComplete);
+    ScenarioStructureFlow Graph, ScenarioMaterialSceneFlow SceneFlow) : ScenarioMaterialProjection(Version, SelectionVersion, MatchingComplete);
 
 public sealed record ScenarioFullProjection(ScenarioMaterialWireVersion Version,
     ScenarioMaterialSelectionVersion SelectionVersion, bool MatchingComplete,
     IReadOnlyList<ScenarioMaterialWireContent> Contents, IReadOnlyList<ScenarioMaterialWireOccurrence> Occurrences,
     IReadOnlyList<ScenarioMaterialWireMatch> Matches, IReadOnlyList<ScenarioMaterialWireRange> Ranges,
     IReadOnlyList<ScenarioMaterialClassification> Classifications, IReadOnlyList<ScenarioMaterialImageMetadata> Images,
-    ScenarioFullFlow Graph) : ScenarioMaterialProjection(Version, SelectionVersion, MatchingComplete);
+    ScenarioFullFlow Graph, ScenarioMaterialSceneFlow SceneFlow) : ScenarioMaterialProjection(Version, SelectionVersion, MatchingComplete);
+
+/// <summary>Explicitly edited metadata shared by both levels; source spans and images are resolved through selected ranges.</summary>
+public sealed record ScenarioMaterialSceneFlow(IReadOnlyList<ScenarioMaterialGameTag> Tags,
+    IReadOnlyList<ScenarioMaterialRangeTagLink> RangeTags, IReadOnlyList<ScenarioMaterialScene> Scenes,
+    IReadOnlyList<ScenarioMaterialSceneConnection> Connections);
+public sealed record ScenarioMaterialGameTag(string Id, string Name);
+public sealed record ScenarioMaterialRangeTagLink(string RangeId, string TagId);
+public sealed record ScenarioMaterialScene(string Id, string Title, string? DisplayNumber, string? Chapter,
+    double X, double Y, IReadOnlyList<string> RangeIds, IReadOnlyList<string> TagIds);
+public sealed record ScenarioMaterialSceneConnection(string FromSceneId, string ToSceneId);
 
 public sealed record ScenarioMaterialWireVersion(string CaptureGameId, long Revision, long MatchingRevision);
 public sealed record ScenarioStructureContent(string Id, string? Kind);

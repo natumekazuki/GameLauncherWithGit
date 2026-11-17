@@ -521,7 +521,11 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
         {
             await failingConnection.OpenAsync();
             await using var trigger = failingConnection.CreateCommand();
-            trigger.CommandText = "CREATE TRIGGER fail_tag BEFORE INSERT ON CaptureRangeTags WHEN NEW.Tag='失敗' BEGIN SELECT RAISE(ABORT,'tag failure'); END";
+            trigger.CommandText = """
+                CREATE TRIGGER fail_tag BEFORE INSERT ON CaptureRangeTags
+                WHEN NEW.TagId=(SELECT g.Id FROM ScenarioGameTags g JOIN CaptureRanges r ON r.CaptureGameId=g.CaptureGameId WHERE r.Id=NEW.RangeId AND g.Name='失敗')
+                BEGIN SELECT RAISE(ABORT,'tag failure'); END
+                """;
             await trigger.ExecuteNonQueryAsync();
             await Assert.ThrowsAsync<SqliteException>(() => _store.UpdateCaptureRangeAsync(game, id, "不成立", ["失敗"]));
         }
@@ -1220,6 +1224,131 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
 
     // @test-value v2
     // kind = "invariant"
+    // claim = "ZIPのsceneFlowは全域では空場面と未使用tagを含み、絞込みでは交差range・参照tag・両端が残る手編集edgeだけをStructure/Full共通IDで出力する"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md: 手動場面フロー" }
+    // fault = "ZIP writerが別版の場面を混ぜる、絞込み外の場面/tag/edgeを残す、全域の独立場面/tagを落とす、または実在しない接続を生成する"
+    // observable = "Structure/Full ZIPのmaterial.json sceneFlow、selectionVersion、version、manifest.materialVersion、および選択本文のJSON値"
+    // observation_boundary = "consumer"
+    // scope = "full and structure scenario archive scene flow"
+    // lifecycle = "permanent"
+    // impact = "二権限exportで場面構造を安全に比較・参照し、選択範囲に属さない手動metadataを混入させない"
+    // distinction = "共通projection testはreader DTOを検証し、このtestは実ZIP・manifest・選択scopeでwriterのJSON出力を検証する"
+    // @end-test-value
+    [Fact]
+    public async Task SceneFlowArchiveSharesIdsAndClipsManualStructureToSelection()
+    {
+        const string selectedBody = "SELECTED_SCENE_FLOW_BODY_SENTINEL";
+        const string outsideBody = "OUTSIDE_SCENE_FLOW_BODY_SENTINEL";
+        var (game, session) = await StartAsync();
+        await Append(session, 1, selectedBody);
+        await Append(session, 2, outsideBody);
+        var items = (await _store.GetGameCaptureItemsAsync(game)).OrderBy(x => x.Sequence).ToArray();
+        var selectedRangeId = await _store.SaveCaptureRangeAsync(game, "selected range",
+            new(session, items[0].Sequence, items[0].Start), new(session, items[0].Sequence, items[0].Start + items[0].Length), ["range tag"]);
+        var outsideRangeId = await _store.SaveCaptureRangeAsync(game, "outside range",
+            new(session, items[1].Sequence, items[1].Start), new(session, items[1].Sequence, items[1].Start + items[1].Length), ["outside range tag"]);
+        var sceneTagId = await _store.GetOrCreateScenarioGameTagAsync(game, "scene tag");
+        var outsideTagId = await _store.GetOrCreateScenarioGameTagAsync(game, "outside scene tag");
+        var unusedTagId = await _store.GetOrCreateScenarioGameTagAsync(game, "unused tag");
+        var firstSceneId = await _store.CreateScenarioSceneAsync(game,
+            new("Selected first", "1", "Opening", 10, 20, [selectedRangeId], [sceneTagId]));
+        var secondSceneId = await _store.CreateScenarioSceneAsync(game,
+            new("Selected second", "1", "Opening", 30, 20, [selectedRangeId], [sceneTagId]));
+        var outsideSceneId = await _store.CreateScenarioSceneAsync(game,
+            new("Outside", "2", null, 50, 20, [outsideRangeId], [outsideTagId]));
+        var independentSceneId = await _store.CreateScenarioSceneAsync(game,
+            new("Independent", null, null, 70, 20, [], []));
+        await _store.SetScenarioSceneConnectionAsync(game, firstSceneId, secondSceneId, true);
+        await _store.SetScenarioSceneConnectionAsync(game, secondSceneId, outsideSceneId, true);
+        await _store.SetScenarioSceneConnectionAsync(game, outsideSceneId, firstSceneId, true);
+
+        async Task<JsonDocument> ExportMaterial(string fileName, ScenarioArchiveSelection selection, ScenarioMaterialAccessLevel level)
+        {
+            var path = Output(fileName);
+            await _store.ExportScenarioArchiveAsync(game, selection, path, level);
+            using var zip = ZipFile.OpenRead(path);
+            using var stream = zip.GetEntry("material.json")!.Open();
+            return await JsonDocument.ParseAsync(stream);
+        }
+
+        using var allStructureDocument = await ExportMaterial("scene-flow-all-structure", new(), ScenarioMaterialAccessLevel.Structure);
+        using var allFullDocument = await ExportMaterial("scene-flow-all-full", new(), ScenarioMaterialAccessLevel.Full);
+        var selected = new ScenarioArchiveSelection(RangeId: selectedRangeId);
+        using var selectedStructureDocument = await ExportMaterial("scene-flow-selected-structure", selected, ScenarioMaterialAccessLevel.Structure);
+        using var selectedFullDocument = await ExportMaterial("scene-flow-selected-full", selected, ScenarioMaterialAccessLevel.Full);
+        var selectedProjection = (ScenarioStructureProjection)await _store.GetScenarioProjectionAsync(game, selected, ScenarioMaterialAccessLevel.Structure);
+
+        var allStructure = allStructureDocument.RootElement;
+        var allFull = allFullDocument.RootElement;
+        var selectedStructure = selectedStructureDocument.RootElement;
+        var selectedFull = selectedFullDocument.RootElement;
+        Assert.Equal(allFull.GetProperty("version").GetRawText(), allStructure.GetProperty("version").GetRawText());
+        Assert.Equal(allFull.GetProperty("selectionVersion").GetRawText(), allStructure.GetProperty("selectionVersion").GetRawText());
+        Assert.Equal(allFull.GetProperty("sceneFlow").GetRawText(), allStructure.GetProperty("sceneFlow").GetRawText());
+        Assert.Equal(selectedFull.GetProperty("version").GetRawText(), selectedStructure.GetProperty("version").GetRawText());
+        Assert.Equal(selectedFull.GetProperty("selectionVersion").GetRawText(), selectedStructure.GetProperty("selectionVersion").GetRawText());
+        Assert.Equal(selectedFull.GetProperty("sceneFlow").GetRawText(), selectedStructure.GetProperty("sceneFlow").GetRawText());
+
+        var allSceneFlow = allStructure.GetProperty("sceneFlow");
+        var allScenes = allSceneFlow.GetProperty("scenes").EnumerateArray().ToArray();
+        Assert.Equal(4, allScenes.Length);
+        Assert.Contains(allScenes, scene => scene.GetProperty("id").GetString() == independentSceneId.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            && scene.GetProperty("rangeIds").GetArrayLength() == 0);
+        Assert.Equal(new[] { firstSceneId, secondSceneId, outsideSceneId, independentSceneId }
+                .Select(id => id.ToString(System.Globalization.CultureInfo.InvariantCulture)).Order(StringComparer.Ordinal),
+            allScenes.Select(scene => scene.GetProperty("id").GetString()).Order(StringComparer.Ordinal));
+        Assert.Equal(5, allSceneFlow.GetProperty("tags").GetArrayLength());
+        Assert.Contains(allSceneFlow.GetProperty("tags").EnumerateArray(), tag =>
+            tag.GetProperty("id").GetString() == unusedTagId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        Assert.Equal(3, allSceneFlow.GetProperty("connections").GetArrayLength());
+        Assert.Equal(new[] { selectedBody, outsideBody }, allFull.GetProperty("contents").EnumerateArray()
+            .Select(content => content.GetProperty("text").GetString()));
+
+        var selectedSceneFlow = selectedStructure.GetProperty("sceneFlow");
+        var selectedScenes = selectedSceneFlow.GetProperty("scenes").EnumerateArray().ToArray();
+        Assert.Equal(new[] { firstSceneId, secondSceneId }.Select(id => id.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            selectedScenes.Select(scene => scene.GetProperty("id").GetString()));
+        Assert.All(selectedScenes, scene => Assert.Equal(new[] { selectedRangeId.ToString(System.Globalization.CultureInfo.InvariantCulture) },
+            scene.GetProperty("rangeIds").EnumerateArray().Select(id => id.GetString())));
+        Assert.Single(selectedSceneFlow.GetProperty("rangeTags").EnumerateArray());
+        Assert.Equal(new[] { "range tag", "scene tag" }, selectedSceneFlow.GetProperty("tags").EnumerateArray()
+            .Select(tag => tag.GetProperty("name").GetString()).Order(StringComparer.Ordinal));
+        Assert.All(selectedScenes, scene => Assert.Equal(new[] { sceneTagId.ToString(System.Globalization.CultureInfo.InvariantCulture) },
+            scene.GetProperty("tagIds").EnumerateArray().Select(id => id.GetString())));
+        var selectedRangeTagId = selectedProjection.SceneFlow.RangeTags
+            .Single(link => link.RangeId == selectedRangeId.ToString(System.Globalization.CultureInfo.InvariantCulture)).TagId;
+        var rangeTag = Assert.Single(selectedSceneFlow.GetProperty("rangeTags").EnumerateArray());
+        Assert.Equal(selectedRangeId.ToString(System.Globalization.CultureInfo.InvariantCulture), rangeTag.GetProperty("rangeId").GetString());
+        Assert.Equal(selectedRangeTagId.ToString(System.Globalization.CultureInfo.InvariantCulture), rangeTag.GetProperty("tagId").GetString());
+        var connection = Assert.Single(selectedSceneFlow.GetProperty("connections").EnumerateArray());
+        Assert.Equal(firstSceneId.ToString(System.Globalization.CultureInfo.InvariantCulture), connection.GetProperty("fromSceneId").GetString());
+        Assert.Equal(secondSceneId.ToString(System.Globalization.CultureInfo.InvariantCulture), connection.GetProperty("toSceneId").GetString());
+        Assert.Equal(new[] { firstSceneId, secondSceneId }.Select(id => id.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            selectedStructure.GetProperty("selectionVersion").GetProperty("sceneIds").EnumerateArray().Select(id => id.GetString()));
+        var selectedScope = selectedStructure.GetProperty("selectionVersion");
+        Assert.Equal(selectedProjection.SelectionVersion.OccurrenceIds, selectedScope.GetProperty("occurrenceIds").EnumerateArray().Select(id => id.GetString()));
+        Assert.Equal(selectedProjection.SelectionVersion.RangeIds, selectedScope.GetProperty("rangeIds").EnumerateArray().Select(id => id.GetString()));
+        Assert.Equal(selectedProjection.SelectionVersion.SceneIds, selectedScope.GetProperty("sceneIds").EnumerateArray().Select(id => id.GetString()));
+        Assert.Equal(selectedProjection.SelectionVersion.TagIds, selectedScope.GetProperty("tagIds").EnumerateArray().Select(id => id.GetString()));
+        Assert.DoesNotContain(outsideTagId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            selectedSceneFlow.GetProperty("tags").EnumerateArray().Select(tag => tag.GetProperty("id").GetString()));
+        Assert.DoesNotContain(unusedTagId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            selectedSceneFlow.GetProperty("tags").EnumerateArray().Select(tag => tag.GetProperty("id").GetString()));
+        Assert.DoesNotContain(JsonStrings(selectedStructure), value => value.Contains(selectedBody, StringComparison.Ordinal)
+            || value.Contains(outsideBody, StringComparison.Ordinal));
+        Assert.Equal(new[] { selectedBody }, selectedFull.GetProperty("contents").EnumerateArray()
+            .Select(content => content.GetProperty("text").GetString()));
+
+        using var allStructureArchive = ZipFile.OpenRead(Output("scene-flow-all-structure"));
+        using var allFullArchive = ZipFile.OpenRead(Output("scene-flow-all-full"));
+        using var allStructureManifest = JsonDocument.Parse(allStructureArchive.GetEntry("manifest.json")!.Open());
+        using var allFullManifest = JsonDocument.Parse(allFullArchive.GetEntry("manifest.json")!.Open());
+        Assert.Equal(allFull.GetProperty("version").GetRawText(), allStructureManifest.RootElement.GetProperty("materialVersion").GetRawText());
+        Assert.Equal(allFull.GetProperty("version").GetRawText(), allFullManifest.RootElement.GetProperty("materialVersion").GetRawText());
+    }
+
+    // @test-value v2
+    // kind = "invariant"
     // claim = "画像bytesはFull levelと一致する資料版・選択scope・選択内Occurrence/ImageId関連が揃った時だけ返る"
     // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md: 手動スクリーンショットと分析用ZIP" }
     // fault = "構造権限・古いsnapshot・別selection・無関係な画像IDでPNG bytesを返す"
@@ -1259,7 +1388,7 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
     // @test-value v2
     // kind = "invariant"
     // claim = "Structureまたは未定義levelの画像要求はgame・版・selection照会やmatching準備より先に拒否される"
-    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md: 手動スクリーンショットと分析用ZIP" }
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md: 連続本文照合と共通資料" }
     // fault = "構造権限が無効なgame/referenceを渡して画像APIの準備・資料読取経路へ到達できる"
     // observable = "非Full levelでUnauthorizedAccessExceptionとなり、SQLite database fileが作成されない"
     // observation_boundary = "public-boundary"
@@ -1272,7 +1401,7 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
     public async Task RejectsNonFullImageRequestsBeforeDatabaseOrMaterialPreparation()
     {
         var request = new ScenarioMaterialImageRequest(long.MinValue, new ScenarioArchiveSelection(),
-            new ScenarioMaterialWireVersion("not-a-game-id", 10, 20), new ScenarioMaterialSelectionVersion([], []),
+            new ScenarioMaterialWireVersion("not-a-game-id", 10, 20), new ScenarioMaterialSelectionVersion([], [], [], []),
             "not-a-selected-occurrence", "not-an-image");
         var databasePath = Path.Combine(_directory, "library.db");
 

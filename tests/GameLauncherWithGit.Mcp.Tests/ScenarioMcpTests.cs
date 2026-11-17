@@ -246,7 +246,7 @@ public sealed class ScenarioMcpTests
             request with { ImageId = fixture.UnrelatedImageId },
             request with { Version = version with { Revision = version.Revision + 1 } },
             request with { Version = version with { MatchingRevision = version.MatchingRevision + 1 } },
-            request with { SelectionVersion = new([], []) },
+            request with { SelectionVersion = new([], [], [], []) },
             request with { Selection = new(RangeId: fixture.Range.ToString(CultureInfo.InvariantCulture)), SelectionVersion = selectedScope, OccurrenceId = snapshot.GetProperty("occurrences")[1].GetProperty("id").GetString()! }
         }) Assert.True((await full.CallToolAsync("scenario_image", new Dictionary<string, object?> { ["request"] = invalid })).IsError);
         await fixture.Store.DeleteCaptureEventsAsync(fixture.Game, [new(fixture.Session, 1)]);
@@ -399,6 +399,89 @@ public sealed class ScenarioMcpTests
         else if (value.ValueKind == JsonValueKind.String) Assert.DoesNotContain("SECRET", value.GetString());
     }
 
+    // @test-value v2
+    // kind = "contract"
+    // claim = "実MCPの場面/tag直接ID・resource・JSON・ZIPは両キーで同ID/版/scopeを共有し、選択外/他作品/旧版を拒否、画像は新scopeとFull認可を維持する"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md: 手動場面フロー; docs/design/scenario-mcp.md: 共通 snapshot と参照" }
+    // fault = "sceneFlowだけ認可projectionを迂回する、64bit場面/tag IDを丸める、画像gateがSceneIds/TagIdsを比較しない、またはmetadata編集後も旧版を解決する"
+    // observable = "公式SDKの場面/tag JSONとZIP、二権限のfield、コピーした画像要求のbytesとIsError、編集後resource拒否"
+    // observation_boundary = "consumer"
+    // scope = "manual scenes through real MCP and export authorization"
+    // lifecycle = "permanent"
+    // risk_tags = ["authorization", "privacy"]
+    // @end-test-value
+    [Fact]
+    public async Task ManualScenesRoundTripAcrossMcpAndExportWithoutBypassingScopeOrTier()
+    {
+        await using var fixture = await Fixture.Create();
+        var tag = await fixture.Store.GetOrCreateScenarioGameTagAsync(fixture.Game, "Explicit tag");
+        var edit = new ScenarioSceneEdit("Authored scene", "01", "Chapter", 12, -34, [fixture.Range], [tag]);
+        var scene = await fixture.Store.CreateScenarioSceneAsync(fixture.Game, edit);
+        var empty = await fixture.Store.CreateScenarioSceneAsync(fixture.Game, new("Independent", "01", null, 0, 0, [], []));
+        await fixture.Store.SetScenarioSceneConnectionAsync(fixture.Game, scene, empty, true);
+        Assert.True(scene > 9007199254740992); Assert.True(tag > 9007199254740992);
+        var sceneId = scene.ToString(CultureInfo.InvariantCulture); var tagId = tag.ToString(CultureInfo.InvariantCulture);
+        await using var structure = await fixture.Client(fixture.Keys.StructureKey);
+        await using var full = await fixture.Client(fixture.Keys.FullKey);
+        var args = new Dictionary<string, object?> { ["gameId"] = fixture.Game.ToString(CultureInfo.InvariantCulture) };
+        var all = await Read(structure, "scenario_snapshot", args);
+        var fullAll = await Read(full, "scenario_export_json", args);
+        AssertStructure(all);
+        Assert.Equal(all.GetProperty("sceneFlow").GetRawText(), fullAll.GetProperty("sceneFlow").GetRawText());
+        Assert.Equal(all.GetProperty("version").GetRawText(), fullAll.GetProperty("version").GetRawText());
+        Assert.Equal(all.GetProperty("selectionVersion").GetRawText(), fullAll.GetProperty("selectionVersion").GetRawText());
+        var version = all.GetProperty("version").Deserialize<ScenarioMaterialWireVersion>(new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        foreach (var (collection, id) in new[] { ("scenes", sceneId), ("tags", tagId) })
+        {
+            var byId = new Dictionary<string, object?>(args) { ["collection"] = collection, ["id"] = id, ["expectedVersion"] = version, ["level"] = "Full" };
+            var read = await Read(structure, "scenario_by_id", byId);
+            AssertStructure(read); Assert.Equal(id, read.GetProperty("item").GetProperty("id").GetString());
+            var uri = $"scenario://item/{fixture.Game}/{version.Revision}/{version.MatchingRevision}/{collection}/{Uri.EscapeDataString(id)}";
+            var resource = await structure.ReadResourceAsync(uri);
+            Assert.Equal(read.GetRawText(), Assert.IsType<TextResourceContents>(Assert.Single(resource.Contents)).Text);
+            Assert.True((await structure.CallToolAsync("scenario_by_id", new Dictionary<string, object?>(byId)
+            { ["selection"] = new { includeTags = new[] { "absent" } } })).IsError);
+            var other = await Read(structure, "scenario_snapshot", new() { ["gameId"] = fixture.OtherGame.ToString(CultureInfo.InvariantCulture) });
+            Assert.True((await structure.CallToolAsync("scenario_by_id", new Dictionary<string, object?>(byId)
+            { ["gameId"] = fixture.OtherGame.ToString(CultureInfo.InvariantCulture), ["expectedVersion"] = other.GetProperty("version") })).IsError);
+        }
+        foreach (var level in new[] { ScenarioMaterialAccessLevel.Structure, ScenarioMaterialAccessLevel.Full })
+        {
+            var path = Path.Combine(fixture.DirectoryPath, $"scene-{level}.zip");
+            await fixture.Store.ExportScenarioArchiveAsync(fixture.Game, new(), path, level);
+            using var zip = ZipFile.OpenRead(path);
+            using var json = await JsonDocument.ParseAsync(zip.GetEntry("material.json")!.Open());
+            Assert.Equal(all.GetProperty("sceneFlow").GetRawText(), json.RootElement.GetProperty("sceneFlow").GetRawText());
+            Assert.Equal(version, json.RootElement.GetProperty("version").Deserialize<ScenarioMaterialWireVersion>(new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            Assert.True(all.GetProperty("selectionVersion").Deserialize<ScenarioMaterialSelectionVersion>(new JsonSerializerOptions(JsonSerializerDefaults.Web))!.SameSelection(
+                json.RootElement.GetProperty("selectionVersion").Deserialize<ScenarioMaterialSelectionVersion>(new JsonSerializerOptions(JsonSerializerDefaults.Web))!));
+        }
+        var selection = new ScenarioMcpSelection(RangeId: fixture.Range.ToString(CultureInfo.InvariantCulture));
+        var selected = await Read(full, "scenario_snapshot", new(args) { ["selection"] = selection });
+        Assert.Equal(sceneId, Assert.Single(selected.GetProperty("sceneFlow").GetProperty("scenes").EnumerateArray()).GetProperty("id").GetString());
+        Assert.Empty(selected.GetProperty("sceneFlow").GetProperty("connections").EnumerateArray());
+        var scope = selected.GetProperty("selectionVersion").Deserialize<ScenarioMaterialSelectionVersion>(new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        var source = Assert.Single(selected.GetProperty("ranges").EnumerateArray()).GetProperty("spans")[0];
+        var imageArgs = new Dictionary<string, object?> { ["source"] = source, ["imageId"] = fixture.ImageId,
+            ["expectedVersion"] = selected.GetProperty("version"), ["selectionVersion"] = scope, ["selection"] = selection };
+        var image = await full.CallToolAsync("scenario_image_by_source", imageArgs);
+        Assert.False(image.IsError == true);
+        Assert.Equal(Fixture.Png, Assert.IsType<ImageContentBlock>(Assert.Single(image.Content)).DecodedData.ToArray());
+        Assert.True((await structure.CallToolAsync("scenario_image_by_source", new Dictionary<string, object?>(imageArgs) { ["level"] = "Full" })).IsError);
+        foreach (var forgedScope in new[] { scope with { SceneIds = [] }, scope with { TagIds = [] } })
+            Assert.True((await full.CallToolAsync("scenario_image_by_source", new Dictionary<string, object?>(imageArgs) { ["selectionVersion"] = forgedScope })).IsError);
+        var oldUri = $"scenario://item/{fixture.Game}/{version.Revision}/{version.MatchingRevision}/scenes/{Uri.EscapeDataString(sceneId)}";
+        await fixture.Store.UpdateScenarioSceneAsync(fixture.Game, scene, edit with { Title = "Renamed", X = 100 });
+        Assert.True((await full.CallToolAsync("scenario_image_by_source", imageArgs)).IsError);
+        await Assert.ThrowsAsync<McpProtocolException>(async () => await structure.ReadResourceAsync(oldUri));
+        Assert.True((await structure.CallToolAsync("scenario_by_id", new Dictionary<string, object?>(args)
+        { ["collection"] = "scenes", ["id"] = sceneId, ["expectedVersion"] = version })).IsError);
+        var changed = await Read(structure, "scenario_snapshot", args);
+        Assert.Equal(sceneId, changed.GetProperty("sceneFlow").GetProperty("scenes")[0].GetProperty("id").GetString());
+        Assert.Equal(version.MatchingRevision, changed.GetProperty("version").GetProperty("matchingRevision").GetInt64());
+        Assert.Equal(7, (await structure.ListToolsAsync()).Count);
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         public readonly string DirectoryPath = Path.Combine(Environment.GetEnvironmentVariable("SCENARIO_TEST_ROOT") ?? Path.GetTempPath(), "mcp-" + Guid.NewGuid().ToString("N"));
@@ -418,7 +501,7 @@ public sealed class ScenarioMcpTests
             {
                 await connection.OpenAsync();
                 await using var command = connection.CreateCommand();
-                command.CommandText = "INSERT INTO sqlite_sequence(name,seq) VALUES('CaptureGames',9007199254740992),('CaptureSessions',9007199254740992),('CaptureRanges',9007199254740992),('CaptureLabels',9007199254740992)";
+                command.CommandText = "INSERT INTO sqlite_sequence(name,seq) VALUES('CaptureGames',9007199254740992),('CaptureSessions',9007199254740992),('CaptureRanges',9007199254740992),('CaptureLabels',9007199254740992),('ScenarioScenes',9007199254740992),('ScenarioGameTags',9007199254740992)";
                 await command.ExecuteNonQueryAsync();
             }
             var source = new CaptureSource(1, 2, 3, 0, "synthetic", "body");

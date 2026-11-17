@@ -19,6 +19,17 @@ internal static class ScenarioMaterialWireAdapter
         var matches = snapshot.Matches.Select(match => new ScenarioMaterialWireMatch(match.Id,
             match.Items.Select(pair => new ScenarioMaterialWirePair(ToWire(pair.Representative), ToWire(pair.Revisit))).ToArray())).ToArray();
         var game = snapshot.Version.CaptureGameId;
+        var manual = snapshot.SceneFlow;
+        var sceneFlow = new ScenarioMaterialSceneFlow(
+            manual.Tags.OrderBy(x => x.Id).Select(x => new ScenarioMaterialGameTag(Identifier(x.Id), x.Name)).ToArray(),
+            manual.RangeTags.OrderBy(x => x.RangeId).ThenBy(x => x.TagId)
+                .Select(x => new ScenarioMaterialRangeTagLink(Identifier(x.RangeId), Identifier(x.TagId))).ToArray(),
+            manual.Scenes.OrderBy(x => x.Id).Select(x => new ScenarioMaterialScene(Identifier(x.Id),
+                x.Definition.Title, x.Definition.DisplayNumber, x.Definition.Chapter, x.Definition.X, x.Definition.Y,
+                x.Definition.RangeIds.Order().Select(Identifier).ToArray(),
+                x.Definition.TagIds.Order().Select(Identifier).ToArray())).ToArray(),
+            manual.Connections.OrderBy(x => x.FromSceneId).ThenBy(x => x.ToSceneId)
+                .Select(x => new ScenarioMaterialSceneConnection(Identifier(x.FromSceneId), Identifier(x.ToSceneId))).ToArray());
         var graph = snapshot.Graph;
         var sources = graph.Occurrences.ToDictionary(x => x.Id, x =>
             new ScenarioOccurrenceRef(game, x.Start.SessionId, x.Start.Sequence, x.Start.Offset, x.End.Offset - x.Start.Offset));
@@ -40,7 +51,7 @@ internal static class ScenarioMaterialWireAdapter
                 new(charts, graph.Blocks.Select(x => new ScenarioStructureFlowBlock(ScenarioMaterialIds.Node(game, x.Id),
                         x.OccurrenceIds.Select(id => occurrenceIds[id]).ToArray())).ToArray(),
                     graph.Occurrences.Select(x => new ScenarioStructureFlowOccurrence(occurrenceIds[x.Id],
-                        ScenarioMaterialIds.Node(game, x.BlockId), ScenarioMaterialIds.Chart(game, x.ChartId), ToWire(sources[x.Id]), x.CutBefore)).ToArray(), edges)),
+                        ScenarioMaterialIds.Node(game, x.BlockId), ScenarioMaterialIds.Chart(game, x.ChartId), ToWire(sources[x.Id]), x.CutBefore)).ToArray(), edges), sceneFlow),
             ScenarioMaterialAccessLevel.Full => new ScenarioFullProjection(version, selection, snapshot.MatchingComplete,
                 snapshot.Contents.Select(x => new ScenarioMaterialWireContent(x.Id, x.Text, KindName(x.Kind))).ToArray(),
                 snapshot.Occurrences.Select(x => new ScenarioMaterialWireOccurrence(x.Id, ToWire(x.Source), x.ContentId,
@@ -49,13 +60,13 @@ internal static class ScenarioMaterialWireAdapter
                 new(charts, graph.Blocks.Select(x => new ScenarioFlowBlock(ScenarioMaterialIds.Node(game, x.Id), x.Text,
                         x.OccurrenceIds.Select(id => occurrenceIds[id]).ToArray())).ToArray(),
                     graph.Occurrences.Select(x => new ScenarioFullFlowOccurrence(occurrenceIds[x.Id],
-                        ScenarioMaterialIds.Node(game, x.BlockId), ScenarioMaterialIds.Chart(game, x.ChartId), ToWire(sources[x.Id]), x.CutBefore, x.Text, x.Speaker)).ToArray(), edges)),
+                        ScenarioMaterialIds.Node(game, x.BlockId), ScenarioMaterialIds.Chart(game, x.ChartId), ToWire(sources[x.Id]), x.CutBefore, x.Text, x.Speaker)).ToArray(), edges), sceneFlow),
             _ => throw new ArgumentOutOfRangeException(nameof(level))
         };
     }
 
     public static ScenarioMaterialSelectionVersion SelectionVersion(ScenarioMaterialSnapshot snapshot) =>
-        new(snapshot.Occurrences.Select(x => x.Id).ToArray(), snapshot.Ranges.Select(x => x.Id).ToArray());
+        ScenarioMaterialIds.SelectionVersion(snapshot);
 
     public static ScenarioMaterialWireVersion ToWire(ScenarioMaterialVersion version) => new(
         Identifier(version.CaptureGameId), version.Revision, version.MatchingRevision);

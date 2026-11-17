@@ -13,13 +13,14 @@
         @if (AllowCreate)
         {
             <input aria-label="@($"{Label}のタグ名")" placeholder="タグ名を入力・既存タグも選択可" list="@_listId" @bind="_draft" @bind:event="oninput" @onkeydown="OnKeyDownAsync" />
-            <datalist id="@_listId">@foreach (var tag in Choices) { <option value="@tag"></option> }</datalist>
+            <datalist id="@_listId">@foreach (var tag in Choices.Concat(Suggestions)) { <option value="@tag"></option> }</datalist>
         }
         else
         {
             <select aria-label="@($"{Label}のタグを選択")" @bind="_draft">
                 <option value="">タグを選択</option>
-                @foreach (var tag in Choices) { <option value="@tag">@tag</option> }
+                <optgroup label="作品タグ">@foreach (var tag in Choices) { <option value="@tag">@tag</option> }</optgroup>
+                @if (Suggestions.Any()) { <optgroup label="記録済み話者">@foreach (var tag in Suggestions) { <option value="@tag">@tag</option> }</optgroup> }
             </select>
         }
         <button type="button" class="secondary-button" aria-label="@($"{Label}にタグを追加")" @onclick="AddAsync" disabled="@string.IsNullOrWhiteSpace(_draft)">追加</button>
@@ -31,11 +32,13 @@
     [Parameter] public string[] Tags { get; set; } = [];
     [Parameter] public EventCallback<string[]> TagsChanged { get; set; }
     [Parameter] public IReadOnlyList<string> AvailableTags { get; set; } = [];
+    [Parameter] public IReadOnlyList<string> SuggestedTags { get; set; } = [];
     [Parameter] public bool AllowCreate { get; set; } = true;
     [Parameter] public bool Disabled { get; set; }
     private string _draft = "";
     private readonly string _listId = "capture-tags-" + Guid.NewGuid().ToString("N");
     private IEnumerable<string> Choices => AvailableTags.Where(x => !Tags.Contains(x, StringComparer.Ordinal));
+    private IEnumerable<string> Suggestions => SuggestedTags.Except(AvailableTags, StringComparer.Ordinal).Except(Tags, StringComparer.Ordinal);
     private Task OnKeyDownAsync(KeyboardEventArgs args) => args.Key == "Enter" ? AddAsync() : Task.CompletedTask;
     private async Task AddAsync()
     {

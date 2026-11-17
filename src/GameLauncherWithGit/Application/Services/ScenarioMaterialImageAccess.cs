@@ -13,7 +13,7 @@ public static class ScenarioMaterialImageAccess
             || request.Version.CaptureGameId != version.CaptureGameId.ToString(System.Globalization.CultureInfo.InvariantCulture)
             || request.Version.Revision != version.Revision || request.Version.MatchingRevision != version.MatchingRevision)
             throw new InvalidOperationException("資料版が更新されています。");
-        var selection = new ScenarioMaterialSelectionVersion(snapshot.Occurrences.Select(x => x.Id).ToArray(), snapshot.Ranges.Select(x => x.Id).ToArray());
+        var selection = ScenarioMaterialIds.SelectionVersion(snapshot);
         if (!selection.SameSelection(request.SelectionVersion)) throw new InvalidOperationException("選択範囲が更新されています。");
         var occurrence = snapshot.Occurrences.FirstOrDefault(x => x.Id == request.OccurrenceId);
         if (occurrence is null)

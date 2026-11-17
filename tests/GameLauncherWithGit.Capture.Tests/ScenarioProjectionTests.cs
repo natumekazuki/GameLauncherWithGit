@@ -229,13 +229,165 @@ public sealed class ScenarioProjectionTests : IDisposable
         Assert.Throws<UnauthorizedAccessException>(() => ScenarioMaterialImageAccess.Validate(snapshot, ScenarioMaterialAccessLevel.Full,
             request with { ImageId = fixture.OutsideImage }));
         Assert.Throws<InvalidOperationException>(() => ScenarioMaterialImageAccess.Validate(snapshot, ScenarioMaterialAccessLevel.Full,
-            request with { SelectionVersion = new([], []) }));
+            request with { SelectionVersion = new([], [], [], []) }));
         var graphPart = full.Graph.Occurrences.Single(x => x.Source.ReceiveSequence == 4 && x.Source.StartUtf16 == 3);
         Assert.Equal(new CaptureEventKey(fixture.Second, 4), ScenarioMaterialImageAccess.Validate(snapshot, ScenarioMaterialAccessLevel.Full,
             request with { OccurrenceId = graphPart.Id }));
         await _store.SetCaptureSpeakerAsync(fixture.Second, (await _store.GetCaptureItemsAsync(fixture.Second, 0))[0].Id, "訂正後の話者");
         var changed = await _store.GetScenarioMaterialAsync(fixture.Game, selection);
         Assert.Throws<InvalidOperationException>(() => ScenarioMaterialImageAccess.Validate(changed, ScenarioMaterialAccessLevel.Full, request));
+    }
+
+    // @test-value v2
+    // kind = "contract"
+    // claim = "全域では本文のない独立場面と未使用タグを保持し、有効な絞込みでは交差しない場面を除き、空の選択結果も場面/タグscopeで区別する"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md: 手動場面フロー (全域と絞込み・明示metadata)" }
+    // fault = "本文0件で全場面を消す、空白条件を絞込みとする、または場面/タグIDをscope比較から落とす"
+    // observable = "空履歴の両tier JSON、正規化条件別のscene/tag配列とSelectionVersion値比較"
+    // observation_boundary = "consumer"
+    // scope = "manual scene selection without source occurrences"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task EmptyScenesAndExplicitTagsSurviveOnlyAnEffectivelyUnfilteredSelection()
+    {
+        var game = await GameAsync();
+        var tag = await _store.GetOrCreateScenarioGameTagAsync(game, "unused explicit tag");
+        var scene = await _store.CreateScenarioSceneAsync(game, new("Independent", "01", "Chapter", 10, 20, [], []));
+        var whole = Assert.IsType<ScenarioStructureProjection>(await _store.GetScenarioProjectionAsync(game, new(), ScenarioMaterialAccessLevel.Structure));
+        Assert.Empty(whole.Occurrences); Assert.Empty(whole.Ranges);
+        Assert.Equal(scene.ToString(System.Globalization.CultureInfo.InvariantCulture), Assert.Single(whole.SceneFlow.Scenes).Id);
+        Assert.Equal(tag.ToString(System.Globalization.CultureInfo.InvariantCulture), Assert.Single(whole.SceneFlow.Tags).Id);
+        var normalized = await _store.GetScenarioProjectionAsync(game,
+            new(TextSearch: "  ", SpeakerSearch: "\t", IncludeTags: [], ExcludeTags: []), ScenarioMaterialAccessLevel.Structure);
+        Assert.Equal(Serialize(whole), Serialize(normalized));
+        var filtered = Assert.IsType<ScenarioStructureProjection>(await _store.GetScenarioProjectionAsync(game,
+            new(IncludeTags: ["unused explicit tag"]), ScenarioMaterialAccessLevel.Structure));
+        Assert.Empty(filtered.SceneFlow.Scenes); Assert.Empty(filtered.SceneFlow.Tags);
+        Assert.Empty(filtered.Occurrences); Assert.Empty(filtered.Ranges);
+        Assert.False(whole.SelectionVersion.SameSelection(filtered.SelectionVersion));
+        Assert.False(whole.SelectionVersion.SameSelection(whole.SelectionVersion with { SceneIds = [] }));
+        Assert.False(whole.SelectionVersion.SameSelection(whole.SelectionVersion with { TagIds = [] }));
+        var copy = JsonSerializer.Deserialize<ScenarioMaterialSelectionVersion>(JsonSerializer.Serialize(whole.SelectionVersion, Json), Json)!;
+        Assert.True(whole.SelectionVersion.SameSelection(copy));
+        var full = await _store.GetScenarioProjectionAsync(game, new(), ScenarioMaterialAccessLevel.Full);
+        Assert.Equal(Serialize(whole), Serialize(full));
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "場面の複数区間参照を選択済raw区間へclipし、除外中間場面を補間せず明示manual辺だけを残し両権限で同じmetadataを返す"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md: 手動場面フロー (選択交差・manualとobserved・明示タグ公開)" }
+    // fault = "場面が選択外区間/画像を連れ戻す、除外場面を跨ぐ辺を捏造する、または話者を自動tagmaster化する"
+    // observable = "部分UTF16のrange.spans、scene RangeIds/TagIds、manual/observed辺と画像、実JSON禁止fieldと明示タグ名"
+    // observation_boundary = "consumer"
+    // scope = "selected manual flow and privacy projection"
+    // lifecycle = "permanent"
+    // impact = "構造権限と選択範囲を守り手編集と観測結果を混同しない"
+    // distinction = "同tx DB読取から公開JSONまでの交差と実関連は型やschemaだけでは検証できない"
+    // @end-test-value
+    [Fact]
+    public async Task SelectedScenesClipSourcesAndKeepOnlyExplicitManualConnections()
+    {
+        var game = await GameAsync();
+        var session = await VisitAsync(game, Lines.Take(3).ToArray());
+        var left = await _store.SaveCaptureRangeAsync(game, "left", new(session, 1, 2), new(session, 1, 7), ["keep"]);
+        var middle = await _store.SaveCaptureRangeAsync(game, "middle", new(session, 2, 0), new(session, 2, Lines[1].Length), ["omit"]);
+        var right = await _store.SaveCaptureRangeAsync(game, "right", new(session, 3, 0), new(session, 3, Lines[2].Length), ["keep"]);
+        var image = await _store.SaveScreenshotAsync(new(game, new(session, 1)), new(1, 1, new string('c', 64), [3]), DateTimeOffset.UtcNow);
+        var outside = await _store.SaveScreenshotAsync(new(game, new(session, 2)), new(1, 1, new string('d', 64), [4]), DateTimeOffset.UtcNow);
+        var explicitTag = await _store.GetOrCreateScenarioGameTagAsync(game, "scene tag");
+        await _store.GetOrCreateScenarioGameTagAsync(game, "unused");
+        var a = await _store.CreateScenarioSceneAsync(game, new("A", "1", "Opening", 0, 0, [left, middle], [explicitTag]));
+        var b = await _store.CreateScenarioSceneAsync(game, new("B", "1", null, 100, 0, [middle], []));
+        var c = await _store.CreateScenarioSceneAsync(game, new("C", "3", null, 200, 0, [right], []));
+        await _store.SetScenarioSceneConnectionAsync(game, a, b, true);
+        await _store.SetScenarioSceneConnectionAsync(game, b, c, true);
+        var selection = new ScenarioArchiveSelection(IncludeTags: ["keep"]);
+        var selected = Assert.IsType<ScenarioStructureProjection>(await _store.GetScenarioProjectionAsync(game, selection, ScenarioMaterialAccessLevel.Structure));
+        Assert.Equal(new[] { a.ToString(), c.ToString() }, selected.SceneFlow.Scenes.Select(x => x.Id));
+        Assert.Equal(new[] { left.ToString() }, selected.SceneFlow.Scenes[0].RangeIds);
+        Assert.Equal(new[] { explicitTag.ToString() }, selected.SceneFlow.Scenes[0].TagIds);
+        Assert.Equal(new[] { "keep", "scene tag" }, selected.SceneFlow.Tags.Select(x => x.Name).Order(StringComparer.Ordinal));
+        Assert.All(selected.SceneFlow.RangeTags, link => Assert.Contains(selected.Ranges, range => range.Id == link.RangeId));
+        Assert.Empty(selected.SceneFlow.Connections); Assert.Empty(selected.Graph.Edges);
+        var span = Assert.Single(selected.Ranges.Single(x => x.Id == left.ToString()).Spans);
+        Assert.Equal(2, span.StartUtf16); Assert.Equal(5, span.LengthUtf16);
+        Assert.Equal(image.ImageId, Assert.Single(selected.Images).Id);
+        Assert.DoesNotContain(selected.Images, x => x.Id == outside.ImageId);
+        var beforeTag = JsonNode.Parse(Serialize(selected))!.ToJsonString(new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+        Assert.DoesNotContain(Speaker, beforeTag);
+        var speakerTag = await _store.GetOrCreateScenarioGameTagAsync(game, Speaker);
+        await _store.UpdateScenarioSceneAsync(game, a, new("A", "1", "Opening", 0, 0, [left, middle], [explicitTag, speakerTag]));
+        await _store.SetScenarioSceneConnectionAsync(game, a, c, true);
+        await _store.SetScenarioSceneConnectionAsync(game, c, a, true);
+        await _store.SetScenarioSceneConnectionAsync(game, a, a, true);
+        selected = Assert.IsType<ScenarioStructureProjection>(await _store.GetScenarioProjectionAsync(game, selection, ScenarioMaterialAccessLevel.Structure));
+        Assert.Equal(3, selected.SceneFlow.Connections.Count);
+        Assert.Contains(new ScenarioMaterialSceneConnection(a.ToString(), c.ToString()), selected.SceneFlow.Connections);
+        Assert.Contains(new ScenarioMaterialSceneConnection(c.ToString(), a.ToString()), selected.SceneFlow.Connections);
+        Assert.Contains(new ScenarioMaterialSceneConnection(a.ToString(), a.ToString()), selected.SceneFlow.Connections);
+        Assert.Empty(selected.Graph.Edges);
+        Assert.Contains(selected.SceneFlow.Tags, x => x.Name == Speaker);
+        using var json = JsonDocument.Parse(Serialize(selected));
+        Assert.DoesNotContain(PropertyNames(json.RootElement), name => new[] { "text", "speaker", "preview", "bytes", "path", "filePath", "thumbnail" }.Contains(name));
+        var full = Assert.IsType<ScenarioFullProjection>(await _store.GetScenarioProjectionAsync(game, selection, ScenarioMaterialAccessLevel.Full));
+        Assert.Equal(JsonSerializer.Serialize(selected.SceneFlow, Json), JsonSerializer.Serialize(full.SceneFlow, Json));
+        Assert.Equal(selected.Version, full.Version); Assert.True(selected.SelectionVersion.SameSelection(full.SelectionVersion));
+        var sceneOnlyTag = Assert.IsType<ScenarioStructureProjection>(await _store.GetScenarioProjectionAsync(game,
+            new(IncludeTags: ["scene tag"]), ScenarioMaterialAccessLevel.Structure));
+        Assert.Empty(sceneOnlyTag.SceneFlow.Scenes);
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "場面metadata変更はIDと照合完了を維持し旧版画像を失効、選択scopeの場面/タグ列改竄を拒否し、区間削除後も同場面を空で保持する"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md: 手動場面フロー (資料版・選択scope・削除と画像参照)" }
+    // fault = "名称/配置をIDにする、metadata変更が照合を再構築する、画像gateが旧版や場面/タグscope差を無視する、または削除区間を別本文へ付替える"
+    // observable = "再投影した版/MatchingComplete/安定IDと画像検証例外、区間削除後の全域/絞込み場面"
+    // observation_boundary = "public-boundary"
+    // scope = "scene edits, material revision and image scope validation"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task SceneMetadataInvalidatesImageVersionWithoutRebuildingMatchingOrReplacingSources()
+    {
+        var game = await GameAsync(); var session = await VisitAsync(game, Lines.Take(3).ToArray());
+        await _store.EndCaptureSessionAsync(session);
+        var range = await _store.SaveCaptureRangeAsync(game, "source", new(session, 1, 0), new(session, 1, Lines[0].Length), ["range tag"]);
+        var tag = await _store.GetOrCreateScenarioGameTagAsync(game, "explicit");
+        var edit = new ScenarioSceneEdit("Original", "01", null, 1, 2, [range], [tag]);
+        var scene = await _store.CreateScenarioSceneAsync(game, edit);
+        var image = await _store.SaveScreenshotAsync(new(game, new(session, 1)), new(1, 1, new string('e', 64), [5]), DateTimeOffset.UtcNow);
+        var selection = new ScenarioArchiveSelection(RangeId: range);
+        var initial = Assert.IsType<ScenarioFullProjection>(await _store.GetScenarioProjectionAsync(game, selection, ScenarioMaterialAccessLevel.Full));
+        Assert.True(initial.MatchingComplete);
+        var request = new ScenarioMaterialImageRequest(game, selection, initial.Version, initial.SelectionVersion, initial.Occurrences[0].Id, image.ImageId);
+        foreach (var mutate in new Func<Task>[] {
+            () => _store.UpdateScenarioSceneAsync(game, scene, edit with { Title = "Renamed", DisplayNumber = "99", X = -30, Y = 42 }),
+            () => _store.RenameScenarioGameTagAsync(game, tag, "renamed tag"),
+            () => _store.SetScenarioSceneConnectionAsync(game, scene, scene, true) })
+        {
+            await mutate();
+            var current = Assert.IsType<ScenarioFullProjection>(await _store.GetScenarioProjectionAsync(game, selection, ScenarioMaterialAccessLevel.Full));
+            Assert.True(current.Version.Revision > request.Version.Revision);
+            Assert.Equal(initial.Version.MatchingRevision, current.Version.MatchingRevision); Assert.True(current.MatchingComplete);
+            Assert.Equal(initial.SceneFlow.Scenes[0].Id, Assert.Single(current.SceneFlow.Scenes).Id);
+            var snapshot = await _store.GetScenarioMaterialAsync(game, selection);
+            Assert.Throws<InvalidOperationException>(() => ScenarioMaterialImageAccess.Validate(snapshot, ScenarioMaterialAccessLevel.Full, request));
+            request = request with { Version = current.Version, SelectionVersion = current.SelectionVersion };
+            Assert.Equal(new CaptureEventKey(session, 1), ScenarioMaterialImageAccess.Validate(snapshot, ScenarioMaterialAccessLevel.Full, request));
+        }
+        var latest = await _store.GetScenarioMaterialAsync(game, selection);
+        foreach (var scope in new[] { request.SelectionVersion with { SceneIds = [] }, request.SelectionVersion with { TagIds = [] } })
+            Assert.Throws<InvalidOperationException>(() => ScenarioMaterialImageAccess.Validate(latest, ScenarioMaterialAccessLevel.Full, request with { SelectionVersion = scope }));
+        await _store.DeleteCaptureRangeAsync(game, range);
+        var whole = Assert.IsType<ScenarioStructureProjection>(await _store.GetScenarioProjectionAsync(game, new(), ScenarioMaterialAccessLevel.Structure));
+        Assert.Equal(initial.SceneFlow.Scenes[0].Id, Assert.Single(whole.SceneFlow.Scenes).Id);
+        Assert.Empty(whole.SceneFlow.Scenes[0].RangeIds); Assert.Empty(whole.SceneFlow.RangeTags);
+        Assert.Equal(3, whole.Occurrences.Count);
+        var filtered = Assert.IsType<ScenarioStructureProjection>(await _store.GetScenarioProjectionAsync(game, new(IncludeTags: ["range tag"]), ScenarioMaterialAccessLevel.Structure));
+        Assert.Empty(filtered.SceneFlow.Scenes); Assert.Empty(filtered.Occurrences); Assert.Empty(filtered.Images);
     }
 
     public void Dispose()

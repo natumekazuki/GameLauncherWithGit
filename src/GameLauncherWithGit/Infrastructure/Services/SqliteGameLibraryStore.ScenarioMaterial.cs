@@ -128,8 +128,25 @@ public sealed partial class SqliteGameLibraryStore
                 group.First().LabelName!, ScenarioMaterialWireAdapter.KindName(group.First().Kind))).ToArray();
         var imageIds = occurrences.SelectMany(x => x.Images).Select(x => x.ImageId).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         var imageAssets = await ReadScenarioMaterialImagesAsync(connection, transaction, imageIds, cancellationToken);
+        var sceneFlow = await ReadScenarioSceneFlowAsync(connection, transaction, captureGameId, cancellationToken);
+        // Preserve empty authored scenes in an unfiltered view. A filtered view contains only actual source intersections.
+        var selectedRangeIds = selectedRanges.Select(x => long.Parse(x.Id, System.Globalization.CultureInfo.InvariantCulture)).ToHashSet();
+        var scenes = sceneFlow.Scenes.Select(scene => scene with
+        {
+            Definition = scene.Definition with
+            { RangeIds = scene.Definition.RangeIds.Where(selectedRangeIds.Contains).Order().ToArray() }
+        }).Where(scene => includeAllRanges || scene.Definition.RangeIds.Count > 0).OrderBy(x => x.Id).ToArray();
+        var sceneIds = scenes.Select(x => x.Id).ToHashSet();
+        var rangeTags = sceneFlow.RangeTags.Where(x => selectedRangeIds.Contains(x.RangeId)).ToArray();
+        var tagIds = scenes.SelectMany(x => x.Definition.TagIds).Concat(rangeTags.Select(x => x.TagId)).ToHashSet();
+        sceneFlow = sceneFlow with
+        {
+            Scenes = scenes, RangeTags = rangeTags,
+            Tags = sceneFlow.Tags.Where(x => includeAllRanges || tagIds.Contains(x.Id)).OrderBy(x => x.Id).ToArray(),
+            Connections = sceneFlow.Connections.Where(x => sceneIds.Contains(x.FromSceneId) && sceneIds.Contains(x.ToSceneId)).ToArray()
+        };
         var snapshot = new ScenarioMaterialSnapshot(version, complete, contents, occurrences, matches)
-        { Ranges = selectedRanges, Classifications = classifications, Images = imageAssets };
+        { Ranges = selectedRanges, Classifications = classifications, Images = imageAssets, SceneFlow = sceneFlow };
         var flowOverrides = await ReadScenarioFlowOverridesAsync(connection, transaction, captureGameId, cancellationToken);
         var selectionCuts = await ReadScenarioSelectionCutsAsync(connection, transaction, captureGameId, items, cancellationToken);
         return snapshot with { Graph = ScenarioFlowMaterialAdapter.Build(snapshot,

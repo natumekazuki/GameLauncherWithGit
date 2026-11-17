@@ -41,7 +41,7 @@ public sealed class ScenarioMcpEndpoints(IHttpContextAccessor context, IScenario
         Snapshot(gameId, selection, expectedVersion, cancellationToken);
 
     [McpServerTool(Name = "scenario_by_id", ReadOnly = true, OpenWorld = false)]
-    [Description("Read an ID from contents, occurrences, matches, ranges, classifications, images, charts, blocks or flowOccurrences. Requires the version from scenario_snapshot; IDs never bypass key permissions or selection.")]
+    [Description("Read an ID from contents, occurrences, matches, ranges, classifications, images, charts, blocks, flowOccurrences, scenes or tags. Requires the version from scenario_snapshot; IDs never bypass key permissions or selection.")]
     public Task<string> ById(string gameId, string collection, string id, ScenarioMaterialWireVersion expectedVersion,
         ScenarioMcpSelection? selection = null, CancellationToken cancellationToken = default) => Safe(async () =>
     {
@@ -53,6 +53,7 @@ public sealed class ScenarioMcpEndpoints(IHttpContextAccessor context, IScenario
             "contents" or "occurrences" or "matches" or "ranges" or "classifications" or "images" => json.GetProperty(collection),
             "charts" or "blocks" => json.GetProperty("graph").GetProperty(collection),
             "flowOccurrences" => json.GetProperty("graph").GetProperty("occurrences"),
+            "scenes" or "tags" => json.GetProperty("sceneFlow").GetProperty(collection),
             _ => throw new McpException("Unknown collection.")
         };
         var item = array.EnumerateArray().FirstOrDefault(x => x.GetProperty("id").GetString() == id);
