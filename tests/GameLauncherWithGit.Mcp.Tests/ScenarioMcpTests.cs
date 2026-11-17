@@ -482,6 +482,92 @@ public sealed class ScenarioMcpTests
         Assert.Equal(7, (await structure.ListToolsAsync()).Count);
     }
 
+    // @test-value v2
+    // kind = "contract"
+    // claim = "区間話者集計は共通reader/両ZIP material/公式SDKの両キーtool/resourceで同値となり、個別話者と検索/旧版認可は緩まない"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md: 区間話者集計; docs/design/scenario-mcp.md: 認証と二権限; 共通 snapshot と参照" }
+    // fault = "ZIP/MCPが別の集計を使う、区間外話者を含む、Structureが個別話者や話者検索/旧版参照を許す"
+    // observable = "実HTTP SDKと両ZIPのrange JSON、64bit ID/版/scope、未確定件数、機密property不在とIsError"
+    // observation_boundary = "consumer"
+    // scope = "range speaker aggregation over real MCP and archive paths"
+    // lifecycle = "permanent"
+    // risk_tags = ["authorization", "privacy"]
+    // @end-test-value
+    [Fact]
+    public async Task RangeSpeakerCountsShareReaderZipAndMcpPathsWithoutDisclosingIndividualSpeakers()
+    {
+        await using var fixture = await Fixture.Create();
+        var items = await fixture.Store.GetCaptureItemsAsync(fixture.Session, 0);
+        var label = (await fixture.Store.GetCaptureLabelsAsync(fixture.Game)).Single(x => x.Kind == CaptureKind.Dialogue);
+        await fixture.Store.SetCaptureLabelsAsync(fixture.Session, items.Select(x => x.Id).ToArray(), label.Id);
+        await fixture.Store.SetCaptureSpeakerAsync(fixture.Session, items[0].Id, "Range speaker");
+        var unknownRange = await fixture.Store.SaveCaptureRangeAsync(fixture.Game, "Unknown speaker", new(fixture.Session, 2, 0),
+            new(fixture.Session, 2, items[1].Length));
+        await using var structure = await fixture.Client(fixture.Keys.StructureKey);
+        await using var full = await fixture.Client(fixture.Keys.FullKey);
+        var args = new Dictionary<string, object?> { ["gameId"] = fixture.Game.ToString(CultureInfo.InvariantCulture) };
+        var all = await Read(structure, "scenario_snapshot", args);
+        var version = all.GetProperty("version");
+        var ranges = all.GetProperty("ranges");
+        var known = ranges.EnumerateArray().Single(x => x.GetProperty("id").GetString() == fixture.Range.ToString(CultureInfo.InvariantCulture));
+        var unknown = ranges.EnumerateArray().Single(x => x.GetProperty("id").GetString() == unknownRange.ToString(CultureInfo.InvariantCulture));
+        Assert.Equal("9007199254740993", known.GetProperty("id").GetString());
+        var count = Assert.Single(known.GetProperty("speakerCounts").EnumerateArray());
+        Assert.Equal("Range speaker", count.GetProperty("speakerName").GetString());
+        Assert.Equal(1, count.GetProperty("dialogueCount").GetInt32());
+        Assert.Equal(0, known.GetProperty("unknownSpeakerDialogueCount").GetInt32());
+        Assert.Empty(unknown.GetProperty("speakerCounts").EnumerateArray());
+        Assert.Equal(1, unknown.GetProperty("unknownSpeakerDialogueCount").GetInt32());
+        AssertStructure(all);
+        foreach (var (client, level) in new[] { (structure, ScenarioMaterialAccessLevel.Structure), (full, ScenarioMaterialAccessLevel.Full) })
+        {
+            var snapshot = await Read(client, "scenario_snapshot", args);
+            var exported = await Read(client, "scenario_export_json", args);
+            Assert.Equal(ranges.GetRawText(), snapshot.GetProperty("ranges").GetRawText());
+            Assert.Equal(ranges.GetRawText(), exported.GetProperty("ranges").GetRawText());
+            var byId = await Read(client, "scenario_by_id", new(args) { ["collection"] = "ranges", ["id"] = known.GetProperty("id"), ["expectedVersion"] = version });
+            Assert.Equal(known.GetRawText(), byId.GetProperty("item").GetRawText());
+            var uri = $"scenario://item/{fixture.Game}/{version.GetProperty("revision").GetInt64()}/{version.GetProperty("matchingRevision").GetInt64()}/ranges/{fixture.Range}";
+            var resource = await client.ReadResourceAsync(uri);
+            var resourceJson = JsonDocument.Parse(Assert.IsType<TextResourceContents>(Assert.Single(resource.Contents)).Text).RootElement;
+            Assert.Equal(known.GetRawText(), resourceJson.GetProperty("item").GetRawText());
+            var materialUri = $"scenario://material/{fixture.Game}/{version.GetProperty("revision").GetInt64()}/{version.GetProperty("matchingRevision").GetInt64()}";
+            var materialResource = await client.ReadResourceAsync(materialUri);
+            Assert.Equal(ranges.GetRawText(), JsonDocument.Parse(Assert.IsType<TextResourceContents>(Assert.Single(materialResource.Contents)).Text)
+                .RootElement.GetProperty("ranges").GetRawText());
+            var selected = await Read(client, "scenario_snapshot", new(args) { ["selection"] = new { rangeId = known.GetProperty("id") } });
+            Assert.Equal(known.GetRawText(), Assert.Single(selected.GetProperty("ranges").EnumerateArray()).GetRawText());
+            var reader = await fixture.Store.GetScenarioProjectionAsync(fixture.Game, new(), level);
+            var readerJson = JsonSerializer.SerializeToElement(reader, reader.GetType(), new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            Assert.Equal(JsonSerializer.Serialize(ranges), JsonSerializer.Serialize(readerJson.GetProperty("ranges")));
+            var path = Path.Combine(fixture.DirectoryPath, $"range-speakers-{level}.zip");
+            await fixture.Store.ExportScenarioArchiveAsync(fixture.Game, new(), path, level);
+            using var zip = ZipFile.OpenRead(path);
+            using var zipped = await JsonDocument.ParseAsync(zip.GetEntry("material.json")!.Open());
+            Assert.Equal(JsonSerializer.Serialize(ranges), JsonSerializer.Serialize(zipped.RootElement.GetProperty("ranges")));
+            Assert.Equal(version.GetRawText(), zipped.RootElement.GetProperty("version").GetRawText());
+            Assert.Equal(all.GetProperty("selectionVersion").GetRawText(), zipped.RootElement.GetProperty("selectionVersion").GetRawText());
+            if (level == ScenarioMaterialAccessLevel.Structure)
+            {
+                AssertStructure(byId); AssertStructure(resourceJson); AssertStructure(exported); AssertStructure(zipped.RootElement);
+            }
+        }
+        Assert.True((await structure.CallToolAsync("scenario_snapshot", new Dictionary<string, object?>(args)
+            { ["selection"] = new { speakerSearch = "Range speaker" } })).IsError);
+        var rawSource = all.GetProperty("occurrences")[0].GetProperty("source");
+        AssertStructure(await Read(structure, "scenario_by_source", new() { ["source"] = rawSource, ["expectedVersion"] = version }));
+        await fixture.Store.SetCaptureSpeakerAsync(fixture.Session, items[0].Id, null);
+        Assert.True((await structure.CallToolAsync("scenario_by_id", new Dictionary<string, object?>(args)
+            { ["collection"] = "ranges", ["id"] = known.GetProperty("id"), ["expectedVersion"] = version })).IsError);
+        var changed = await Read(structure, "scenario_snapshot", args);
+        var changedRange = changed.GetProperty("ranges")[0];
+        Assert.Equal(known.GetProperty("id").GetString(), changedRange.GetProperty("id").GetString());
+        Assert.Empty(changedRange.GetProperty("speakerCounts").EnumerateArray());
+        Assert.Equal(1, changedRange.GetProperty("unknownSpeakerDialogueCount").GetInt32());
+        Assert.True(changed.GetProperty("version").GetProperty("revision").GetInt64() > version.GetProperty("revision").GetInt64());
+        Assert.Equal(all.GetProperty("selectionVersion").GetRawText(), changed.GetProperty("selectionVersion").GetRawText());
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         public readonly string DirectoryPath = Path.Combine(Environment.GetEnvironmentVariable("SCENARIO_TEST_ROOT") ?? Path.GetTempPath(), "mcp-" + Guid.NewGuid().ToString("N"));

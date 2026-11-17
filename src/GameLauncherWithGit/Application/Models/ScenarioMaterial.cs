@@ -24,5 +24,8 @@ public sealed record ScenarioMaterialSnapshot(ScenarioMaterialVersion Version, b
     public ScenarioSceneFlowSnapshot SceneFlow { get; init; } = new(Version.CaptureGameId, Version, [], [], [], []);
 }
 public sealed record ScenarioMaterialRange(string Id, string Name, CapturePosition Start, CapturePosition End,
-    IReadOnlyList<string> Tags, IReadOnlyList<ScenarioOccurrenceRef> Spans);
+    IReadOnlyList<string> Tags, IReadOnlyList<ScenarioOccurrenceRef> Spans,
+    IReadOnlyList<ScenarioRangeSpeakerCount> SpeakerCounts, int UnknownSpeakerDialogueCount);
+/// <summary>Selected, intersecting recorded Dialogue items, grouped by the exact effective speaker name.</summary>
+public sealed record ScenarioRangeSpeakerCount(string SpeakerName, int DialogueCount);
 public sealed record ScenarioMatchingBatchResult(int ProcessedItems, bool HasMore, bool DeferredForCapture);

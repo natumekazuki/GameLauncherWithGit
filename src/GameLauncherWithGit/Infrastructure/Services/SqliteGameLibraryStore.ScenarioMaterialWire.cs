@@ -15,7 +15,7 @@ internal static class ScenarioMaterialWireAdapter
         var version = ToWire(snapshot.Version);
         var selection = SelectionVersion(snapshot);
         var ranges = snapshot.Ranges.Select(x => new ScenarioMaterialWireRange(x.Id, x.Name, ToWire(x.Start), ToWire(x.End),
-            x.Tags, x.Spans.Select(ToWire).ToArray())).ToArray();
+            x.Tags, x.Spans.Select(ToWire).ToArray(), x.SpeakerCounts, x.UnknownSpeakerDialogueCount)).ToArray();
         var matches = snapshot.Matches.Select(match => new ScenarioMaterialWireMatch(match.Id,
             match.Items.Select(pair => new ScenarioMaterialWirePair(ToWire(pair.Representative), ToWire(pair.Revisit))).ToArray())).ToArray();
         var game = snapshot.Version.CaptureGameId;

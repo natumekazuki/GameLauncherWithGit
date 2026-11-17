@@ -57,7 +57,8 @@ public sealed record ScenarioMaterialWireImage(string ImageId, DateTimeOffset Ca
 public sealed record ScenarioMaterialWireMatch(string Id, IReadOnlyList<ScenarioMaterialWirePair> Items);
 public sealed record ScenarioMaterialWirePair(ScenarioMaterialWireReference Representative, ScenarioMaterialWireReference Revisit);
 public sealed record ScenarioMaterialWireRange(string Id, string Name, ScenarioMaterialWirePosition Start,
-    ScenarioMaterialWirePosition End, IReadOnlyList<string> Tags, IReadOnlyList<ScenarioMaterialWireReference> Spans);
+    ScenarioMaterialWirePosition End, IReadOnlyList<string> Tags, IReadOnlyList<ScenarioMaterialWireReference> Spans,
+    IReadOnlyList<ScenarioRangeSpeakerCount> SpeakerCounts, int UnknownSpeakerDialogueCount);
 public sealed record ScenarioMaterialClassification(string Id, string Name, string? Kind);
 public sealed record ScenarioMaterialImageMetadata(string Id, int Width, int Height, string PixelHash);
 

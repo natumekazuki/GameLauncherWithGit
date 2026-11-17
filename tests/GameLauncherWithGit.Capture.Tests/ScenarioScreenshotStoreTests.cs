@@ -1128,15 +1128,15 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
 
     // @test-value v2
     // kind = "invariant"
-    // claim = "構造ZIPは本文・話者・検索語・画像path・PNGを省きつつ、完全ZIPと同じ選択資料の版とIDを出力する"
-    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md: 手動スクリーンショットと分析用ZIP" }
+    // claim = "構造ZIPは本文・個別話者・検索語・画像path・PNGを省きつつ、完全ZIPと同じ選択資料の版/IDと区間話者集計を出力する"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md: 手動スクリーンショットと分析用ZIP; 区間話者集計" }
     // fault = "構造出力から機密propertyを出す、完全版と違う資料を再採番する、またはPNG/本文ファイルを含める"
-    // observable = "両ZIPの実JSON projection、manifest contentMode/selection fields、ZIP entry names、合成本文/話者/検索語の出現"
+    // observable = "両ZIPの実JSON projectionとrangesの集計、manifest contentMode/selection fields、ZIP entry names、本文/個別話者/検索語の境界"
     // observation_boundary = "consumer"
     // scope = "structure and full scenario archive exports"
     // lifecycle = "permanent"
     // impact = "構造専用exportが本文情報を漏らさず、両export間で同じ選択済み出現を対応付けられる"
-    // distinction = "共通projection testはDTO単体を確認し、このtestは選択条件・画像・manifestとZIP entryを含む実出力境界を確認する"
+    // distinction = "共通projection testはreaderの公開JSONを確認し、このtestはさらにmanifestとZIP entryを含む実archive境界を確認する"
     // @end-test-value
     [Fact]
     public async Task StructureArchiveOmitsContentAndImageBodiesWhileSharingFullProjectionIds()
@@ -1212,8 +1212,13 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
                 Assert.Contains(imageReference.GetProperty("imageId").GetString(), structureImageIds)));
         Assert.Contains("structure-tag", structureMaterial.GetProperty("ranges").EnumerateArray()
             .SelectMany(x => x.GetProperty("tags").EnumerateArray()).Select(x => x.GetString()));
-        Assert.DoesNotContain(JsonStrings(structureMaterial), x => x.Contains(body, StringComparison.Ordinal)
-            || x.Contains(speaker, StringComparison.Ordinal));
+        var countedRange = Assert.Single(structureMaterial.GetProperty("ranges").EnumerateArray());
+        var speakerCount = Assert.Single(countedRange.GetProperty("speakerCounts").EnumerateArray());
+        Assert.Equal(speaker, speakerCount.GetProperty("speakerName").GetString());
+        Assert.Equal(1, speakerCount.GetProperty("dialogueCount").GetInt32());
+        Assert.Equal(0, countedRange.GetProperty("unknownSpeakerDialogueCount").GetInt32());
+        Assert.Equal(fullMaterial.GetProperty("ranges").GetRawText(), structureMaterial.GetProperty("ranges").GetRawText());
+        Assert.DoesNotContain(JsonStrings(structureMaterial), x => x.Contains(body, StringComparison.Ordinal));
         Assert.DoesNotContain(JsonStrings(structureManifest), x => x.Contains("BODY_MARKER_51fa82", StringComparison.Ordinal)
             || x.Contains("SPEAKER_MARKER_c173a9", StringComparison.Ordinal));
         Assert.Contains(JsonStrings(fullMaterial), x => x.Contains(body, StringComparison.Ordinal));

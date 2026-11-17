@@ -97,7 +97,7 @@ dotnet test tests/GameLauncherWithGit.Capture.Tests
 
 Windows アプリの起動中に、一般の Streamable HTTP MCP client からシナリオ資料を読めます。初期状態は無効です。停止中に `scripts/configure-scenario-mcp.ps1 -DataDirectory <使用中のデータdirectoryの絶対path> -Action Enable` を実行し、アプリを起動します。接続先は既定で `http://127.0.0.1:47831/mcp`。クライアントの秘密設定へ `Authorization: Bearer <キー>` を設定します。
 
-`StructureKey` はフロー・接続・出現位置・タグ・範囲・分類・画像一覧 metadata のみ、`FullKey` は本文・話者・画像本体も取得できます。構造キーの応答には本文・抜粋・画像本体・thumbnail の機密 field 自体を含めません。二権限と export で同じ対象 ID・snapshot/selection 版を使用します。`scenario_games` から作品 ID、`scenario_snapshot` から資料版と対象 ID を取得し、ID 指定や resource で参照できます。
+`StructureKey` はフロー・接続・出現位置・タグ・範囲・分類・画像一覧 metadata と区間ごとの話者名・セリフ件数、`FullKey` は本文・個別出現の話者・画像本体も取得できます。区間集計はZIPの両modeの`material.json.ranges`とMCPの共通`ranges`にあり、記録済みDialogue itemを数え、話者未確定件数を別に示します。構造キーの応答には本文・個別話者・抜粋・画像本体・thumbnail の機密 field 自体を含めず、本文/話者検索も許可しません。二権限と export で同じ対象 ID・snapshot/selection 版を使用します。`scenario_games` から作品 ID、`scenario_snapshot` から資料版と対象 ID を取得し、ID 指定や resource で参照できます。
 
 キーは `scenario-mcp.json` に保存されます。script は秘密を表示しません。キーを prompt・コマンド履歴・共有資料へ貼らず、必要なクライアントだけへ設定してください。停止後に `-Action Rotate` で両キーを更新、`-Action Disable` で無効化し、再起動で適用します。OAuth 専用 client ではなく、Bearer header を手動設定できる client が必要です。これは API の認可であり、OS のファイル・shell・SSH 隔離ではありません。[設定・認証・各入口の契約](docs/design/scenario-mcp.md)を参照してください。
 

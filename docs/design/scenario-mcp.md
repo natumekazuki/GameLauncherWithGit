@@ -4,13 +4,15 @@
 
 Windows アプリ内で公式 C# MCP SDK 2.4.0 の Streamable HTTP を使用する。`http://127.0.0.1:<Port>/mcp` の各 HTTP 要求に `Authorization: Bearer <APIキー>` が必要で、欠落・不正キーは 401。Host は loopback と実際の待受 port、Origin があれば同 port の loopback HTTP に限定する。CORS、外部待受、旧 SSE transport は提供しない。
 
-StructureKey はフロー構造・接続・出現位置・タグ・範囲・分類・画像一覧 metadata のみを返す。本文・抜粋・話者・画像本体・thumbnail は値のマスクではなく JSON property 自体を省く。FullKey は本文・話者と画像本体も取得できる。権限は毎要求のキーだけから決まり、tool 引数、URI、対象 ID、MCP session ID によって昇格しない。stateless のため権限を保持する session や再送 stream は作らない。構造キーによる本文・話者の検索は、一致有無から内容を推測できるため拒否する。
+StructureKey はフロー構造・接続・出現位置・タグ・範囲・分類・画像一覧 metadata と区間集約の話者名/件数を返す。本文・抜粋・個別出現/graphの話者・画像本体・thumbnail は値のマスクではなく JSON property 自体を省く。FullKey は本文・個別話者と画像本体も取得できる。権限は毎要求のキーだけから決まり、tool 引数、URI、対象 ID、MCP session ID によって昇格しない。stateless のため権限を保持する session や再送 stream は作らない。構造キーによる本文・話者の検索は、一致有無から内容を推測できるため拒否する。
 
 これは API 経由の認可であり、同一ユーザーのファイル・shell・SSH 到達を隔離する仕組みではない。設定ファイルを読める者はキーを取得できる。鍵の配送やクライアント側の秘密保管はこのアプリの機能ではない。
 
 ## 共通 snapshot と参照
 
 MCP は共通 `GetScenarioProjectionAsync` の型別 allowlist DTO を使用する。同一 snapshot/selection の対象 ID、Version、SelectionVersion は権限や export の形式によって採番し直さない。ID は取得した資料版と組にして使用し、訂正・削除後に古い参照を別本文へ付け替えない。手動場面構造の保存・全域/絞込み時の範囲・場面・tag・接続の選択規則と観測済み`graph`との区別は[手動場面フロー](scenario-extraction.md#手動場面フロー)を正本とする。`sceneFlow`の`scenes`/`tags`も同じ選択済みprojectionのIDで直接参照する。
+
+共通`ranges[]`の`speakerCounts: [{speakerName, dialogueCount}]`と`unknownSpeakerDialogueCount`は両キーで同値を返す。[区間話者集計](scenario-extraction.md#区間話者集計)の記録済みDialogue item単位と選択実交差を使い、非Dialogueを除外し未確定話者を別件数にする。`scenario_snapshot`/`scenario_export_json`、`scenario_by_id`の`ranges`、material/item resourceはすべて同じ集計を持つ。ZIPでは`material.json.ranges`だけがこの共通定義を持ち、`manifest.ranges`は従来の位置/tag/span索引のままとする。個別話者・本文・画像の認可、Structureの話者検索拒否、他endpointの公開範囲は拡張しない。
 
 外部の作品・取得回・分類・範囲等の64bit整数IDは入出力とも十進文字列とし、JSON number にしない。返却された `source` と `version` をコピーして次の要求へ使用できる。受信連番・UTF16位置/長さ・revision counter は数値を保つ。入力境界で正の整数文字列を InvariantCulture で解決し、内部DB/storeのlong型は維持する。例えば `"9007199254740993"` のようなIDも丸めない。
 

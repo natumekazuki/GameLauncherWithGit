@@ -71,10 +71,10 @@ public sealed class ScenarioProjectionTests : IDisposable
 
     // @test-value v2
     // kind = "invariant"
-    // claim = "構造/完全の実JSONは同一版とIDを持ち、構造側は全階層で本文・話者のpropertyを省きflow/範囲/分類/画像metadataを保つ"
+    // claim = "構造/完全の実JSONは同一版とIDを持ち、構造側は本文と個別話者のpropertyを省き区間話者集計とflow/範囲/分類/画像metadataを保つ"
     // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md: 連続本文照合と共通資料 (共通projection・raw由来ID・Structureのproperty省略)" }
     // fault = "base型serializationで内部完全snapshotを混ぜる、機密値をnullに置く、または権限でID/版を採番し直す"
-    // observable = "両公開projectionのJSON、再帰property名、本文/話者目印の有無、flow/範囲/画像IDと版"
+    // observable = "両公開projectionのJSON、再帰property名、本文/個別話者propertyの不在と区間話者件数、flow/範囲/画像IDと版"
     // observation_boundary = "consumer"
     // scope = "shared two-level material JSON projection"
     // lifecycle = "permanent"
@@ -92,7 +92,8 @@ public sealed class ScenarioProjectionTests : IDisposable
         var prohibited = new[] { "text", "rawText", "speaker", "excerpt", "preview", "thumbnail", "bytes", "png", "filePath", "path", "snapshot", "textSearch", "speakerSearch" };
         Assert.DoesNotContain(PropertyNames(document.RootElement), name => prohibited.Contains(name, StringComparer.OrdinalIgnoreCase));
         var decodedStructure = JsonNode.Parse(structuralJson)!.ToJsonString(new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
-        Assert.DoesNotContain("機密本文", decodedStructure); Assert.DoesNotContain(Speaker, decodedStructure);
+        Assert.DoesNotContain("機密本文", decodedStructure);
+        Assert.All(structure.Ranges, range => Assert.Equal(new ScenarioRangeSpeakerCount(Speaker, 7), Assert.Single(range.SpeakerCounts)));
         var fullNode = JsonNode.Parse(fullJson);
         Assert.Contains("機密本文", fullNode!.ToJsonString(new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
         Assert.All(full.Occurrences, x => Assert.Equal(Speaker, x.Speaker));
@@ -315,8 +316,7 @@ public sealed class ScenarioProjectionTests : IDisposable
         Assert.Equal(2, span.StartUtf16); Assert.Equal(5, span.LengthUtf16);
         Assert.Equal(image.ImageId, Assert.Single(selected.Images).Id);
         Assert.DoesNotContain(selected.Images, x => x.Id == outside.ImageId);
-        var beforeTag = JsonNode.Parse(Serialize(selected))!.ToJsonString(new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
-        Assert.DoesNotContain(Speaker, beforeTag);
+        Assert.DoesNotContain(selected.SceneFlow.Tags, x => x.Name == Speaker);
         var speakerTag = await _store.GetOrCreateScenarioGameTagAsync(game, Speaker);
         await _store.UpdateScenarioSceneAsync(game, a, new("A", "1", "Opening", 0, 0, [left, middle], [explicitTag, speakerTag]));
         await _store.SetScenarioSceneConnectionAsync(game, a, c, true);
@@ -388,6 +388,100 @@ public sealed class ScenarioProjectionTests : IDisposable
         Assert.Equal(3, whole.Occurrences.Count);
         var filtered = Assert.IsType<ScenarioStructureProjection>(await _store.GetScenarioProjectionAsync(game, new(IncludeTags: ["range tag"]), ScenarioMaterialAccessLevel.Structure));
         Assert.Empty(filtered.SceneFlow.Scenes); Assert.Empty(filtered.Occurrences); Assert.Empty(filtered.Images);
+    }
+
+    // @test-value v2
+    // kind = "contract"
+    // claim = "区間集計は選択との実交差内のDialogue itemを一度だけ数え、分類分割と同文別出現を別件にし未確定話者/非Dialogue/空区間と対象外を区別する"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md: 区間話者集計" }
+    // fault = "clipや句読点で水増しする、同文/同イベントを統合する、区間外や非Dialogueを混入する、未確定話者を人物補完する"
+    // observable = "同tx読取のrange別SpeakerCounts/UnknownSpeakerDialogueCount、選択clip数、両tier JSONと版、原文/タグ不変、削除後の0件と対象外"
+    // observation_boundary = "consumer"
+    // scope = "selected range Dialogue item aggregation"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task RangeSpeakerCountsUseDistinctRecordedDialogueItemsWithinSelectedIntersections()
+    {
+        var game = await GameAsync();
+        var dialogue = (await _store.GetCaptureLabelsAsync(game)).Single(x => x.Kind == CaptureKind.Dialogue).Id;
+        var narration = (await _store.GetCaptureLabelsAsync(game)).Single(x => x.Kind == CaptureKind.Narration).Id;
+        long other;
+        await using (var connection = new SqliteConnection($"Data Source={Path.Combine(_directory, "library.db")}"))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = "INSERT INTO CaptureLabels(CaptureGameId,Name,Kind) VALUES($game,'legacy other',2) RETURNING Id";
+            command.Parameters.AddWithValue("$game", game);
+            other = (long)(await command.ExecuteScalarAsync())!;
+        }
+        string[] parts = ["「同じセリフ。続く句！」", "「同じセリフ。続く句！」", "地の文", "未判定", "その他", "「話者未確定」", "「表記違い」"];
+        var raw = string.Concat(parts);
+        var first = await VisitAsync(game, [raw]);
+        var boundaries = parts.Select((_, index) => parts.Take(index + 1).Sum(x => x.Length)).SkipLast(1).ToArray();
+        await _store.SplitCaptureEventAsync(first, 1, boundaries,
+            [new(dialogue, "Alice"), new(dialogue, "Alice"), new(narration, "not dialogue"), new(null, "not dialogue"),
+             new(other, "not dialogue"), new(dialogue, null), new(dialogue, "ALICE")]);
+        var second = await VisitAsync(game, [parts[0]]);
+        await _store.SetCaptureSpeakerAsync(second, Assert.Single(await _store.GetCaptureItemsAsync(second, 0)).Id, "Alice");
+        var wholeId = await _store.SaveCaptureRangeAsync(game, "whole", new(first, 1, 0), new(second, 1, parts[0].Length));
+        var revisitId = await _store.SaveCaptureRangeAsync(game, "revisit", new(second, 1, 0), new(second, 1, parts[0].Length));
+        var holeId = await _store.SaveCaptureRangeAsync(game, "hole", new(first, 1, 3), new(first, 1, 6), ["hole"]);
+        var offset = parts[0].Length + parts[1].Length;
+        for (var index = 2; index <= 5; index++)
+        {
+            await _store.SaveCaptureRangeAsync(game, $"part-{index}", new(first, 1, offset), new(first, 1, offset + parts[index].Length));
+            offset += parts[index].Length;
+        }
+        var initial = await _store.GetScenarioMaterialAsync(game, new());
+        var tags = (await _store.GetScenarioSceneFlowAsync(game)).Tags.ToArray();
+        foreach (var selection in new[] { new ScenarioArchiveSelection(), new ScenarioArchiveSelection(ExcludeTags: ["hole"]) })
+        {
+            var full = Assert.IsType<ScenarioFullProjection>(await _store.GetScenarioProjectionAsync(game, selection, ScenarioMaterialAccessLevel.Full));
+            var structure = Assert.IsType<ScenarioStructureProjection>(await _store.GetScenarioProjectionAsync(game, selection, ScenarioMaterialAccessLevel.Structure));
+            var range = full.Ranges.Single(x => x.Id == wholeId.ToString());
+            Assert.Equal(new[] { new ScenarioRangeSpeakerCount("ALICE", 1), new ScenarioRangeSpeakerCount("Alice", 3) }, range.SpeakerCounts);
+            Assert.Equal(1, range.UnknownSpeakerDialogueCount);
+            Assert.All(full.Ranges.Where(x => x.Name is "part-2" or "part-3" or "part-4"), x =>
+            { Assert.Empty(x.SpeakerCounts); Assert.Equal(0, x.UnknownSpeakerDialogueCount); Assert.NotEmpty(x.Spans); });
+            var unknown = full.Ranges.Single(x => x.Name == "part-5");
+            Assert.Empty(unknown.SpeakerCounts); Assert.Equal(1, unknown.UnknownSpeakerDialogueCount);
+            if (selection.ExcludeTags is not null)
+            {
+                Assert.DoesNotContain(full.Ranges, x => x.Id == holeId.ToString());
+                Assert.Equal(9, full.Occurrences.Count); // seven stored items, one revisit, and an extra clip of the first item
+                Assert.Equal(3, full.Occurrences.Count(x => x.Source.SessionId == first.ToString() && x.Source.StartUtf16 < parts[0].Length * 2));
+            }
+            Assert.Equal(JsonSerializer.Serialize(full.Ranges, Json), JsonSerializer.Serialize(structure.Ranges, Json));
+            Assert.Equal(full.Version, structure.Version); Assert.True(full.SelectionVersion.SameSelection(structure.SelectionVersion));
+        }
+        foreach (var selection in new[] { new ScenarioArchiveSelection(TextSearch: "表記違い"), new ScenarioArchiveSelection(SpeakerSearch: "ALICE") })
+        {
+            var filtered = Assert.IsType<ScenarioFullProjection>(await _store.GetScenarioProjectionAsync(game, selection, ScenarioMaterialAccessLevel.Full));
+            Assert.Equal(0, filtered.Ranges.Single(x => x.Id == wholeId.ToString()).UnknownSpeakerDialogueCount);
+            Assert.DoesNotContain(filtered.Ranges.SelectMany(x => x.SpeakerCounts), x => x.SpeakerName == "not dialogue");
+            if (selection.TextSearch is not null)
+                Assert.Equal(new ScenarioRangeSpeakerCount("ALICE", 1), Assert.Single(Assert.Single(filtered.Ranges).SpeakerCounts));
+            else
+                Assert.Equal(new[] { new ScenarioRangeSpeakerCount("ALICE", 1), new ScenarioRangeSpeakerCount("Alice", 3) },
+                    filtered.Ranges.Single(x => x.Id == wholeId.ToString()).SpeakerCounts);
+        }
+        var unclassified = Assert.IsType<ScenarioStructureProjection>(await _store.GetScenarioProjectionAsync(game,
+            new(UnclassifiedOnly: true), ScenarioMaterialAccessLevel.Structure));
+        Assert.All(unclassified.Ranges, x => { Assert.Empty(x.SpeakerCounts); Assert.Equal(0, x.UnknownSpeakerDialogueCount); });
+        Assert.Equal(initial.Version, (await _store.GetScenarioMaterialAsync(game, new())).Version);
+        Assert.Equal(raw, (await _store.GetCaptureItemsAsync(first, 0))[0].RawText);
+        Assert.Equal(tags, (await _store.GetScenarioSceneFlowAsync(game)).Tags);
+        await _store.DeleteCaptureEventsAsync(game, [new(second, 1)]);
+        foreach (var level in new[] { ScenarioMaterialAccessLevel.Structure, ScenarioMaterialAccessLevel.Full })
+        {
+            var current = await _store.GetScenarioProjectionAsync(game, new(), level);
+            var currentRanges = current is ScenarioStructureProjection structure ? structure.Ranges : ((ScenarioFullProjection)current).Ranges;
+            var empty = currentRanges.Single(x => x.Id == revisitId.ToString());
+            Assert.Empty(empty.Spans); Assert.Empty(empty.SpeakerCounts); Assert.Equal(0, empty.UnknownSpeakerDialogueCount);
+            var filtered = await _store.GetScenarioProjectionAsync(game, new(RangeId: revisitId), level);
+            Assert.Empty(filtered is ScenarioStructureProjection s ? s.Ranges : ((ScenarioFullProjection)filtered).Ranges);
+        }
     }
 
     public void Dispose()

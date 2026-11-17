@@ -155,7 +155,7 @@ TXT・画像付きZIPの出力操作では、現在のゲーム・区間・分�
 - `matchingComplete`: snapshot内の未処理の有無。記録が優先され未完了の場合も原記録を出し、未確認の一致は使わない。
 - `contents`: 選択されたitem/部分segment。Structureでは`id/kind`だけ、Fullでは`id/text/kind`を持つ。照合で確認した同じ並びだけが同一contentを参照し、文字列だけで重複排除しない。
 - `occurrences`: 原記録順の出現。Structureは`source/contentId/labelId/labelName/receivedAt/images`、Fullはそれらに`speaker`を加えた情報を持つ。ラベル・画像はその出現自身の値で、他周回の値を持ち越さない。
-- `matches`, `ranges`, `classifications`, `images`, `graph`, `sceneFlow`: 同じ選択範囲の対応、元区間/タグ/分類、画像寸法/hash、観測経路、手動場面構造を表す。Structureでは本文や話者を持つpropertyを含めない。
+- `matches`, `ranges`, `classifications`, `images`, `graph`, `sceneFlow`: 同じ選択範囲の対応、元区間/タグ/分類、画像寸法/hash、観測経路、手動場面構造を表す。Structureでは本文と個別出現/graphの話者propertyを含めず、区間集約の話者名と件数だけを両権限で共有する。
 
 `source`は`ScenarioMaterialWireReference(captureGameId, sessionId, receiveSequence, startUtf16, lengthUtf16)`で、item IDやZIP内で再採番したIDでなく原文位置を根拠にする。occurrence IDは`occ:<captureGameId>:<sessionId>:<receiveSequence>:<startUtf16>:<lengthUtf16>`、content IDは選択内代表のoccurrence IDに`content:`を付け、match IDはcontent IDに`match:`を付ける。先行要素数で増える`content-N`形式は使わない。flow出現IDもraw spanから同じ関数で作り、node IDは`node:<game>:<blockId>`（内部`/`は`~`）、chart IDは`flow:<game>:<chartId>`とする。64bit整数のIDは不変文化の10進文字列、受信連番・UTF-16位置・長さ・資料世代などの量は数値とする。手動場面・作品タグIDとその参照も保存longの10進文字列で、文字列へprefixを付けない。game IDは所属検証のcontextとして別に照合する。opaque image IDは元の文字列を維持する。これらのIDは同じ作品・Version・SelectionVersionのMCP/ZIP間では同値だが、古い資料版へ新しい結果を無断で付け替えない。部分選択は原文内の半開区間を保ち、元の一致itemの相対開始位置・長さが同じ選択sliceだけでcontentを共有する。
 
@@ -163,11 +163,27 @@ TXT・画像付きZIPの出力操作では、現在のゲーム・区間・分�
 
 たとえばタグなしの3周が共通の冒頭3件を通り、2周目だけ「うん」が「いや」に変わり、共通の後半3件へ戻る場合、共通本文6件と各返答2件をcontentsへ一度ずつ置く。occurrencesのcontent参照を各回の順に辿れば分岐と再合流を復元でき、2周目の返答だけに付いた画像もその出現だけから参照できる。2周目のタグだけを選べば、初出が範囲外でも2周目の本文・話者・画像・位置だけを出す。
 
-Structure projectionはflow構造・接続・出現位置・タグ/範囲/分類・画像一覧metadataに限定し、本文・抜粋・話者・preview・画像bytes・thumbnail・端末path・本文/話者検索語のpropertyを出さない。機密値をmaskしたりnullへ置換したりせず、property自体を省略する。明示された範囲/タグ/分類名はそのまま扱い、本文や話者から名前やpreviewを生成しない。ローカルUIは適用済み本文/話者検索を選択条件に使えるが、Structure出力は検索語をmanifestへ含めない。MCPのStructure権限では本文/話者検索を無視でなく拒否し、検索結果の有無から内容を推測させない。Full projectionは本文・話者も含む。
+Structure projectionはflow構造・接続・出現位置・タグ/範囲/分類・画像一覧metadataと区間集約の話者名/件数を返し、本文・抜粋・個別出現/graphの話者・preview・画像bytes・thumbnail・端末path・本文/話者検索語のpropertyを出さない。機密値をmaskしたりnullへ置換したりせず、property自体を省略する。明示された範囲/タグ/分類名はそのまま扱い、本文や話者から名前やpreviewを生成しない。ローカルUIは適用済み本文/話者検索を選択条件に使えるが、Structure出力は検索語をmanifestへ含めない。MCPのStructure権限では本文/話者検索を無視でなく拒否し、検索結果の有無から内容を推測させない。Full projectionは本文・個別話者も含む。
 
 画像本体は`IScenarioScreenshotStore.ReadScenarioImageAsync(level, request, cancellationToken)`でFull権限だけに返す。要求は作品ID、元selection、wire版、`SelectionVersion`、occurrence ID、image IDからなり、外部projectionの版をそのまま渡せる。Structureと未定義levelはrequest/game/資料準備より先に拒否する。Fullは画像gate内の同一transactionで元selectionを再投影し、`ScenarioMaterialImageAccess.Validate(currentSnapshot, level, request)`で全Version・scopeの値列・選択内出現とimage IDのexact関連を検証してからbytesを読む。graph内のcutで分割された出現IDはraw spanが選択本文内に含まれ、その原文に画像が関連する場合だけ解決する。共通contentだけを根拠に別出現の画像を付け替えず、file pathは返さない。これはAPI認可であり、同一ユーザーのfile/shell/SSHアクセスを隔離するものではない。
 
 Full/Structureのどちらも区間・タグ・分類・検索条件を先に適用し、選択内だけをprojectionする。絞込み後に間が空いた場合は元のitem位置と隣接情報を使ってread-time cutを置き、選択外の本文、話者、画像、原代表イベント参照を出さず、実際には観測されていない接続を追加しない。このcutはDBへ保存せず、raw `ScenarioFlowOverrides`や既存境界を変更しない。手動場面も同じ選択済み区間・出現との交差から投影し、端点が残らない手編集接続は出さない。
+
+### 区間話者集計
+
+共通projectionの`ranges[]`は`speakerCounts: [{ speakerName: string, dialogueCount: number }]`と`unknownSpeakerDialogueCount: number`を持つ。ZIPでは両modeの`material.json.ranges`、MCPでは同じ共通rangeから取得する。`manifest.ranges`は位置・タグ・spanの索引として維持し、集計を重複格納しない。本文や画像を開かずに、選択された区間の登場話者とセリフ数を確認できる。
+
+集計対象は全選択条件適用後のsliceと区間の半開範囲が実際に交差する、現在の有効分類が`Dialogue`の記録済み`CaptureItems`だけとする。文字数・句読点数・callback数・canonical content数ではない。一つの元itemが包含/除外による複数clipで同一区間に交差しても、`CaptureItems.Id`ごとに1件。同じ原文内の分類分割は別item、同文の別出現や別周回も別itemなのでそれぞれ数える。区間ごとの集計は独立し、区間間を合算して重複排除しない。分類/境界修正後は現在のitemから再導出する。永続統計・別キャッシュ・人物マスタは作らない。
+
+`Narration`・未判定（`null`）・`Other`は除外し、話者があっても`Dialogue`と推測しない。Dialogueの有効話者がnull/空白の場合は`unknownSpeakerDialogueCount`へ数え、名前を補完しない。確定名は有効話者文字列のOrdinal完全一致でまとめ、Ordinal名順で返す。表記揺れ・大小文字・別名を自動名寄せしない。`dialogueCount`は正数、確定話者がなければ`speakerCounts`は空配列、未確定Dialogueがなければ`unknownSpeakerDialogueCount`は0。非Dialogueだけ/空区間の0件と、絞込みで区間自体が対象外になった配列要素不在を区別する。0件は完全取得や分類確定を保証しない。
+
+同じVersion/SelectionVersionのStructureとFullは同じ区間集計を返す。公開例（既存位置・タグ・spansは省略）:
+
+```json
+{"id":"9007199254740993","speakerCounts":[{"speakerName":"美咲","dialogueCount":3}],"unknownSpeakerDialogueCount":1}
+```
+
+Structureで追加公開するのはこの区間集約名と件数だけ。個別`occurrences[].speaker`と`graph.occurrences[].speaker`、本文・抜粋・画像本体はFull限定のまま、StructureKeyでの本文/話者検索も許可しない。集計名を作品タグへ自動登録しない。
 
 ## 経路図と出現ごとの区切り
 
@@ -237,7 +253,7 @@ TXT出力は表示ページの200件制限ではなく、選択したゲーム�
 
 - `manifest.json`: format=`GameLauncherWithGit.scenario`、schemaVersion=3、`contentMode`（`structure`または`full`）、出力時刻、ゲーム、条件snapshot、区間一覧`ranges`、hash方式、画像metadataを持つ。位置はUTF-16 code unitで表す。`identifierScope=archive`はarchive文書内のmanifest参照を表し、共通`material.json`のraw由来IDを別値へ変換する指定ではない。`selection.rangeId`は選択区間のID（全域ならnull）、`selection.labelId`は分類ID（分類指定なしならnull）。ID/referenceはJSON文字列、受信連番・UTF-16位置などの量はJSON numberとする。区間定義の複製は持たず、選択しても一致本文がなければ`ranges`は空になり得る。Structureでは`textSearch`/`speakerSearch`のpropertyを省略し、`images`へpathを含めない。Fullでは`textFile`/`textIndexUnit`と画像pathを記録する。
 - `texts.jsonl`（Fullのみ）: 原文イベントごと1行。取得回・受信連番・原文内開始位置順で、選択された現在のsegmentの開始・長さ・本文・有効分類/ラベル/話者と、画像ID・撮影時刻を記載する。除外部分を含む`rawText`は出力しない。同文別イベントを統合しない。
-- `material.json`: 同じsnapshot/selectionの共通`ScenarioMaterialProjection`。manifestの`materialFile`から参照し、`materialVersion`と`matchingComplete`もmanifestへ記載する。Structureでは`ScenarioStructureProjection`を直接JSON化し、本文・話者・preview・path等のpropertyを持たない。Fullでは`ScenarioFullProjection`を出す。共通本文を一度で読む利用側はこちらを読み、従来の出現ごとの本文が必要ならFullの`texts.jsonl`を使う。schema 2で定義した本文・区間・元境界・spans・画像構造を置換しない加算fileで、旧ZIPは変換・上書きしない。
+- `material.json`: 同じsnapshot/selectionの共通`ScenarioMaterialProjection`。manifestの`materialFile`から参照し、`materialVersion`と`matchingComplete`もmanifestへ記載する。Structureでは`ScenarioStructureProjection`を直接JSON化し、本文・個別話者・preview・path等のpropertyを持たない。両modeの`ranges[]`には[区間話者集計](#区間話者集計)を含む。Fullでは`ScenarioFullProjection`を出す。共通本文を一度で読む利用側はこちらを読み、従来の出現ごとの本文が必要ならFullの`texts.jsonl`を使う。schema 2で定義した本文・区間・元境界・spans・画像構造を置換しない加算fileで、旧ZIPは変換・上書きしない。
 
 - `images/<id>.png`（Fullのみ）: 選択本文が参照する画像だけを重複なく収録する。IDは出力内識別子、pathは相対pathとし、端末上の絶対pathは載せない。Structureは画像ID・媒体形式・寸法・pixel hashをmetadataとして示すが、pathと画像entryを作らない。部分区間でも画像の関連範囲は`capture_event`、方法は`latest_received_body`と明示し、後続本文へ暗黙に持ち越さない。
 

@@ -117,11 +117,24 @@ public sealed partial class SqliteGameLibraryStore
         var includeAllRanges = selection.RangeId is null && selection.LabelId is null && !selection.UnclassifiedOnly
             && selection.Kind is null && string.IsNullOrWhiteSpace(selection.TextSearch) && string.IsNullOrWhiteSpace(selection.SpeakerSearch)
             && NormalizeCaptureTags(selection.IncludeTags).Length == 0 && NormalizeCaptureTags(selection.ExcludeTags).Length == 0;
-        var selectedRanges = ranges.Select(range => new ScenarioMaterialRange(range.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            range.Name, range.Start, range.End, range.Tags,
-            items.Select(item => (Item: item, Bounds: ClipCaptureInterval(item, range))).Where(x => x.Bounds.From < x.Bounds.To)
+        var selectedRanges = ranges.Select(range =>
+        {
+            var intersections = items.Select(item => (Item: item, Bounds: ClipCaptureInterval(item, range)))
+                .Where(x => x.Bounds.From < x.Bounds.To).ToArray();
+            // Selection can clip one stored item into several slices. Count that item once per range,
+            // not its clips, canonical content, callback event, or punctuation. Classification splits have distinct item IDs.
+            var dialogue = intersections.Select(x => x.Item).Where(x => x.Kind == CaptureKind.Dialogue)
+                .DistinctBy(x => x.Id).ToArray();
+            var speakers = dialogue.Where(x => !string.IsNullOrWhiteSpace(x.Speaker))
+                .GroupBy(x => x.Speaker!, StringComparer.Ordinal).OrderBy(x => x.Key, StringComparer.Ordinal)
+                .Select(group => new ScenarioRangeSpeakerCount(group.Key, group.Count())).ToArray();
+            return new ScenarioMaterialRange(range.Id.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                range.Name, range.Start, range.End, range.Tags,
+                intersections
                 .Select(x => new ScenarioOccurrenceRef(captureGameId, x.Item.SessionId, x.Item.Sequence,
-                    x.Bounds.From, x.Bounds.To - x.Bounds.From)).ToArray()))
+                    x.Bounds.From, x.Bounds.To - x.Bounds.From)).ToArray(),
+                speakers, dialogue.Count(x => string.IsNullOrWhiteSpace(x.Speaker)));
+        })
             .Where(range => includeAllRanges || range.Spans.Count > 0).ToArray();
         var classifications = items.Where(x => x.LabelId is not null).GroupBy(x => x.LabelId!.Value)
             .Select(group => new ScenarioMaterialClassification(group.Key.ToString(System.Globalization.CultureInfo.InvariantCulture),
