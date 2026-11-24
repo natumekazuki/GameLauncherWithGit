@@ -347,11 +347,11 @@
     </section></div>
 }
 
-@if (_message is not null || _error is not null)
+@if (FeedbackText is { } feedback)
 {
     <div class="capture-feedback @(_error is null ? "capture-message" : "capture-error")">
-        <span role="@(_error is null ? "status" : "alert")">@(_error ?? _message)</span>
-        <button class="secondary-button capture-icon-button" title="閉じる" aria-label="通知を閉じる" @onclick="() => { _message = null; _error = null; }"><CaptureIcon Name="Close" /></button>
+        <span role="@(_error is null ? "status" : "alert")">@feedback</span>
+        <button class="secondary-button capture-icon-button" title="閉じる" aria-label="通知を閉じる" @onclick="() => { _launchMessage = null; _message = null; _error = null; }"><CaptureIcon Name="Close" /></button>
     </div>
 }
 
@@ -611,7 +611,15 @@
     private bool HistoryCaptureActive => CaptureService.Snapshot is { Active: true, Profile: { } profile } && profile.Id == _profileId;
     private string ManagedRangeDisplayName => _ranges.FirstOrDefault(x => x.Id == _managedRangeId) is { } range ? RangeName(range) : "";
     private string HistoryDialogTitle => _historyDialog switch { HistoryDialog.Manage => "履歴管理", HistoryDialog.DeleteSelected => "原文を削除", HistoryDialog.Clear => "全履歴を消去", _ => "区間を削除" };
-    private string? _message, _error;
+    private string? _launchMessage, _message, _error;
+    private string? FeedbackText
+    {
+        get
+        {
+            var current = _error ?? _message;
+            return _launchMessage is null ? current : current is null ? _launchMessage : $"{_launchMessage} {current}";
+        }
+    }
     private bool _windowsOnly = true;
     private int _settingsTab, _windowCountdown;
     private CancellationTokenSource? _windowPick;
@@ -672,7 +680,7 @@
     private sealed class PartDraft { public string Text { get; set; } = ""; public long Label { get; set; } public string Speaker { get; set; } = ""; }
     protected override async Task OnInitializedAsync()
     {
-        _message = Navigation.HistoryEntryState;
+        _launchMessage = Navigation.HistoryEntryState;
         try
         {
             _snapshot = CaptureService.Snapshot; _profiles = await Store.GetCaptureProfilesAsync();
@@ -681,7 +689,7 @@
             await LoadProfileAsync();
             if (_snapshot.NeedsProcess) FindProcesses();
         }
-        catch (Exception ex) { _error = ex.Message; }
+        catch (Exception ex) { _error = $"シナリオ画面を読み込めませんでした：{ex.Message}"; }
         finally { _loading = false; }
         _ = PollAsync();
     }
