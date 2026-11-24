@@ -195,4 +195,4 @@ rg -n "<Identity .*Version=" src/GameLauncherWithGit/Platforms/Windows/Package.a
 4. リリース前確認
    - `dotnet build src/GameLauncherWithGit/GameLauncherWithGit.csproj -f net9.0-windows10.0.19041.0 -v minimal`
    - 必要に応じて `scripts/publish-windows-msix.ps1` で生成した MSIX のインストール確認を行う。
-   - MSIXを配布する場合は、パッケージ内のIdentity（名前・発行者・番号・architecture）、署名、Lunaの32/64bit部品とライセンスの同梱を確認する。対応ソース一式も添付し、インストール・実ゲーム等の未確認範囲をリリースノートに残す。
+   - MSIXを配布する場合は、パッケージ内のIdentity（名前・発行者・番号・architecture）、署名、Lunaの32/64bit部品とライセンスの同梱を確認する。対応ソース一式も添付する。インストール・実ゲーム等の検証結果と未確認範囲は、対象コミットと配布物を示して公開判断時の確認記録に残す。
