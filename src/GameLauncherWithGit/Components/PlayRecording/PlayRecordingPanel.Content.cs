@@ -50,7 +50,7 @@ public partial class PlayRecordingPanel
 
     private Task ShowLatestAsync() => ChangeTextViewAsync(true, null);
     private Task ShowHistoryAsync() => ChangeTextViewAsync(false, null);
-    private Task OpenRangeAsync(PlayRecordingTarget target, long rangeId) => ReadForDisplayedTargetAsync(target, () => OpenTextViewAsync(false, rangeId));
+    private Task OpenRangeAsync(DisplayTarget target, long rangeId) => ReadForDisplayedTargetAsync(target, () => OpenTextViewAsync(false, rangeId));
 
     private Task ChangeTextViewAsync(bool latest, long? rangeId) => RunForegroundAsync(() => OpenTextViewAsync(latest, rangeId));
 
@@ -131,7 +131,7 @@ public partial class PlayRecordingPanel
         _galleryCount = -1;
     }
 
-    private Task OpenGalleryAsync(PlayRecordingTarget target, CaptureTextItem item) => ReadForDisplayedTargetAsync(target, () => ShowGalleryAsync(item));
+    private Task OpenGalleryAsync(DisplayTarget target, CaptureTextItem item) => ReadForDisplayedTargetAsync(target, () => ShowGalleryAsync(item));
 
     private Task ShowGalleryAsync(CaptureTextItem item, string? imageId = null, bool showRawText = false)
     {

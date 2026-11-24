@@ -16,7 +16,7 @@ public partial class PlayRecordingPanel
             ApplyTextPage, () => _textError = true);
     }
 
-    private Task EditTextAsync(PlayRecordingTarget target, CaptureTextItem item) => ReadForDisplayedTargetAsync(target, async () =>
+    private Task EditTextAsync(DisplayTarget target, CaptureTextItem item) => ReadForDisplayedTargetAsync(target, async () =>
     {
         if (_state is not { } state) return;
         await ReadAsync("labels", gameId => Operations.GetLabelsAsync(gameId, state.Target), labels =>
@@ -31,10 +31,10 @@ public partial class PlayRecordingPanel
         ? item.Speaker is not null
         : _editSpeaker.Trim() != (item.Speaker ?? "") || item.Kind == CaptureKind.Narration);
 
-    private Task SaveTextAsync(PlayRecordingTarget target, CaptureTextItem? item) => RunMutationAsync(target, async () =>
+    private Task SaveTextAsync(DisplayTarget target, CaptureTextItem? item) => RunMutationAsync(target, async () =>
     {
         if (item is null || !ReferenceEquals(item, _editItem)) return;
-        await UseActionAsync(gameId => Operations.CorrectTextAsync(gameId, target, item,
+        await UseActionAsync(target, gameId => Operations.CorrectTextAsync(gameId, target.Recording, item,
             TextLabelChanged(item), _editLabel == 0 ? null : _editLabel,
             TextSpeakerChanged(item), EditingNarration ? null : Optional(_editSpeaker)));
         CloseTextEditor();
@@ -44,16 +44,16 @@ public partial class PlayRecordingPanel
 
     private static string? Optional(string input) => string.IsNullOrWhiteSpace(input) ? null : input.Trim();
 
-    private Task OpenOccurrenceAsync(PlayRecordingTarget target, ScenarioFlowOccurrence occurrence) =>
+    private Task OpenOccurrenceAsync(DisplayTarget target, ScenarioFlowOccurrence occurrence) =>
         ReadForDisplayedTargetAsync(target, () => OpenResolvedTextAsync(target, occurrence.Start));
 
-    private Task OpenCapturedEventAsync(PlayRecordingTarget target, PlayRecordingScreenshotResult shot) =>
+    private Task OpenCapturedEventAsync(DisplayTarget target, PlayRecordingScreenshotResult shot) =>
         ReadForDisplayedTargetAsync(target, () => OpenResolvedTextAsync(target, new(shot.Event.SessionId, shot.Event.Sequence, 0), shot.ImageId));
 
-    private async Task OpenResolvedTextAsync(PlayRecordingTarget target, CapturePosition position, string? imageId = null)
+    private async Task OpenResolvedTextAsync(DisplayTarget target, CapturePosition position, string? imageId = null)
     {
         CaptureTextItem? item = null;
-        await ReadAsync("text at position", gameId => Operations.GetItemAtAsync(gameId, target, position),
+        await ReadAsync("text at position", gameId => Operations.GetItemAtAsync(gameId, target.Recording, position),
             value => item = value, () => _actionError = "対応する本文を読み込めませんでした。記録を更新してください。");
         if (item is null) return;
         await OpenTextViewAsync(false, null);
@@ -99,15 +99,15 @@ public partial class PlayRecordingPanel
         }, () => _pathsError = true);
     }
 
-    private Task CutPathAsync(PlayRecordingTarget target, CaptureTextItem item) =>
-        CutPathAsync(target, gameId => Operations.CutPathAsync(gameId, target, item));
+    private Task CutPathAsync(DisplayTarget target, CaptureTextItem item) =>
+        CutPathAsync(target, gameId => Operations.CutPathAsync(gameId, target.Recording, item));
 
-    private Task CutOccurrenceAsync(PlayRecordingTarget target, ScenarioFlowOccurrence occurrence) =>
-        CutPathAsync(target, gameId => Operations.CutPathAsync(gameId, target, occurrence.Start));
+    private Task CutOccurrenceAsync(DisplayTarget target, ScenarioFlowOccurrence occurrence) =>
+        CutPathAsync(target, gameId => Operations.CutPathAsync(gameId, target.Recording, occurrence.Start));
 
-    private Task CutPathAsync(PlayRecordingTarget target, Func<string, Task> operation) => RunMutationAsync(target, async () =>
+    private Task CutPathAsync(DisplayTarget target, Func<string, Task> operation) => RunMutationAsync(target, async () =>
     {
-        await UseActionAsync(operation);
+        await UseActionAsync(target, operation);
         await RefreshStatusAsync(loadPane: true);
         if (_disposed || _unauthorized) return;
         _notice = "ここから別経路にしました。";
@@ -124,7 +124,7 @@ public partial class PlayRecordingPanel
         await LoadRangesAsync();
     }
 
-    private Task SaveSceneAsync(PlayRecordingTarget target, SceneDraft draft) => RunMutationAsync(target, async () =>
+    private Task SaveSceneAsync(DisplayTarget target, SceneDraft draft) => RunMutationAsync(target, async () =>
     {
         if (_sceneFlow is not { } flow || !ReferenceEquals(_sceneDraft, draft)) return;
         var edit = draft.Definition with
@@ -137,9 +137,9 @@ public partial class PlayRecordingPanel
         };
         var id = draft.Id;
         if (draft.Source is { } scene)
-            await UseActionAsync(gameId => Operations.UpdateSceneAsync(gameId, target, scene, edit));
+            await UseActionAsync(target, gameId => Operations.UpdateSceneAsync(gameId, target.Recording, scene, edit));
         else
-            id = await UseAsync(gameId => Operations.CreateSceneAsync(gameId, target, edit));
+            id = await UseAsync(target, gameId => Operations.CreateSceneAsync(gameId, target.Recording, edit));
         _sceneDraft = null;
         await RefreshStatusAsync(loadPane: true);
         if (!_disposed && !_unauthorized) _notice = "場面を保存しました。";
@@ -147,11 +147,11 @@ public partial class PlayRecordingPanel
             _sceneDraft = new(saved, saved.Definition, updated.Tags);
     });
 
-    private Task SetSceneConnectionAsync(PlayRecordingTarget target, long fromId, long toId, bool connected) => RunMutationAsync(target, async () =>
+    private Task SetSceneConnectionAsync(DisplayTarget target, long fromId, long toId, bool connected) => RunMutationAsync(target, async () =>
     {
         if (_sceneFlow is not { } flow || flow.Scenes.FirstOrDefault(x => x.Id == fromId) is not { } from
             || flow.Scenes.FirstOrDefault(x => x.Id == toId) is not { } to) return;
-        await UseActionAsync(gameId => Operations.SetSceneConnectionAsync(gameId, target, from, to, connected));
+        await UseActionAsync(target, gameId => Operations.SetSceneConnectionAsync(gameId, target.Recording, from, to, connected));
         _connectionTarget = 0;
         await RefreshStatusAsync(loadPane: true);
         if (!_disposed && !_unauthorized) _notice = connected ? "場面の接続を追加しました。" : "場面の接続を削除しました。";

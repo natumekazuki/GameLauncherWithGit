@@ -100,7 +100,7 @@
     private RenderFragment RecordingControls => @<div class="play-stack" aria-label="記録の制御">
         @if (_state is { } state)
         {
-            var target = state.Target;
+            var target = ForDisplay(state.Target);
             <div class="play-actions">
                 @if (state.CanStart)
                 {
@@ -141,7 +141,7 @@
     private RenderFragment RangeControls => @<div class="play-stack" aria-label="プレイ中の区間">
         @if (_state is { } state)
         {
-            var target = state.Target;
+            var target = ForDisplay(state.Target);
             @if (state.PendingRange is not null)
             {
                 <p class="play-status" role="status">区間の末尾を固定済み</p>
@@ -164,8 +164,9 @@
     private RenderFragment ScreenshotResult => @<div class="play-selection play-stack" aria-label="ゲームの撮影結果">
         @if (_screenshotResult is { } shot && _state is { } state)
         {
+            var target = ForDisplay(state.Target);
             <p class="play-status" role="status">ゲーム画像を保存しました。</p>
-            <div><button type="button" disabled="@ControlsDisabled" @onclick="() => OpenCapturedEventAsync(state.Target, shot)">撮影した本文・画像へ</button></div>
+            <div><button type="button" disabled="@ControlsDisabled" @onclick="() => OpenCapturedEventAsync(target, shot)">撮影した本文・画像へ</button></div>
         }
     </div>;
 
@@ -180,7 +181,7 @@
     </div>;
 
     private RenderFragment TextPane => @<section class="play-panel play-stack" aria-labelledby="play-text-title">
-        @{ var target = _state!.Target; }
+        @{ var target = ForDisplay(_state!.Target); }
         <div class="play-toolbar">
             <h2 id="play-text-title">本文</h2>
             <div class="play-actions">
@@ -280,7 +281,7 @@
     </section>;
 
     private RenderFragment TextEditor => @<div class="play-stack">
-        @{ var target = _state!.Target; var item = _editItem; }
+        @{ var target = ForDisplay(_state!.Target); var item = _editItem; }
         <label>分類
             <select @bind="_editLabel" disabled="@_busy">
                 <option value="0">未判定</option>
@@ -330,7 +331,7 @@
     </div>;
 
     private RenderFragment RangesPane => @<section class="play-panel play-stack" aria-labelledby="play-ranges-title">
-        @{ var target = _state!.Target; }
+        @{ var target = ForDisplay(_state!.Target); }
         <div class="play-toolbar"><h2 id="play-ranges-title">保存した区間</h2><button type="button" disabled="@_busy" @onclick="RefreshRangesAsync">区間を更新</button></div>
         @if (_rangesError)
         {
@@ -362,7 +363,7 @@
     </section>;
 
     private RenderFragment PathsPane => @<section class="play-panel play-stack" aria-labelledby="play-paths-title">
-        @{ var target = _state!.Target; }
+        @{ var target = ForDisplay(_state!.Target); }
         <div class="play-toolbar"><h2 id="play-paths-title">観測した経路</h2><button type="button" disabled="@_busy" @onclick="RefreshPathsAsync">経路を更新</button></div>
         @if (_pathsError) { <p class="play-error" role="alert">経路を読み込めませんでした。</p> }
         else if (_graph is null) { <p role="status">経路を読み込み中…</p> }
@@ -374,7 +375,7 @@
     </section>;
 
     private RenderFragment ScenesPane => @<section class="play-panel play-stack" aria-labelledby="play-scenes-title">
-        @{ var target = _state!.Target; }
+        @{ var target = ForDisplay(_state!.Target); }
         <div class="play-toolbar"><h2 id="play-scenes-title">手動場面</h2><button type="button" disabled="@_busy" @onclick="RefreshScenesAsync">場面を更新</button></div>
         @if (_scenesError)
         {

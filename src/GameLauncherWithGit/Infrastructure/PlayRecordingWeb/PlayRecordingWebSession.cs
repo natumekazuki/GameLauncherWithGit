@@ -18,11 +18,12 @@ public sealed class PlayRecordingWebSession
     /// The callback must await the operation and must not recursively enter this session.
     /// </summary>
     /// <exception cref="UnauthorizedAccessException">The circuit is disconnected or its grant is no longer current.</exception>
-    public Task<T> UseAsync<T>(Func<string, Task<T>> operation)
+    public Task<T> UseAsync<T>(Func<string, Task<T>> operation) => UseAsync(ConnectionVersion, operation);
+
+    internal Task<T> UseAsync<T>(long connectionVersion, Func<string, Task<T>> operation)
     {
         ArgumentNullException.ThrowIfNull(operation);
-        var version = ConnectionVersion;
-        return _access.UseAsync(_epoch, () => IsConnectionCurrent(version), operation);
+        return _access.UseAsync(_epoch, () => IsConnectionCurrent(connectionVersion), operation);
     }
 
     internal long ConnectionVersion => Interlocked.Read(ref _connectionVersion);

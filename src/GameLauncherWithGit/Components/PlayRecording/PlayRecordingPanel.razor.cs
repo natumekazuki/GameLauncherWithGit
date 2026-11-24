@@ -16,6 +16,8 @@ public partial class PlayRecordingPanel
     private readonly CancellationTokenSource _lifetime = new();
     private Task? _pollRead;
     private long _displayedConnectionVersion;
+    private readonly record struct DisplayTarget(PlayRecordingTarget Recording, long ConnectionVersion);
+    private DisplayTarget ForDisplay(PlayRecordingTarget target) => new(target, _displayedConnectionVersion);
     private bool _busy, _disposed, _statusError, _unauthorized;
     private string? _gameTitle, _notice, _actionError;
     private Pane _pane;
@@ -59,15 +61,17 @@ public partial class PlayRecordingPanel
     private Task RefreshAsync() => RunForegroundAsync(() => RefreshStatusAsync(loadPane: true), allowStale: true);
     private void ReloadPage() => Navigation.NavigateTo("/", forceLoad: true);
 
-    private Task ReadForDisplayedTargetAsync(PlayRecordingTarget target, Func<Task> operation) =>
-        RunForegroundAsync(() => target == _state?.Target ? operation() : Task.CompletedTask);
+    private bool IsDisplayedTargetCurrent(DisplayTarget target) => target.Recording == _state?.Target
+        && _displayedConnectionVersion == target.ConnectionVersion && WebSession.IsConnectionCurrent(target.ConnectionVersion);
 
-    private Task RunMutationAsync(PlayRecordingTarget target, Func<Task> operation, string? rejection = null)
+    private Task ReadForDisplayedTargetAsync(DisplayTarget target, Func<Task> operation) =>
+        RunForegroundAsync(() => IsDisplayedTargetCurrent(target) ? operation() : Task.CompletedTask);
+
+    private Task RunMutationAsync(DisplayTarget target, Func<Task> operation, string? rejection = null)
     {
-        var displayedConnection = _displayedConnectionVersion;
         return RunForegroundAsync(async () =>
         {
-            if (target != _state?.Target || !WebSession.IsConnectionCurrent(displayedConnection))
+            if (!IsDisplayedTargetCurrent(target))
             {
                 await RefreshStatusAsync(loadPane: true);
                 if (!_disposed && !_unauthorized)
