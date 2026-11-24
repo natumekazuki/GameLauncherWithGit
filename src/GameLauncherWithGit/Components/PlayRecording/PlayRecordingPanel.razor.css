@@ -1,0 +1,78 @@
+.play-recording {
+    --play-text: #e6edf7;
+    --play-muted: #adbed5;
+    --play-line: #41516b;
+    --play-surface: #142239;
+    --play-input: #101d30;
+    --play-accent: #a4c8ff;
+    min-height: 100dvh;
+    background: #0c1528;
+    color: var(--play-text);
+    color-scheme: dark;
+    font: 1rem/1.55 system-ui, sans-serif;
+    overflow-wrap: anywhere;
+}
+
+.play-recording, .play-recording ::deep * { box-sizing: border-box; }
+.play-shell { width: min(100%, 58rem); margin-inline: auto; padding: clamp(.75rem, 3vw, 2rem); }
+.play-shell ::deep h1, .play-shell ::deep h2, .play-shell ::deep h3, .play-shell ::deep p { margin: 0; }
+.play-shell ::deep h1 { font-size: clamp(1.375rem, 4vw, 1.85rem); line-height: 1.25; }
+.play-shell ::deep h2 { font-size: 1.125rem; }
+.play-shell ::deep h3 { font-size: 1rem; }
+.play-shell ::deep small, .play-muted { color: var(--play-muted); }
+.play-header, .play-workspace, .play-body, .play-stack { display: grid; gap: .75rem; min-width: 0; }
+.play-header { margin-block-end: 1rem; }
+.play-toolbar, .play-actions, .play-nav { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.play-toolbar { justify-content: space-between; }
+.play-panel, .play-shell ::deep .range-editor { padding: .875rem; background: var(--play-surface); border: 1px solid var(--play-line); border-radius: .65rem; min-width: 0; }
+.play-nav { margin-block: .75rem; }
+.play-nav button { flex: 1 1 auto; }
+.play-shell ::deep button, .play-shell ::deep input:not([type=checkbox]), .play-shell ::deep select {
+    min-height: 2.75rem;
+    min-width: 0;
+    max-width: 100%;
+    border: 1px solid var(--play-line);
+    border-radius: .45rem;
+    color: inherit;
+    font: inherit;
+    line-height: 1.25;
+}
+.play-shell ::deep button { padding: .5rem .75rem; background: #20334d; cursor: pointer; }
+.play-shell ::deep input:not([type=checkbox]), .play-shell ::deep select { width: 100%; padding: .5rem; background: var(--play-input); }
+.play-shell ::deep button:disabled { cursor: default; opacity: .55; }
+.play-shell ::deep button[aria-pressed=true] { background: #253c5a; border-color: var(--play-accent); }
+.play-shell ::deep button.primary { font-weight: 650; background: var(--play-accent); border-color: var(--play-accent); color: #0c1528; }
+.play-shell ::deep :focus-visible { outline: 2px solid var(--play-accent); outline-offset: 2px; }
+.play-shell ::deep label, .play-shell ::deep .range-editor { display: grid; gap: .4rem; min-width: 0; }
+.play-shell ::deep label:has(input[type=checkbox]) { display: flex; align-items: center; min-height: 2.75rem; }
+.play-shell ::deep .range-editor { gap: .75rem; }
+.play-shell ::deep .range-editor-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: .5rem; }
+.play-shell ::deep .capture-tag-input button { flex-shrink: 0; }
+.play-shell ::deep .capture-tag-input input { flex: 1; }
+.play-shell ::deep .capture-tag-list button { width: auto; }
+.play-status { color: var(--play-accent); font-weight: 600; }
+.play-error { color: #ffc4c0; }
+.play-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
+.play-list > li { min-width: 0; }
+.play-item { display: grid; gap: .5rem; padding: .75rem 0; border-bottom: 1px solid var(--play-line); }
+.play-item p { white-space: pre-wrap; }
+.play-selection { border-block: 1px solid var(--play-line); padding-block: .75rem; }
+.play-related { border: 0; min-width: 0; margin: 0; padding: 0; }
+.play-related legend { padding: 0; margin-block-end: .25rem; }
+.play-shell a { color: var(--play-accent); }
+.play-gallery { margin: 0; display: grid; gap: .5rem; }
+.play-gallery img { display: block; max-width: 100%; max-height: 65dvh; object-fit: contain; }
+.play-shell ::deep .scenario-flow { min-width: 0; }
+.play-shell ::deep .flow-toolbar { flex-wrap: wrap; }
+.play-controls { position: sticky; top: 0; z-index: 1; align-self: start; background: #0c1528; }
+.play-controls > .play-panel { max-height: 47dvh; overflow: auto; }
+
+@media (max-width: 47.99rem) {
+    .play-body ::deep :is(input, select, button, a) { scroll-margin-block-start: 48dvh; }
+}
+
+@media (min-width: 48rem) {
+    .play-workspace { grid-template-columns: minmax(15.5rem, 19rem) minmax(0, 1fr); align-items: start; }
+    .play-controls { position: sticky; top: 1rem; }
+    .play-controls > .play-panel { max-height: 75dvh; }
+}

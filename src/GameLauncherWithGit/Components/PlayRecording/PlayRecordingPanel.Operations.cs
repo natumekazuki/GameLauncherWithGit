@@ -1,0 +1,220 @@
+using GameLauncherWithGit.Application.Models;
+using GameLauncherWithGit.Application.Services;
+using GameLauncherWithGit.Infrastructure.PlayRecordingWeb;
+using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.Logging;
+
+namespace GameLauncherWithGit.Components.PlayRecording;
+
+public partial class PlayRecordingPanel
+{
+    [Inject] private PlayRecordingWebSession WebSession { get; set; } = default!;
+    [Inject] private PlayRecordingOperations Operations { get; set; } = default!;
+
+    private PlayRecordingState? _state;
+    private RangeDraft? _rangeDraft;
+    private bool _confirmFinish;
+    private bool _focusNextSharedRange;
+    private bool HasUsableTarget => _state is { BlockedByOtherGame: false };
+
+    private string RecordingStatus => _state switch
+    {
+        { BlockedByOtherGame: true } => "PCで別のゲームを記録中",
+        { Paused: true } => "一時停止中",
+        { Recording: true } => "記録中",
+        { CanStart: true } => "記録停止中",
+        _ => "記録を開始できません"
+    };
+
+    private sealed record RangeDraft(PlayRecordingTarget Target, PlayRecordingRangeSelection Selection, bool Shared = false, bool AutoFocus = false);
+
+    private Task<T> UseAsync<T>(Func<string, Task<T>> operation) => WebSession.UseAsync(operation);
+
+    private Task UseActionAsync(Func<string, Task> operation) => UseAsync(async gameId =>
+    {
+        await operation(gameId);
+        return true;
+    });
+
+    private async Task ReadAsync<T>(string section, Func<string, Task<T>> read, Action<T> apply, Action failed)
+    {
+        if (_disposed || _unauthorized) return;
+        try
+        {
+            var value = await UseAsync(read);
+            if (!_disposed && !_unauthorized) apply(value);
+        }
+        catch (UnauthorizedAccessException) { ExpireAccess(); }
+        catch (Exception ex)
+        {
+            if (_disposed || _unauthorized) return;
+            Logger.LogWarning("Play recording Web read failed for {Section} ({ExceptionType}).", section, ex.GetType().Name);
+            failed();
+        }
+    }
+
+    private async Task RefreshStatusAsync(bool loadPane)
+    {
+        PlayRecordingState state;
+        try { state = await UseAsync(Operations.GetStateAsync); }
+        catch (UnauthorizedAccessException) { ExpireAccess(); return; }
+        catch (Exception ex)
+        {
+            if (!_statusError && !_disposed)
+                Logger.LogWarning("Play recording Web status unavailable ({ExceptionType}).", ex.GetType().Name);
+            _statusError = true;
+            return;
+        }
+        if (_disposed || _unauthorized) return;
+
+        var targetChanged = _state?.Target != state.Target || _state?.BlockedByOtherGame != state.BlockedByOtherGame;
+        if (targetChanged) ClearTargetData();
+        _state = state;
+        _gameTitle = state.Title;
+        _statusError = false;
+        if (!HasUsableTarget) return;
+
+        if (state.PendingRange is { } pending)
+        {
+            if (_rangeDraft is null || _rangeDraft.Shared && !Equals(_rangeDraft.Selection, pending))
+            {
+                _rangeDraft = new(state.Target, pending, Shared: true, AutoFocus: _focusNextSharedRange);
+                await LoadRangesAsync();
+            }
+        }
+        else if (_rangeDraft?.Shared == true)
+        {
+            _rangeDraft = null;
+            if (_pane == Pane.Ranges) await LoadRangesAsync();
+        }
+
+        if (_disposed || _unauthorized) return;
+        if (loadPane || targetChanged) await LoadPaneAsync();
+        else if (_pane == Pane.Text && _latest && _textRangeId is null && _olderPages.Count == 0 && !_pickingRange && _editItem is null && _galleryItem is null)
+            await RefreshLatestTextAsync();
+    }
+
+    private void ClearTargetData()
+    {
+        _state = null;
+        _notice = _actionError = null;
+        _rangeDraft = null;
+        _confirmFinish = false;
+        _latest = true;
+        ResetTextPages();
+        _textRangeId = null;
+        _textItems = null;
+        _ranges = null;
+        _labels = [];
+        _rangeTags = _speakers = [];
+        _textError = _rangesError = _pathsError = _scenesError = false;
+        ClearRangePick();
+        CloseTextEditor();
+        CloseGallery();
+        _graph = null;
+        _sceneFlow = null;
+        _sceneDraft = null;
+        _connectionTarget = 0;
+        ClearScreenshotResult();
+    }
+
+    private async Task LoadRangesAsync()
+    {
+        if (_state is not { } state) return;
+        await ReadAsync("ranges", gameId => Operations.GetRangesAsync(gameId, state.Target), ranges =>
+            {
+                _ranges = ranges;
+                _rangeTags = ranges.SelectMany(x => x.Tags).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+                _rangesError = false;
+            }, () => _rangesError = true);
+        if (_rangeDraft is not null)
+            await ReadAsync("speakers", gameId => Operations.GetSpeakersAsync(gameId, state.Target), speakers => _speakers = speakers, () => _speakers = []);
+    }
+
+    private Task StartRangeAsync(PlayRecordingTarget target) => RunMutationAsync(target, async () =>
+    {
+        await UseActionAsync(gameId => Operations.StartRangeAsync(gameId, target));
+        await RefreshStatusAsync(loadPane: false);
+    });
+
+    private Task EndRangeAsync(PlayRecordingTarget target) => RunMutationAsync(target, async () =>
+    {
+        await UseAsync(gameId => Operations.EndRangeAsync(gameId, target));
+        _focusNextSharedRange = true;
+        try { await RefreshStatusAsync(loadPane: false); }
+        finally { _focusNextSharedRange = false; }
+    });
+
+    private Task CancelRangeAsync(PlayRecordingTarget target) => RunMutationAsync(target, async () =>
+    {
+        await UseActionAsync(gameId => Operations.CancelRangeAsync(gameId, target));
+        _rangeDraft = null;
+        await RefreshStatusAsync(loadPane: false);
+    });
+
+    private Task CloseRangeEditorAsync(RangeDraft draft)
+    {
+        if (ControlsDisabled || draft.Target != _state?.Target || !ReferenceEquals(draft, _rangeDraft)) return Task.CompletedTask;
+        if (draft.Shared) return CancelRangeAsync(draft.Target);
+        _rangeDraft = null;
+        return Task.CompletedTask;
+    }
+
+    private Task PrepareTextRangeAsync(PlayRecordingTarget target) => RunMutationAsync(target, async () =>
+    {
+        if (!TextRangeValid || _first is not { } first || _last is not { } last) return;
+        var selection = await UseAsync(gameId => Operations.SelectRangeAsync(gameId, target, first, last));
+        if (_disposed || _unauthorized) return;
+        _rangeDraft = new(target, selection, AutoFocus: true);
+        ClearRangePick();
+        await LoadRangesAsync();
+    });
+
+    private Task SaveRangeAsync(RangeDraft draft, (string Name, string[] Tags) data) => RunMutationAsync(draft.Target, async () =>
+    {
+        if (!ReferenceEquals(draft, _rangeDraft)) return;
+        await UseAsync(gameId => Operations.SaveRangeAsync(gameId, draft.Target, draft.Selection, data.Name, data.Tags));
+
+        if (_disposed || _unauthorized) return;
+        _rangeDraft = null;
+        _pane = Pane.Ranges;
+        await RefreshStatusAsync(loadPane: true);
+        if (!_disposed && !_unauthorized) _notice = "区間を保存しました。";
+    });
+
+    private Task StartRecordingAsync(PlayRecordingTarget target) =>
+        ChangeRecordingAsync(target, gameId => Operations.StartAsync(gameId, target));
+
+    private Task PauseRecordingAsync(PlayRecordingTarget target) =>
+        ChangeRecordingAsync(target, gameId => Operations.PauseAsync(gameId, target));
+
+    private Task ResumeRecordingAsync(PlayRecordingTarget target) =>
+        ChangeRecordingAsync(target, gameId => Operations.ResumeAsync(gameId, target));
+
+    private Task FinishRecordingAsync(PlayRecordingTarget target) =>
+        ChangeRecordingAsync(target, gameId => Operations.FinishAsync(gameId, target));
+
+    private Task ChangeRecordingAsync(PlayRecordingTarget target, Func<string, Task> operation) => RunMutationAsync(target, async () =>
+    {
+        await UseActionAsync(operation);
+        _confirmFinish = false;
+        await RefreshStatusAsync(loadPane: true);
+    });
+
+    private Task BreakLivePathAsync(PlayRecordingTarget target) => RunMutationAsync(target, async () =>
+    {
+        await UseActionAsync(gameId => Operations.BreakPathAsync(gameId, target));
+        await RefreshStatusAsync(loadPane: true);
+        if (_disposed || _unauthorized) return;
+        _notice = "次の本文から別経路にします。";
+    });
+
+    private Task TakeScreenshotAsync(PlayRecordingTarget target) => RunMutationAsync(target, async () =>
+    {
+        ClearScreenshotResult();
+        var shot = await UseAsync(gameId => Operations.TakeScreenshotAsync(gameId, target));
+        await RefreshStatusAsync(loadPane: true);
+        if (HasUsableTarget && _state?.Target.SessionId == shot.Event.SessionId)
+            _screenshotResult = shot;
+    }, "ゲーム画像を保存できませんでした。PCで対象のゲームを確認してください。");
+}
