@@ -1,7 +1,7 @@
 @using GameLauncherWithGit.Application.Services
 @implements IAsyncDisposable
 
-<main class="play-recording">
+<div class="play-recording">
     <div class="play-shell">
         <header class="play-header">
             <h1>プレイ記録</h1>
@@ -17,7 +17,7 @@
         @if (_unauthorized)
         {
             <section class="play-panel play-stack" aria-label="接続許可">
-                <p role="alert">この画面の接続許可は無効です。</p>
+                <p role="alert">この画面では接続を確認できません。</p>
                 <div><button type="button" @onclick="ReloadPage">ページを再読込</button></div>
             </section>
         }
@@ -94,7 +94,7 @@
             </div>
         }
     </div>
-</main>
+</div>
 
 @code {
     private RenderFragment RecordingControls => @<div class="play-stack" aria-label="記録の制御">
