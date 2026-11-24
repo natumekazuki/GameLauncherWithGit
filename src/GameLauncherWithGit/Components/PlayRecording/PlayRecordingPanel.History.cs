@@ -26,15 +26,19 @@ public partial class PlayRecordingPanel
         }, () => _actionError = "分類を読み込めませんでした。本文を更新してください。");
     });
 
-    private Task SaveTextAsync(PlayRecordingTarget target, CaptureTextItem? item, bool label) => RunMutationAsync(target, async () =>
+    private bool TextLabelChanged(CaptureTextItem? item) => item is not null && (item.LabelId ?? 0) != _editLabel;
+    private bool TextSpeakerChanged(CaptureTextItem? item) => item is not null && (EditingNarration
+        ? item.Speaker is not null
+        : _editSpeaker.Trim() != (item.Speaker ?? "") || item.Kind == CaptureKind.Narration);
+
+    private Task SaveTextAsync(PlayRecordingTarget target, CaptureTextItem? item) => RunMutationAsync(target, async () =>
     {
         if (item is null || !ReferenceEquals(item, _editItem)) return;
-        if (label)
-            await UseActionAsync(gameId => Operations.SetLabelAsync(gameId, target, item, _editLabel == 0 ? null : _editLabel));
-        else
-            await UseActionAsync(gameId => Operations.SetSpeakerAsync(gameId, target, item, Optional(_editSpeaker)));
+        await UseActionAsync(gameId => Operations.CorrectTextAsync(gameId, target, item,
+            TextLabelChanged(item), _editLabel == 0 ? null : _editLabel,
+            TextSpeakerChanged(item), EditingNarration ? null : Optional(_editSpeaker)));
         CloseTextEditor();
-        _notice = label ? "分類を保存しました。" : "話者を保存しました。";
+        _notice = "訂正を保存しました。";
         await LoadTextAsync();
     });
 

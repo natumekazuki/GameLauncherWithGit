@@ -38,10 +38,14 @@ public sealed partial class PlayRecordingOperations
         ForGameAsync(gameId, expected, () => Store.GetGameCaptureSpeakersAsync(expected.ProfileId));
 
     public Task SetSpeakerAsync(string gameId, PlayRecordingTarget expected, CaptureTextItem item, string? speaker) =>
-        ForGameAsync(gameId, expected, () => Store.CorrectCaptureItemAsync(expected.ProfileId, item, changeSpeaker: true, speaker));
+        CorrectTextAsync(gameId, expected, item, changeLabel: false, labelId: null, changeSpeaker: true, speaker);
 
     public Task SetLabelAsync(string gameId, PlayRecordingTarget expected, CaptureTextItem item, long? labelId) =>
-        ForGameAsync(gameId, expected, () => Store.CorrectCaptureItemAsync(expected.ProfileId, item, changeSpeaker: false, labelId: labelId));
+        CorrectTextAsync(gameId, expected, item, changeLabel: true, labelId, changeSpeaker: false, speaker: null);
+
+    public Task CorrectTextAsync(string gameId, PlayRecordingTarget expected, CaptureTextItem item,
+        bool changeLabel, long? labelId, bool changeSpeaker, string? speaker) =>
+        ForGameAsync(gameId, expected, () => Store.CorrectCaptureItemAsync(expected.ProfileId, item, changeLabel, labelId, changeSpeaker, speaker));
 
     public Task<PlayRecordingScreenshotResult> TakeScreenshotAsync(string gameId, PlayRecordingTarget expected) => ForGameAsync(gameId, expected, async () =>
     {

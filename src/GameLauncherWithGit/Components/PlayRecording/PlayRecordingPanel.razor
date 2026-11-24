@@ -43,7 +43,7 @@
         }
         else
         {
-            <div class="play-workspace" aria-busy="@Bool(_busy)" @key="_state?.Target">
+            <div class="play-workspace" aria-busy="@Bool(_busy)" @key="(_state?.Target, _displayedConnectionVersion)">
                 <section class="play-controls play-stack" aria-label="プレイ中の操作">
                     <div class="play-panel play-stack">
                         <h2>記録操作</h2>
@@ -293,11 +293,7 @@
         }
         <div class="play-actions">
             <button type="button" disabled="@_busy" @onclick="CloseTextEditor">取消</button>
-            <button type="button" class="primary" disabled="@(_busy || (item?.LabelId ?? 0) == _editLabel)" @onclick="() => SaveTextAsync(target, item, true)">分類を保存</button>
-            @if (!EditingNarration)
-            {
-                <button type="button" class="primary" disabled="@(_busy || (_editSpeaker.Trim() == (item?.Speaker ?? "")))" @onclick="() => SaveTextAsync(target, item, false)">話者を保存</button>
-            }
+            <button type="button" class="primary" disabled="@(_busy || !TextLabelChanged(item) && !TextSpeakerChanged(item))" @onclick="() => SaveTextAsync(target, item)">訂正を保存</button>
         </div>
     </div>;
 

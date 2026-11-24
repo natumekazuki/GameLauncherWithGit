@@ -8,7 +8,8 @@ public sealed class PlayRecordingWebSession
 {
     private readonly PlayRecordingWebAccess _access;
     private string? _epoch;
-    private volatile bool _connected;
+    // Odd versions have a live connection; every new connection gets its own version.
+    private long _connectionVersion;
 
     internal PlayRecordingWebSession(PlayRecordingWebAccess access) => _access = access;
 
@@ -20,8 +21,12 @@ public sealed class PlayRecordingWebSession
     public Task<T> UseAsync<T>(Func<string, Task<T>> operation)
     {
         ArgumentNullException.ThrowIfNull(operation);
-        return _access.UseAsync(_epoch, () => _connected, operation);
+        var version = ConnectionVersion;
+        return _access.UseAsync(_epoch, () => IsConnectionCurrent(version), operation);
     }
+
+    internal long ConnectionVersion => Interlocked.Read(ref _connectionVersion);
+    internal bool IsConnectionCurrent(long version) => (version & 1) != 0 && ConnectionVersion == version;
 
     internal void Open(string? epoch)
     {
@@ -32,10 +37,20 @@ public sealed class PlayRecordingWebSession
     internal void Connect()
     {
         if (!_access.IsCurrent(_epoch)) throw new UnauthorizedAccessException();
-        _connected = true;
+        SetConnected(true);
     }
 
-    internal void Disconnect() => _connected = false;
+    internal void Disconnect() => SetConnected(false);
+
+    private void SetConnected(bool connected)
+    {
+        long previous;
+        do
+        {
+            previous = ConnectionVersion;
+            if (((previous & 1) != 0) == connected) return;
+        } while (Interlocked.CompareExchange(ref _connectionVersion, previous + 1, previous) != previous);
+    }
 }
 
 internal sealed class PlayRecordingWebCircuitHandler(

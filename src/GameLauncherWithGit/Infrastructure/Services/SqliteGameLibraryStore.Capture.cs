@@ -315,9 +315,10 @@ public sealed partial class SqliteGameLibraryStore
         return await reader.ReadAsync() ? ReadCaptureItem(reader) : null;
     }
 
-    public async Task CorrectCaptureItemAsync(long profileId, CaptureTextItem expected, bool changeSpeaker,
-        string? speaker = null, long? labelId = null)
+    public async Task CorrectCaptureItemAsync(long profileId, CaptureTextItem expected, bool changeLabel, long? labelId,
+        bool changeSpeaker, string? speaker)
     {
+        if (!changeLabel && !changeSpeaker) return;
         if (changeSpeaker)
         {
             speaker = string.IsNullOrWhiteSpace(speaker) ? null : speaker.Trim();
@@ -328,12 +329,16 @@ public sealed partial class SqliteGameLibraryStore
         await using var transaction = connection.BeginTransaction();
         if (await FindCaptureItemAsync(connection, transaction, profileId, expected.Id) != expected)
             throw new InvalidOperationException("本文が更新されました。読み込み直してから訂正してください。");
-        if (!changeSpeaker) ValidateCaptureLabel(await ReadCaptureLabelsAsync(connection, transaction, profileId), labelId);
-        var update = changeSpeaker
-            ? "UPDATE CaptureItems SET HasManualSpeaker=1,ManualSpeakerText=$value WHERE Id=$id"
-            : "UPDATE CaptureItems SET HasManualLabel=1,ManualLabelId=$value WHERE Id=$id";
-        await using var command = CaptureCommand(connection, transaction, update,
-            ("$value", changeSpeaker ? (object?)speaker : labelId), ("$id", expected.Id));
+        if (changeLabel) ValidateCaptureLabel(await ReadCaptureLabelsAsync(connection, transaction, profileId), labelId);
+        await using var command = CaptureCommand(connection, transaction, """
+            UPDATE CaptureItems SET
+                HasManualLabel=CASE WHEN $changeLabel THEN 1 ELSE HasManualLabel END,
+                ManualLabelId=CASE WHEN $changeLabel THEN $label ELSE ManualLabelId END,
+                HasManualSpeaker=CASE WHEN $changeSpeaker THEN 1 ELSE HasManualSpeaker END,
+                ManualSpeakerText=CASE WHEN $changeSpeaker THEN $speaker ELSE ManualSpeakerText END
+            WHERE Id=$id
+            """, ("$changeLabel", changeLabel), ("$label", labelId), ("$changeSpeaker", changeSpeaker),
+            ("$speaker", speaker), ("$id", expected.Id));
         await command.ExecuteNonQueryAsync();
         await transaction.CommitAsync();
     }

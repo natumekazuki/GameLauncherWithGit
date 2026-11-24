@@ -188,8 +188,17 @@ public sealed class ScenarioScreenshotService : IAsyncDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_activeCapture is { IsCompleted: false }) throw new InvalidOperationException("撮影を保存中です。完了後に再試行してください。");
             var capture = CaptureGameCoreAsync(expectedProfile, expectedSession, _shutdown.Token);
-            _activeCapture = capture;
+            _activeCapture = WaitForGameCaptureCompletionAsync(capture);
             return capture;
+        }
+    }
+
+    private static async Task WaitForGameCaptureCompletionAsync(Task<PlayRecordingScreenshotResult> capture)
+    {
+        try { await capture; }
+        catch (InvalidOperationException)
+        {
+            // The capture caller receives the failure. Shutdown only needs to wait for its completion.
         }
     }
 

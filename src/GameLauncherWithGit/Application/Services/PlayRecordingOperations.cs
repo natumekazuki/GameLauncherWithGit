@@ -162,10 +162,12 @@ public sealed partial class PlayRecordingOperations(ScenarioCaptureService captu
         return Task.FromResult(selection);
     }
 
-    private Task CancelRangeCore(PlayRecordingTarget expected)
+    private Task CancelRangeCore(PlayRecordingTarget expected, PlayRecordingRangeSelection? selection = null)
     {
         RequireFormal(expected);
-        if (capture.OperationState.RangeStart is null && Pending(expected.ProfileId) is null) throw Stale();
+        var pending = Pending(expected.ProfileId);
+        if (selection is not null && !ReferenceEquals(selection, pending)
+            || capture.OperationState.RangeStart is null && pending is null) throw Stale();
         _pendingRange = null;
         capture.CancelRange();
         return Task.CompletedTask;
@@ -227,6 +229,8 @@ public sealed partial class PlayRecordingOperations(ScenarioCaptureService captu
     internal Task StartDesktopRangeAsync(PlayRecordingTarget expected) => ForDesktopAsync(expected, false, () => StartRangeCore(expected));
     internal Task<PlayRecordingRangeSelection> EndDesktopRangeAsync(PlayRecordingTarget expected) => ForDesktopAsync(expected, false, () => EndRangeCore(expected));
     internal Task CancelDesktopRangeAsync(PlayRecordingTarget expected) => ForDesktopAsync(expected, false, () => CancelRangeCore(expected));
+    internal Task CancelDesktopRangeAsync(PlayRecordingTarget expected, PlayRecordingRangeSelection selection) =>
+        ForDesktopAsync(expected, false, () => CancelRangeCore(expected, selection));
     internal Task<PlayRecordingRangeSelection?> GetDesktopPendingRangeAsync(PlayRecordingTarget expected) =>
         ForDesktopAsync(expected, false, () => Task.FromResult(Pending(expected.ProfileId)));
     internal Task<PlayRecordingRangeSelection> SelectDesktopRangeAsync(PlayRecordingTarget expected, CaptureTextItem first, CaptureTextItem last)

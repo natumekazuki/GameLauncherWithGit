@@ -31,7 +31,8 @@ public interface IScenarioCaptureStore
     Task<IReadOnlyList<CaptureTextItem>> GetCaptureItemsAsync(long sessionId, int limit = 200, int offset = 0, long? labelId = null, bool unclassifiedOnly = false, bool latest = false);
     Task<CaptureTextItem?> FindCaptureItemAsync(long profileId, long itemId);
     Task<CaptureTextItem?> FindCaptureItemAtAsync(long profileId, CapturePosition position);
-    Task CorrectCaptureItemAsync(long profileId, CaptureTextItem expected, bool changeSpeaker, string? speaker = null, long? labelId = null);
+    Task CorrectCaptureItemAsync(long profileId, CaptureTextItem expected, bool changeLabel, long? labelId,
+        bool changeSpeaker, string? speaker);
     Task SetCaptureLabelsAsync(long sessionId, IReadOnlyCollection<long> itemIds, long? labelId);
     Task SetCaptureSpeakerAsync(long sessionId, long itemId, string? speaker);
     Task SplitCaptureEventAsync(long sessionId, long sequence, IReadOnlyList<int> boundaries, IReadOnlyList<CaptureManualPart>? parts = null);

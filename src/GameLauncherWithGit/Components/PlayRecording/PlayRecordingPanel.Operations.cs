@@ -39,10 +39,11 @@ public partial class PlayRecordingPanel
     private async Task ReadAsync<T>(string section, Func<string, Task<T>> read, Action<T> apply, Action failed)
     {
         if (_disposed || _unauthorized) return;
+        var connectionVersion = WebSession.ConnectionVersion;
         try
         {
             var value = await UseAsync(read);
-            if (!_disposed && !_unauthorized) apply(value);
+            if (!_disposed && !_unauthorized && WebSession.IsConnectionCurrent(connectionVersion)) apply(value);
         }
         catch (UnauthorizedAccessException) { ExpireAccess(); }
         catch (Exception ex)
@@ -55,6 +56,7 @@ public partial class PlayRecordingPanel
 
     private async Task RefreshStatusAsync(bool loadPane)
     {
+        var connectionVersion = WebSession.ConnectionVersion;
         PlayRecordingState state;
         try { state = await UseAsync(Operations.GetStateAsync); }
         catch (UnauthorizedAccessException) { ExpireAccess(); return; }
@@ -65,10 +67,12 @@ public partial class PlayRecordingPanel
             _statusError = true;
             return;
         }
-        if (_disposed || _unauthorized) return;
+        if (_disposed || _unauthorized || !WebSession.IsConnectionCurrent(connectionVersion)) return;
 
-        var targetChanged = _state?.Target != state.Target || _state?.BlockedByOtherGame != state.BlockedByOtherGame;
+        var targetChanged = _state?.Target != state.Target || _state?.BlockedByOtherGame != state.BlockedByOtherGame
+            || _displayedConnectionVersion != connectionVersion;
         if (targetChanged) ClearTargetData();
+        _displayedConnectionVersion = connectionVersion;
         _state = state;
         _gameTitle = state.Title;
         _statusError = false;

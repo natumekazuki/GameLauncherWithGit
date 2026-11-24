@@ -346,7 +346,7 @@
 @if (_rangeSelection is not null)
 {
     <div class="modal-backdrop"><section id="capture-editor" class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-range-title">
-        <header class="capture-dialog-header"><h2 id="capture-range-title">区間</h2><button class="secondary-button capture-icon-button" title="キャンセル" aria-label="キャンセル" @onclick="CloseEditors" disabled="@_busy"><CaptureIcon Name="Close" /></button></header>
+        <header class="capture-dialog-header"><h2 id="capture-range-title">区間</h2><button class="secondary-button capture-icon-button" title="キャンセル" aria-label="キャンセル" @onclick="() => CancelRangeDraftAsync(displayedDraftTarget!, displayedDraft!)" disabled="@_busy"><CaptureIcon Name="Close" /></button></header>
         <CaptureRangeFields @bind-Name="_rangeName" @bind-Tags="_rangeTags" AvailableTags="AvailableRangeTags" SuggestedTags="_gameSpeakers" Disabled="_busy" />
         <div class="capture-dialog-actions"><button class="launch-button capture-icon-button" title="保存" aria-label="保存" @onclick="() => SaveRangeAsync(displayedDraftTarget!, displayedDraft!)" disabled="@_busy"><CaptureIcon Name="Check" /></button></div>
     </section></div>
@@ -959,6 +959,17 @@
         if (first is null || last is null) return;
         OpenRangeDraft(await RecordingOperations.SelectDesktopRangeAsync(expected, first, last), expected);
     });
+    private Task CancelRangeDraftAsync(PlayRecordingTarget expected, PlayRecordingRangeSelection draft) => RunAsync(async () =>
+    {
+        if (!ReferenceEquals(draft, _rangeSelection) || expected != _rangeDraftTarget) return;
+        if (draft.Live)
+        {
+            await RecordingOperations.CancelDesktopRangeAsync(expected, draft);
+            _pendingLiveRange = null;
+            _snapshot = CaptureService.Snapshot;
+        }
+        CloseEditors();
+    });
     private Task SaveRangeAsync(PlayRecordingTarget expected, PlayRecordingRangeSelection draft) => RunAsync(async () =>
     {
         if (!ReferenceEquals(draft, _rangeSelection) || expected != _rangeDraftTarget || _profileId != draft.CaptureGameId)
@@ -1104,7 +1115,7 @@
     private void RemoveBoundary(int index) { _boundaries.RemoveAt(index); RebuildParts(); }
     private Task SavePartitionAsync() => RunAsync(async () => { if (_partition is null) return; await Store.SplitCaptureEventAsync(_partition.SessionId, _partition.Sequence, _boundaries.ToArray(), _parts.Select(x => new CaptureManualPart(x.Label == 0 ? null : x.Label, IsNarration(x.Label) ? null : string.IsNullOrWhiteSpace(x.Speaker) ? null : x.Speaker.Trim())).ToArray()); CloseEditors(); _selected.Clear(); await LoadItemsAsync(); }, "分割を保存しました。");
     private void CloseEditors() { CancelWindowPick(); _independentFlowConfirm = false; _exportOpen = false; _screenshotSettingsOpen = false; _screenshotItem = null; _eventScreenshots = []; _galleryImage = _galleryError = null; _pausedCandidates = null; _edit = null; _partition = null; _settingsOpen = false; _bulkOpen = false; _rangeSelection = null; _historyDialog = HistoryDialog.None; _deletionTargets = []; _restoreFocus = true; }
-    [JSInvokable] public async Task CloseEditorFromKeyboard() { if (_sceneEditorOpen && _sceneEditor is not null) { await _sceneEditor.RequestCloseAsync(); StateHasChanged(); } else if (!_busy) { CloseEditors(); StateHasChanged(); } }
+    [JSInvokable] public async Task CloseEditorFromKeyboard() { if (_sceneEditorOpen && _sceneEditor is not null) { await _sceneEditor.RequestCloseAsync(); StateHasChanged(); } else if (!_busy) { if (_rangeSelection is { } draft && _rangeDraftTarget is { } target) await CancelRangeDraftAsync(target, draft); else CloseEditors(); StateHasChanged(); } }
     private void OpenScreenshotSettings() { _screenshotSettingsOpen = true; _focusEditor = true; }
     private Task OpenScreenshotsAsync(CaptureTextItem item) => RunAsync(async () =>
     {

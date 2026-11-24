@@ -194,6 +194,37 @@ public sealed class ScenarioScreenshotServiceTests : IAsyncDisposable
 
     // @test-value v2
     // kind = "invariant"
+    // claim = "Webのゲーム窓描画が非対応なら撮影要求だけが失敗し、画像やデスクトップ描画への代替を残さず、共有撮影サービスを終了できる"
+    // oracle = { type = "contract", ref = "README.md: プレイ中の記録をスマホ・タブレットで操作する（Windows）; WithMate Session Graph play-recording-web / play-web-product-coordination" }
+    // fault = "窓描画拒否後にPC撮影へ切り替える、失敗画像を保存する、または終了時に処理済みの撮影失敗を再送出する"
+    // observable = "Web要求は拒否、専用窓描画のみ一回、関連画像なし、サービス終了は成功"
+    // observation_boundary = "public-boundary"
+    // scope = "game-only capture failure and shared screenshot service shutdown"
+    // lifecycle = "permanent"
+    // risk_tags = ["privacy"]
+    // @end-test-value
+    [Fact]
+    public async Task UnsupportedGameFrameDoesNotFallBackOrPreventShutdown()
+    {
+        await BeginPreviewAsync(); await _capture.ConfirmProcessAsync();
+        _host.Emit(Body, "撮影対象");
+        var key = _capture.FreezeScreenshotTarget().Target.Event;
+        var play = Play;
+        var state = await play.GetStateAsync("game");
+        var (entered, release) = _platform.HoldNextGameFrame();
+        var request = play.TakeScreenshotAsync("game", state.Target);
+        try { await entered.Task.WaitAsync(TimeSpan.FromSeconds(5)); }
+        finally { release.TrySetException(new InvalidOperationException("Game window rendering is unavailable.")); }
+        await Assert.ThrowsAsync<InvalidOperationException>(() => request);
+
+        Assert.Equal(_platform.Windows[0], Assert.Single(_platform.GameWindowsCaptured));
+        Assert.Empty(_platform.Captured);
+        Assert.Empty(await play.GetScreenshotsAsync("game", (await play.GetStateAsync("game")).Target, key));
+        await _screenshots.DisposeAsync();
+    }
+
+    // @test-value v2
+    // kind = "invariant"
     // claim = "PCによる同ゲームの取得元切替に割り込んだWeb保存は、旧区間を新しい取得回や旧履歴へ書かない"
     // oracle = { type = "contract", ref = "WithMate Session Graph play-recording-web / play-web-recording-operations-work" }
     // fault = "取得元の切替と区間保存が異なる排他境界を使い、すでに切替中の旧選択から保存できる"
@@ -231,10 +262,10 @@ public sealed class ScenarioScreenshotServiceTests : IAsyncDisposable
 
     // @test-value v2
     // kind = "invariant"
-    // claim = "本文ページ境界は新着でずれず、話者・分類の訂正は表示時と同じ本文だけに適用される"
+    // claim = "本文ページ境界は新着でずれず、話者・分類の同時訂正は表示時と同じ本文に両方反映されるか両方とも拒否される"
     // oracle = { type = "contract", ref = "WithMate Session Graph play-recording-web / play-web-product-coordination; README.md: シナリオ抽出" }
-    // fault = "新着によって前ページの末尾を再取得する、または直前の訂正を旧表示の操作で上書きする"
-    // observable = "本文ページの列、新旧表示による訂正の成否、再取得した話者・分類"
+    // fault = "新着でページがずれる、旧表示が訂正を上書きする、不正な分類で話者だけ保存する、または正常な同時訂正で一方が消える"
+    // observable = "本文ページの列、旧表示拒否、不正な分類の後の不変行、同時訂正を再読取した話者と分類"
     // observation_boundary = "public-boundary"
     // scope = "live keyset pagination and compare-before-write text corrections"
     // lifecycle = "permanent"
@@ -259,9 +290,13 @@ public sealed class ScenarioScreenshotServiceTests : IAsyncDisposable
         var current = (await play.GetItemsAsync("game", state.Target, limit: 2, before: first.NextBefore)).Items[0];
         Assert.Equal("真夜", current.Speaker);
         var dialogue = Assert.Single(await play.GetLabelsAsync("game", state.Target), x => x.Kind == CaptureKind.Dialogue);
-        await play.SetLabelAsync("game", state.Target, current, dialogue.Id);
+        await Assert.ThrowsAsync<ArgumentException>(() => play.CorrectTextAsync("game", state.Target, current,
+            changeLabel: true, labelId: long.MaxValue, changeSpeaker: true, speaker: "反映されない話者"));
+        Assert.Equal(current, await play.GetItemAtAsync("game", state.Target, current.StartPosition));
+        await play.CorrectTextAsync("game", state.Target, current,
+            changeLabel: true, labelId: dialogue.Id, changeSpeaker: true, speaker: "灯里");
         var corrected = (await play.GetItemsAsync("game", state.Target, limit: 2, before: first.NextBefore)).Items[0];
-        Assert.Equal(("真夜", CaptureKind.Dialogue), (corrected.Speaker, corrected.Kind));
+        Assert.Equal(("灯里", CaptureKind.Dialogue), (corrected.Speaker, corrected.Kind));
     }
 
     // @test-value v2

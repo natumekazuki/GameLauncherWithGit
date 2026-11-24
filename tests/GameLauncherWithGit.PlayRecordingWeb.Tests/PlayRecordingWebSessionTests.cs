@@ -69,6 +69,44 @@ public sealed class PlayRecordingWebSessionTests
         Assert.Equal("allowed-game", await circuit.UseAsync<string>(Task.FromResult));
     }
 
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "Reconnection does not carry over a queued operation that had not been admitted before the disconnect."
+    // oracle = { type = "contract", ref = "WithMate Session Graph play-recording-web / play-web-product-coordination (no replay after disconnect)" }
+    // fault = "The authorization gate checks only whether the circuit is currently connected and admits an operation queued by a previous connection."
+    // observable = "An already admitted callback completes; a queued callback is never entered; a fresh callback on the resumed connection can read the original game."
+    // observation_boundary = "component-behavior"
+    // scope = "recording-web-queued-operation-lifetime"
+    // lifecycle = "permanent"
+    // risk_tags = ["authorization"]
+    // @end-test-value
+    [Fact]
+    public async Task ReconnectingDoesNotKeepOperationsQueuedByThePreviousConnection()
+    {
+        var access = new PlayRecordingWebAccess(TimeProvider.System);
+        var circuit = await OpenCircuitAsync(access, "allowed-game");
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var inFlight = circuit.UseAsync(async gameId =>
+        {
+            entered.SetResult();
+            await release.Task;
+            return gameId;
+        });
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var queued = circuit.UseAsync<string>(_ => throw new InvalidOperationException("An old queued callback must not run."));
+        try
+        {
+            circuit.Disconnect();
+            circuit.Connect();
+        }
+        finally { release.TrySetResult(); }
+
+        Assert.Equal("allowed-game", await inFlight);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => queued);
+        Assert.Equal("allowed-game", await circuit.UseAsync<string>(Task.FromResult));
+    }
+
     private static async Task<PlayRecordingWebSession> OpenCircuitAsync(PlayRecordingWebAccess access, string gameId)
     {
         await access.IssueAsync(gameId, gameId);

@@ -15,6 +15,7 @@ public partial class PlayRecordingPanel
 
     private readonly CancellationTokenSource _lifetime = new();
     private Task? _pollRead;
+    private long _displayedConnectionVersion;
     private bool _busy, _disposed, _statusError, _unauthorized;
     private string? _gameTitle, _notice, _actionError;
     private Pane _pane;
@@ -40,12 +41,12 @@ public partial class PlayRecordingPanel
             {
                 await InvokeAsync(async () =>
                 {
-                    if (_busy || _unauthorized || _disposed) return;
-                    var before = (_state, _statusError, _textItems, _textError, _unauthorized);
+                    if (_busy || _unauthorized || _disposed || !WebSession.IsConnectionCurrent(WebSession.ConnectionVersion)) return;
+                    var before = (_state, _statusError, _textItems, _textError, _unauthorized, _displayedConnectionVersion);
                     _pollRead = RefreshStatusAsync(loadPane: _gameTitle is null || _statusError);
                     try { await _pollRead; }
                     finally { _pollRead = null; }
-                    if (!_disposed && before != (_state, _statusError, _textItems, _textError, _unauthorized)) StateHasChanged();
+                    if (!_disposed && before != (_state, _statusError, _textItems, _textError, _unauthorized, _displayedConnectionVersion)) StateHasChanged();
                 });
                 if (_unauthorized) break;
             }
@@ -61,22 +62,28 @@ public partial class PlayRecordingPanel
     private Task ReadForDisplayedTargetAsync(PlayRecordingTarget target, Func<Task> operation) =>
         RunForegroundAsync(() => target == _state?.Target ? operation() : Task.CompletedTask);
 
-    private Task RunMutationAsync(PlayRecordingTarget target, Func<Task> operation, string? rejection = null) => RunForegroundAsync(async () =>
+    private Task RunMutationAsync(PlayRecordingTarget target, Func<Task> operation, string? rejection = null)
     {
-        if (target != _state?.Target)
+        var displayedConnection = _displayedConnectionVersion;
+        return RunForegroundAsync(async () =>
         {
-            _actionError = "PCの記録状態が変わりました。現在の対象を確認してください。";
-            return;
-        }
-        try { await operation(); }
-        catch (InvalidOperationException ex)
-        {
-            Logger.LogWarning("Play recording Web operation rejected ({ExceptionType}).", ex.GetType().Name);
-            await RefreshStatusAsync(loadPane: false);
-            if (!_disposed && !_unauthorized)
-                _actionError = rejection ?? "操作を続けられませんでした。現在の記録状態を確認してください。";
-        }
-    });
+            if (target != _state?.Target || !WebSession.IsConnectionCurrent(displayedConnection))
+            {
+                await RefreshStatusAsync(loadPane: true);
+                if (!_disposed && !_unauthorized)
+                    _actionError = "接続またはPCの記録状態が変わりました。現在の対象を確認してください。";
+                return;
+            }
+            try { await operation(); }
+            catch (InvalidOperationException ex)
+            {
+                Logger.LogWarning("Play recording Web operation rejected ({ExceptionType}).", ex.GetType().Name);
+                await RefreshStatusAsync(loadPane: false);
+                if (!_disposed && !_unauthorized)
+                    _actionError = rejection ?? "操作を続けられませんでした。現在の記録状態を確認してください。";
+            }
+        });
+    }
 
     private async Task RunForegroundAsync(Func<Task> operation, bool allowStale = false)
     {
