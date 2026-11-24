@@ -8,6 +8,7 @@ namespace GameLauncherWithGit.Application.Services;
 
 public sealed class ScenarioCaptureService : IAsyncDisposable
 {
+    private const string FormalConnectionRequired = "正式記録中のゲームで操作してください。";
     private const int MaxEvents = 1000;
     private const int MaxBytes = 2 * 1024 * 1024;
     private const int MaxCandidateSamples = 5;
@@ -64,13 +65,12 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
     internal void ChangeOperationVersion() { lock (_gate) _operationVersion++; }
 
     internal (long Version, long? ProfileId, long? SessionId, bool Active, bool Formal, bool Paused,
-        CapturePosition? LastBody, CapturePosition? RangeStart) OperationState
+        CapturePosition? LastBody, CapturePosition? RangeStart, bool RangeCanStart) OperationState
     {
         get
         {
             lock (_gate) return (_operationVersion, _profile?.Id, _session, _active || _finishing || _connecting,
-                _active && !_finishing && _connected && !_preview && _session is not null,
-                _paused, _lastBodyPosition, _rangeStart);
+                HasFormalConnection, _paused, _lastBodyPosition, _rangeStart, RangeStartRejection() is null);
         }
     }
 
@@ -116,7 +116,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
                 Connected = _connected,
                 Preview = _preview,
                 Connecting = _connecting,
-                Recording = _active && !_finishing && _connected && !_preview && !_paused && _session is not null,
+                Recording = HasFormalConnection && !_paused,
                 Paused = _paused,
                 Process = _process,
                 NeedsProcess = _needsProcess,
@@ -127,6 +127,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
                 Candidates = _candidates.Values.ToArray(),
                 PreviewItems = _preview ? BuildPreviewItems() : [],
                 RangeStart = _rangeStart,
+                RangeCanStart = RangeStartRejection() is null,
                 RangeCanEnd = _rangeStart is not null && _lastBodyPosition?.CompareTo(_rangeStart) > 0
             };
         }
@@ -397,13 +398,20 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
         }
     }
 
+    // Evaluate under _gate for both state readers and the operation's current-state check.
+    private string? RangeStartRejection()
+    {
+        if (!HasFormalConnection) return FormalConnectionRequired;
+        if (_paused || _lastBodyPosition is null) return "取得中のゲームで区間を開始してください。";
+        if (_rangeStart is not null) return "指定中の区間を終了または取り消してください。";
+        return null;
+    }
+
     public void StartRange()
     {
         lock (_gate)
         {
-            RequireFormalConnection();
-            if (_paused || _lastBodyPosition is null) throw new InvalidOperationException("取得中のゲームで区間を開始してください。");
-            if (_rangeStart is not null) throw new InvalidOperationException("指定中の区間を終了または取り消してください。");
+            if (RangeStartRejection() is { } message) throw new InvalidOperationException(message);
             _rangeStart = _lastBodyPosition;
             _operationVersion++;
         }
@@ -473,10 +481,11 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
         StateChanged?.Invoke();
     }
 
+    private bool HasFormalConnection => _active && !_finishing && _connected && !_preview && _session is not null;
+
     private void RequireFormalConnection()
     {
-        if (!_active || _finishing || !_connected || _preview || _session is null)
-            throw new InvalidOperationException("正式記録中のゲームで操作してください。");
+        if (!HasFormalConnection) throw new InvalidOperationException(FormalConnectionRequired);
     }
 
     public async Task FlushPendingAsync()
