@@ -14,6 +14,7 @@ public sealed class LauncherService : ILauncherService
 	private readonly IGitService _gitService;
 	private readonly ILogger<LauncherService> _logger;
 	private readonly ScenarioCaptureService _capture;
+	private readonly Func<GameCardItem, LaunchResult> _startGameProcess;
 
 	public LauncherService(
 		IGameLibraryService gameLibraryService,
@@ -21,12 +22,24 @@ public sealed class LauncherService : ILauncherService
 		IGitService gitService,
 		ILogger<LauncherService> logger,
 		ScenarioCaptureService capture)
+		: this(gameLibraryService, saveLinkService, gitService, logger, capture, startGameProcess: null)
+	{
+	}
+
+	internal LauncherService(
+		IGameLibraryService gameLibraryService,
+		ISaveLinkService saveLinkService,
+		IGitService gitService,
+		ILogger<LauncherService> logger,
+		ScenarioCaptureService capture,
+		Func<GameCardItem, LaunchResult>? startGameProcess)
 	{
 		_gameLibraryService = gameLibraryService;
 		_saveLinkService = saveLinkService;
 		_gitService = gitService;
 		_logger = logger;
 		_capture = capture;
+		_startGameProcess = startGameProcess ?? StartGameProcess;
 	}
 
 	public async Task<LaunchResult> LaunchAsync(string gameId, CancellationToken cancellationToken = default)
@@ -36,54 +49,116 @@ public sealed class LauncherService : ILauncherService
 			return new LaunchResult(false, "ゲームIDが不正です。");
 		}
 
-		var game = await _gameLibraryService.FindByIdAsync(gameId, cancellationToken);
+		GameCardItem? game;
+		try
+		{
+			game = await _gameLibraryService.FindByIdAsync(gameId, cancellationToken);
+		}
+		catch (OperationCanceledException)
+		{
+			return new LaunchResult(false, "処理がキャンセルされました。");
+		}
+		catch (Exception ex)
+		{
+			_logger.LogError(ex, "Unable to load game for launch. gameId={GameId}", gameId);
+			return new LaunchResult(false, "ゲーム設定を読み込めませんでした。ログを確認してください。");
+		}
 		if (game is null)
 		{
 			return new LaunchResult(false, $"ゲームが見つかりません: {gameId}");
 		}
 
+		if (!File.Exists(game.ExecutablePath))
+		{
+			return new LaunchResult(false, $"実行ファイルが見つかりません: {game.ExecutablePath}");
+		}
+
+		LaunchResult launchResult;
 		try
 		{
 			await _gameLibraryService.SetStatusAsync(game.Id, GameCardStatus.Syncing, cancellationToken);
 
 			var syncResult = await SynchronizeBeforeLaunchAsync(game, cancellationToken);
+			cancellationToken.ThrowIfCancellationRequested();
 			if (!syncResult.IsSuccess)
 			{
-				return await SetErrorStatusAndReturnAsync(game.Id, syncResult, cancellationToken);
+				return await SetErrorStatusAndReturnAsync(game.Id, syncResult);
 			}
 
-			var launchResult = StartGameProcess(game);
+			launchResult = _startGameProcess(game);
 			if (!launchResult.IsSuccess)
 			{
-				return await SetErrorStatusAndReturnAsync(game.Id, launchResult, cancellationToken);
+				return await SetErrorStatusAndReturnAsync(game.Id, launchResult);
 			}
-
-			await _gameLibraryService.SetStatusAsync(game.Id, GameCardStatus.Synced, cancellationToken);
-			await _gameLibraryService.MarkLaunchedAsync(game.Id, cancellationToken);
-
-			var showCapture = await _capture.BeginGameAsync(game.Id);
-			return new LaunchResult(true, "起動前同期が完了し、ゲームを起動しました。", showCapture);
 		}
 		catch (OperationCanceledException)
 		{
 			_logger.LogWarning("Launch canceled. gameId={GameId}", gameId);
-			return new LaunchResult(false, "処理がキャンセルされました。");
+			return await SetErrorStatusAndReturnAsync(game.Id, new LaunchResult(false, "処理がキャンセルされました。"));
 		}
 		catch (Exception ex)
 		{
-			await _gameLibraryService.SetStatusAsync(game.Id, GameCardStatus.Error, cancellationToken);
 			_logger.LogError(ex, "Launch failed unexpectedly. gameId={GameId}", gameId);
-			return new LaunchResult(false, "起動前同期に失敗しました。ログを確認してください。");
+			return await SetErrorStatusAndReturnAsync(game.Id,
+				new LaunchResult(false, "ゲームを起動できませんでした。ログを確認してください。"));
 		}
+
+		return await FinishStartedLaunchAsync(game.Id, launchResult);
 	}
 
-	private async Task<LaunchResult> SetErrorStatusAndReturnAsync(
-		string gameId,
-		LaunchResult failureResult,
-		CancellationToken cancellationToken)
+	private async Task<LaunchResult> FinishStartedLaunchAsync(string gameId, LaunchResult launchResult)
 	{
-		await _gameLibraryService.SetStatusAsync(gameId, GameCardStatus.Error, cancellationToken);
+		var failedSteps = new List<string>();
+		if (!await TryRecordStatusAsync(gameId, GameCardStatus.Synced))
+		{
+			failedSteps.Add("同期状態の保存");
+		}
+
+		try
+		{
+			await _gameLibraryService.MarkLaunchedAsync(gameId);
+		}
+		catch (Exception ex)
+		{
+			_logger.LogError(ex, "Unable to record game launch. gameId={GameId}", gameId);
+			failedSteps.Add("起動履歴の保存");
+		}
+
+		var showCapture = false;
+		try
+		{
+			showCapture = await _capture.BeginGameForLaunchAsync(gameId);
+		}
+		catch (Exception ex)
+		{
+			_logger.LogError(ex, "Unable to begin capture for started game. gameId={GameId}", gameId);
+			failedSteps.Add("シナリオ記録の開始");
+		}
+
+		var message = failedSteps.Count == 0
+			? launchResult.Message
+			: $"{launchResult.Message}{string.Join("・", failedSteps)}に失敗しました。ログを確認してください。";
+		return new LaunchResult(true, message, showCapture);
+	}
+
+	private async Task<LaunchResult> SetErrorStatusAndReturnAsync(string gameId, LaunchResult failureResult)
+	{
+		await TryRecordStatusAsync(gameId, GameCardStatus.Error);
 		return failureResult;
+	}
+
+	private async Task<bool> TryRecordStatusAsync(string gameId, GameCardStatus status)
+	{
+		try
+		{
+			await _gameLibraryService.SetStatusAsync(gameId, status);
+			return true;
+		}
+		catch (Exception ex)
+		{
+			_logger.LogError(ex, "Unable to record launch status. gameId={GameId}, status={Status}", gameId, status);
+			return false;
+		}
 	}
 
 	private async Task<LaunchResult> SynchronizeBeforeLaunchAsync(GameCardItem game, CancellationToken cancellationToken)
@@ -248,7 +323,7 @@ public sealed class LauncherService : ILauncherService
 				UseShellExecute = true
 			};
 
-			var process = Process.Start(startInfo);
+			using var process = Process.Start(startInfo);
 			if (process is null)
 			{
 				return new LaunchResult(false, "ゲームプロセスの起動に失敗しました。");

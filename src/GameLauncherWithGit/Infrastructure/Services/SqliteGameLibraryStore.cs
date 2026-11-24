@@ -78,14 +78,27 @@ public sealed partial class SqliteGameLibraryStore : IGameLibraryStore, IReposit
 		await using var connection = await OpenConnectionAsync(cancellationToken);
 		await using var transaction = connection.BeginTransaction();
 		var now = DateTimeOffset.Now.ToString("O");
-		await UpsertGameInternalAsync(connection, transaction, game, now, cancellationToken);
+		await WriteGameInternalAsync(connection, transaction, game, now, cancellationToken, updateExisting: true);
 		await transaction.CommitAsync(cancellationToken);
 	}
 
-	public async Task UpsertWithSaveLinksAsync(
+	public Task InsertWithSaveLinksAsync(
 		GameCardItem game,
 		IReadOnlyList<GameSaveLinkItem> links,
-		CancellationToken cancellationToken = default)
+		CancellationToken cancellationToken = default) =>
+		WriteGameWithSaveLinksAsync(game, links, updateExisting: false, cancellationToken);
+
+	public Task UpsertWithSaveLinksAsync(
+		GameCardItem game,
+		IReadOnlyList<GameSaveLinkItem> links,
+		CancellationToken cancellationToken = default) =>
+		WriteGameWithSaveLinksAsync(game, links, updateExisting: true, cancellationToken);
+
+	private async Task WriteGameWithSaveLinksAsync(
+		GameCardItem game,
+		IReadOnlyList<GameSaveLinkItem> links,
+		bool updateExisting,
+		CancellationToken cancellationToken)
 	{
 		await EnsureInitializedAsync(cancellationToken);
 
@@ -99,7 +112,7 @@ public sealed partial class SqliteGameLibraryStore : IGameLibraryStore, IReposit
 		var now = DateTimeOffset.Now.ToString("O");
 		await using var connection = await OpenConnectionAsync(cancellationToken);
 		await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-		await UpsertGameInternalAsync(connection, transaction, normalizedGame, now, cancellationToken);
+		await WriteGameInternalAsync(connection, transaction, normalizedGame, now, cancellationToken, updateExisting);
 		await ReplaceSaveLinksByGameIdInternalAsync(
 			connection,
 			transaction,
@@ -503,12 +516,13 @@ public sealed partial class SqliteGameLibraryStore : IGameLibraryStore, IReposit
 		return connection;
 	}
 
-	private static async Task UpsertGameInternalAsync(
+	private static async Task WriteGameInternalAsync(
 		SqliteConnection connection,
 		SqliteTransaction? transaction,
 		GameCardItem game,
 		string timestamp,
-		CancellationToken cancellationToken)
+		CancellationToken cancellationToken,
+		bool updateExisting)
 	{
 		await using var command = connection.CreateCommand();
 		command.Transaction = transaction;
@@ -519,17 +533,22 @@ public sealed partial class SqliteGameLibraryStore : IGameLibraryStore, IReposit
 			VALUES (
 			    $id, $title, $executablePath, $relatedRepositoryPath, $relatedRepositoryPathsJson, $thumbnailPath, $lastPlayedAt, $status, $isPinned, $createdAt, $updatedAt
 			)
-			ON CONFLICT(Id) DO UPDATE SET
-			    Title = excluded.Title,
-			    ExecutablePath = excluded.ExecutablePath,
-			    RelatedRepositoryPath = excluded.RelatedRepositoryPath,
-			    RelatedRepositoryPathsJson = excluded.RelatedRepositoryPathsJson,
-			    ThumbnailPath = excluded.ThumbnailPath,
-			    LastPlayedAt = excluded.LastPlayedAt,
-			    Status = excluded.Status,
-			    IsPinned = excluded.IsPinned,
-			    UpdatedAt = excluded.UpdatedAt;
 			""";
+		if (updateExisting)
+		{
+			command.CommandText += "\n" + """
+				ON CONFLICT(Id) DO UPDATE SET
+				    Title = excluded.Title,
+				    ExecutablePath = excluded.ExecutablePath,
+				    RelatedRepositoryPath = excluded.RelatedRepositoryPath,
+				    RelatedRepositoryPathsJson = excluded.RelatedRepositoryPathsJson,
+				    ThumbnailPath = excluded.ThumbnailPath,
+				    LastPlayedAt = excluded.LastPlayedAt,
+				    Status = excluded.Status,
+				    IsPinned = excluded.IsPinned,
+				    UpdatedAt = excluded.UpdatedAt;
+				""";
+		}
 
 		var normalizedRepositoryPath = NormalizeSingleRepositoryPath(game.RelatedRepositoryPath);
 		command.Parameters.AddWithValue("$id", game.Id);

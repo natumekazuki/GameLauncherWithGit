@@ -16,6 +16,9 @@ public interface ISaveLinkService
 		string gameId,
 		IReadOnlyList<GameSaveLinkEditInput> links);
 
+	/// <summary>
+	/// Unlinks removed definitions without changing the stored list. Failure or cancellation attempts to restore earlier changes.
+	/// </summary>
 	Task<IReadOnlyList<GameSaveLinkItem>> UnlinkRemovedLinksAsync(
 		string gameId,
 		IReadOnlyList<GameSaveLinkItem> nextLinks,

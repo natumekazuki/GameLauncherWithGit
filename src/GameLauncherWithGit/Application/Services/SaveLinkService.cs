@@ -1,6 +1,7 @@
 using GameLauncherWithGit.Application.Abstractions;
 using GameLauncherWithGit.Application.Models;
 using GameLauncherWithGit.Infrastructure.Abstractions;
+using GameLauncherWithGit.Infrastructure.Models;
 using Microsoft.Extensions.Logging;
 
 namespace GameLauncherWithGit.Application.Services;
@@ -88,12 +89,28 @@ public sealed class SaveLinkService : ISaveLinkService
 		var unlinkedLinks = new List<GameSaveLinkItem>();
 		foreach (var removedLink in removedLinks)
 		{
-			cancellationToken.ThrowIfCancellationRequested();
+			JunctionRemoveResult removeResult;
+			try
+			{
+				cancellationToken.ThrowIfCancellationRequested();
+				removeResult = await _localSaveLinkOperator.RemoveJunctionWithRestoreAsync(
+					removedLink.LocalPath,
+					removedLink.TargetPath,
+					cancellationToken);
+			}
+			catch (Exception ex) when (unlinkedLinks.Count > 0)
+			{
+				var rollbackError = await RollbackUnlinkedLinksAsync(normalizedGameId, unlinkedLinks);
+				if (rollbackError is null)
+				{
+					throw;
+				}
 
-			var removeResult = await _localSaveLinkOperator.RemoveJunctionWithRestoreAsync(
-				removedLink.LocalPath,
-				removedLink.TargetPath,
-				cancellationToken);
+				throw new InvalidOperationException(
+					$"セーブリンク解除を中断し、先行解除分を復元できませんでした。gameId={normalizedGameId}, rollbackReason={rollbackError}",
+					ex);
+			}
+
 			if (removeResult.IsSuccess)
 			{
 				if (removeResult.DidChangeLocalPath)

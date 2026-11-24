@@ -14,6 +14,10 @@ public interface ILocalSaveLinkOperator
 		string targetPath,
 		CancellationToken cancellationToken = default);
 
+	/// <summary>
+	/// Restores a removed link when the local path is absent, or accepts an existing matching link.
+	/// An ordinary directory is left in place and reported as not restored.
+	/// </summary>
 	Task<JunctionEnsureResult> RestoreJunctionAsync(
 		string localPath,
 		string targetPath,

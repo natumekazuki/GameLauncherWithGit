@@ -266,14 +266,13 @@ public sealed class TrayService : ITrayService, IDisposable
 				return;
 			}
 
-			foreach (var repository in repositories)
-			{
-				await syncOrchestrator.QueueRepositorySyncAsync(repository);
-			}
-
+			var accepted = repositories.Count(syncOrchestrator.TryQueueRepositorySyncNow);
+			var paused = repositories.Length - accepted;
 			await _notificationService.NotifyAsync(
-				"同期を開始しました",
-				$"{repositories.Length}件のリポジトリを同期キューへ追加しました。");
+				accepted == 0 ? "同期停止中" : "同期を受け付けました",
+				paused == 0
+					? $"{accepted}件を同期キューへ追加しました。"
+					: $"{accepted}件を受付、{paused}件はエラー停止中です。エラーを解消してからゲーム一覧で同期を再開してください。");
 		}
 		catch (Exception ex)
 		{
