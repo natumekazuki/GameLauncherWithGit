@@ -2,6 +2,15 @@
     const openers = new Map();
     let layers = [];
 
+    window.gameLauncherDialogFocusSection = heading => {
+        const body = heading.closest('.dialog-body');
+        if (!body) return;
+
+        const section = heading.closest('section[id]') ?? heading;
+        body.scrollTop += section.getBoundingClientRect().top - body.getBoundingClientRect().top;
+        heading.focus({ preventScroll: true });
+    };
+
     function visibleLayers() {
         return Array.from(document.querySelectorAll('.editor-overlay'))
             .filter(layer => layer.querySelector('[role="dialog"]'))

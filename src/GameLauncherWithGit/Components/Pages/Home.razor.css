@@ -1,0 +1,191 @@
+.home-header,
+.home-navigation,
+.home-section-heading {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .5rem;
+}
+
+.home-header,
+.home-section-heading {
+    justify-content: space-between;
+}
+
+.home-header {
+    gap: .75rem;
+    padding-block: .35rem 1rem;
+    border-bottom: 1px solid #29374a;
+}
+
+.home-header h1 {
+    margin: 0;
+    font-size: clamp(1.4rem, 3vw, 1.8rem);
+    font-weight: 700;
+}
+
+.home-labeled-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: .35rem;
+    min-height: 2.5rem;
+    width: auto;
+    text-decoration: none;
+}
+
+.utility-icon-button,
+.action-icon-button,
+.pin-toggle-button {
+    width: 2.5rem;
+    min-width: 2.5rem;
+    min-height: 2.5rem;
+}
+
+.home-help-icon { font-weight: 700; font-size: 1.15rem; }
+
+.utility-bar {
+    justify-content: flex-start;
+    gap: .5rem;
+    margin: 0;
+    padding-block: .85rem;
+}
+
+.search-control { flex: 1 1 13rem; min-width: 0; }
+.search-input { width: 100%; min-height: 2.5rem; }
+.card-size-control { max-width: 100%; }
+.card-size-label { font-variant-numeric: tabular-nums; }
+.library-page { padding-block: .25rem 2rem; }
+.startup-check-panel, .startup-error-panel { margin-top: 1rem; }
+.startup-error-panel h2 { font-size: 1.35rem; }
+
+.game-grid {
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(280px * var(--game-card-scale))), 1fr));
+    align-items: start;
+    gap: 1rem;
+}
+
+.game-card {
+    min-width: 0;
+    min-height: 0;
+    gap: 0;
+    overflow: hidden;
+    padding: 0;
+    border-radius: .75rem;
+    background: #141e2d;
+}
+
+.game-thumbnail-panel {
+    width: 100%;
+    height: auto;
+    min-height: 0;
+    aspect-ratio: 16 / 9;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    background: #080e18;
+}
+
+.game-thumbnail-image { width: 100%; height: 100%; object-fit: contain; }
+.home-card-content { padding: .8rem .85rem .3rem; }
+
+.home-card-content h2 {
+    margin: 0 0 .45rem;
+    font-size: clamp(1rem, calc(1.1rem * var(--game-card-scale)), 1.4rem);
+    font-weight: 700;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+
+.home-card-states { display: flex; align-items: center; flex-wrap: wrap; gap: .3rem .55rem; }
+.home-git-state { color: #b7c8de; font-size: .8rem; }
+.home-media-error, .git-state-error .home-git-state { color: #ffb8bf; font-size: .8rem; }
+
+.game-card-actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    margin: 0;
+    padding: .45rem .85rem .75rem;
+}
+
+.game-card-actions > button { flex: 0 0 auto; }
+.game-card-actions .home-labeled-action { margin-inline-start: auto; }
+
+.home-card-details, .game-sync-history {
+    margin: 0;
+    padding: 0 .85rem;
+    border-top: 1px solid #29374a;
+    color: #c6d5e8;
+}
+
+.home-card-details summary, .game-sync-history summary {
+    padding-block: .5rem;
+    font-size: .86rem;
+    cursor: pointer;
+}
+
+.home-card-details dl {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: .15rem .55rem;
+    margin-block: .2rem .7rem;
+    font-size: .8rem;
+    overflow-wrap: anywhere;
+}
+
+.home-card-details dt { color: #aabbd0; }
+.home-card-details dd { margin: 0; }
+.game-sync-history[open] { padding-bottom: .65rem; }
+.home-history-error p { margin-bottom: .35rem; }
+
+.editor-modal .editor-field h3 {
+    margin: 0;
+    color: #c6d5e8;
+    font-weight: 600;
+    font-size: .95rem;
+}
+
+.editor-modal .dialog-footer,
+.dialog-footer,
+.single-repo-actions,
+.branch-switch-row,
+.branch-create-row,
+.settings-actions-row { flex-wrap: wrap; }
+
+.home-delete-action { margin-inline-start: auto; }
+.dialog-heading, .delete-confirm-title, .startup-error-detail { overflow-wrap: anywhere; }
+.delete-confirm-note p { margin-block: 0 .4rem; }
+.home-section-heading h3 { margin-bottom: 0; }
+.home-section-heading { margin-bottom: .65rem; }
+.settings-quick-links { flex: none; gap: .5rem; margin: 0; padding: 0 1rem .7rem; }
+.settings-quick-links > button { width: auto; }
+.settings-actions-row > button { width: auto; }
+.home-history-error button { width: auto; }
+
+.notification-dismiss {
+    display: inline-grid;
+    place-items: center;
+    flex: 0 0 auto;
+    min-width: 2rem;
+    min-height: 2rem;
+}
+
+:is(.home-header, .utility-bar, .library-page, .startup-error-panel, .editor-overlay, .notification-dock)
+    :is(a, button, summary, input, select, h1):focus-visible {
+    outline: 2px solid #9bcaff;
+    outline-offset: 2px;
+}
+
+.home-card-details summary:focus-visible, .game-sync-history summary:focus-visible {
+    outline-offset: -2px;
+}
+
+@media (max-width: 540px) {
+    .home-header { align-items: flex-start; }
+    .home-navigation { width: 100%; }
+    .search-control { flex-basis: 100%; }
+    .editor-inline-input { min-width: 0; }
+    .editor-inline-input input { min-width: 0; }
+    .home-delete-action { margin-inline-start: 0; }
+    .help-git-table th, .help-git-table td { padding: .3rem; overflow-wrap: anywhere; }
+}

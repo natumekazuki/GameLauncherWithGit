@@ -379,7 +379,7 @@ public sealed class TrayService : ITrayService, IDisposable
 
 		try
 		{
-			_ = AppendMenu(menu, MF_STRING, MenuCommandSyncNow, "今すぐ同期");
+			_ = AppendMenu(menu, MF_STRING, MenuCommandSyncNow, "すべて同期");
 			_ = AppendMenu(menu, MF_STRING, MenuCommandOpenSettings, "設定");
 			_ = AppendMenu(menu, MF_STRING, MenuCommandOpenLog, "ログを開く");
 			_ = AppendMenu(menu, MF_SEPARATOR, 0, string.Empty);
