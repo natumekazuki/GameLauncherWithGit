@@ -93,8 +93,12 @@ public sealed partial class SqliteGameLibraryStore
     {
         await EnsureInitializedAsync(default);
         await using var connection = await OpenConnectionAsync(default);
-        await using var transaction = connection.BeginTransaction();
-        if (await CaptureOwnerAsync(connection, transaction, key.SessionId) != captureGameId)
+        await using var transaction = connection.BeginTransaction(deferred: true);
+        await using var owner = CaptureCommand(connection, transaction, """
+            SELECT s.CaptureGameId FROM CaptureEvents e JOIN CaptureSessions s ON s.Id=e.SessionId
+            WHERE e.SessionId=$session AND e.ReceiveSequence=$sequence
+            """, ("$session", key.SessionId), ("$sequence", key.Sequence));
+        if (await owner.ExecuteScalarAsync() is not long gameId || gameId != captureGameId)
             throw new ArgumentException("このゲームの本文を選んでください。");
         return await ReadEventScreenshotsAsync(connection, transaction, key);
     }
@@ -206,17 +210,18 @@ public sealed partial class SqliteGameLibraryStore
         }
         command.CommandText = $"""
             WITH requested(SessionId,ReceiveSequence) AS (VALUES {string.Join(",", values)})
-            SELECT r.SessionId,r.ReceiveSequence,s.CaptureGameId,COUNT(l.ImageId)
+            SELECT r.SessionId,r.ReceiveSequence,s.CaptureGameId,e.ReceiveSequence,COUNT(l.ImageId)
             FROM requested r LEFT JOIN CaptureSessions s ON s.Id=r.SessionId
+            LEFT JOIN CaptureEvents e ON e.SessionId=r.SessionId AND e.ReceiveSequence=r.ReceiveSequence
             LEFT JOIN CaptureEventImages l ON l.SessionId=r.SessionId AND l.ReceiveSequence=r.ReceiveSequence
-            GROUP BY r.SessionId,r.ReceiveSequence,s.CaptureGameId
+            GROUP BY r.SessionId,r.ReceiveSequence,s.CaptureGameId,e.ReceiveSequence
             """;
         await using var reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync())
         {
-            if (reader.IsDBNull(2) || reader.GetInt64(2) != captureGameId)
+            if (reader.IsDBNull(2) || reader.GetInt64(2) != captureGameId || reader.IsDBNull(3))
                 throw new ArgumentException("このゲームの本文を選んでください。");
-            counts.Add(new(reader.GetInt64(0), reader.GetInt64(1)), reader.GetInt32(3));
+            counts.Add(new(reader.GetInt64(0), reader.GetInt64(1)), reader.GetInt32(4));
         }
         return counts;
     }

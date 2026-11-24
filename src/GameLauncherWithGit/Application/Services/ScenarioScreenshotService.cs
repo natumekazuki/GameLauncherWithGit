@@ -204,13 +204,15 @@ public sealed class ScenarioScreenshotService : IAsyncDisposable
 
     private async Task<PlayRecordingScreenshotResult> CaptureGameCoreAsync(long expectedProfile, long expectedSession, CancellationToken cancellationToken)
     {
+        string? failure = null;
         try { return await SaveCaptureAsync(expectedProfile, expectedSession, gameOnly: true, cancellationToken); }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Game screenshot capture/save failed. profile={Profile} session={Session}", expectedProfile, expectedSession);
-            throw new InvalidOperationException("ゲームの画像を保存できませんでした。ゲーム画面を前面にして再試行してください。");
+            failure = "ゲームの画像を保存できませんでした。ゲーム画面を前面にして再試行してください。";
+            throw new InvalidOperationException(failure);
         }
-        finally { Update(s => s with { Busy = false }); }
+        finally { Update(s => s with { Busy = false, Status = failure ?? s.Status }); }
     }
 
     private async Task CaptureCoreAsync(long? expectedProfile, long? expectedSession, CancellationToken cancellationToken)
@@ -269,7 +271,6 @@ public sealed class ScenarioScreenshotService : IAsyncDisposable
     {
         try
         {
-            await _store.GetEventScreenshotMetadataAsync(profileId, [key]);
             return (await _store.GetEventScreenshotsAsync(profileId, key))
                 .Select(x => new PlayRecordingScreenshot(x.ImageId, x.Width, x.Height, x.CapturedAt)).ToArray();
         }
