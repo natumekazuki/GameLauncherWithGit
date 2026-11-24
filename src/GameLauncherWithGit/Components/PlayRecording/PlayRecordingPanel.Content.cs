@@ -77,6 +77,7 @@ public partial class PlayRecordingPanel
         if (direction > 0 && _nextBefore is { } older) _olderPages.Add(older);
         else if (direction < 0 && _olderPages.Count > 0) _olderPages.RemoveAt(_olderPages.Count - 1);
         else return;
+        _latest = false;
         _textItems = null;
         CloseTextEditor();
         await LoadTextAsync();

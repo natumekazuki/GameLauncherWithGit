@@ -190,7 +190,8 @@ public partial class PlayRecordingPanel
     });
 
     private Task StartRecordingAsync(DisplayTarget target) =>
-        ChangeRecordingAsync(target, gameId => Operations.StartAsync(gameId, target.Recording));
+        ChangeRecordingAsync(target, gameId => Operations.StartAsync(gameId, target.Recording),
+            "記録を開始できませんでした。PCで対象ゲームと取得設定を確認してください。");
 
     private Task PauseRecordingAsync(DisplayTarget target) =>
         ChangeRecordingAsync(target, gameId => Operations.PauseAsync(gameId, target.Recording));
@@ -201,12 +202,12 @@ public partial class PlayRecordingPanel
     private Task FinishRecordingAsync(DisplayTarget target) =>
         ChangeRecordingAsync(target, gameId => Operations.FinishAsync(gameId, target.Recording));
 
-    private Task ChangeRecordingAsync(DisplayTarget target, Func<string, Task> operation) => RunMutationAsync(target, async () =>
+    private Task ChangeRecordingAsync(DisplayTarget target, Func<string, Task> operation, string? rejection = null) => RunMutationAsync(target, async () =>
     {
         await UseActionAsync(target, operation);
         _confirmFinish = false;
         await RefreshStatusAsync(loadPane: true);
-    });
+    }, rejection);
 
     private Task BreakLivePathAsync(DisplayTarget target) => RunMutationAsync(target, async () =>
     {
