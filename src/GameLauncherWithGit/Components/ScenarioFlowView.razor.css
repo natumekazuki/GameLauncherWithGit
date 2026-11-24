@@ -1,6 +1,6 @@
 .scenario-flow { color:#e6edf7; min-width:0; }
 .flow-toolbar { display:flex; align-items:end; flex-wrap:wrap; gap:.75rem 1.5rem; margin:.75rem 0; }
-.flow-toolbar label { display:grid; gap:.3rem; }
+.flow-toolbar label { display:grid; gap:.3rem; min-width:0; max-width:100%; }
 .flow-toolbar select { padding:.5rem; background:#101d30; color:inherit; border:1px solid #41516b; border-radius:5px; max-width:100%; }
 .flow-toolbar span,.flow-empty,.flow-connections { color:#adbed5; font-size:.85rem; }
 .flow-canvas { contain:inline-size; overflow:auto; max-height:52vh; min-height:10rem; border:1px solid #30415a; border-radius:8px; background:#0f1929; }
@@ -13,6 +13,8 @@
 .flow-reading { padding:.75rem 0; }
 .flow-visits,.flow-occurrence-actions { display:flex; flex-wrap:wrap; gap:.5rem; }
 .flow-visits button,.flow-occurrence-actions button { width:auto; padding:.5rem .75rem; }
+.flow-occurrence-actions button { display:inline-flex; align-items:center; gap:.4rem; max-width:100%; }
+.flow-occurrence-actions ::deep svg { flex:none; }
 .flow-occurrence { margin-top:1rem; }
 .flow-occurrence p { max-width:76ch; white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.8; }
 button:focus-visible,select:focus-visible,.flow-canvas:focus-visible { outline:2px solid #a4c8ff; outline-offset:3px; }

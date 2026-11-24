@@ -9,7 +9,7 @@
 <div class="scene-backdrop">
 <section id="capture-editor" class="scene-editor" role="dialog" aria-modal="true" aria-labelledby="scene-editor-title" @ref="_root">
     <div class="scene-main" inert="@(_confirmation is not null || _tagManager)">
-        <header class="scene-header"><div><h2 id="scene-editor-title">場面フロー</h2><span>@Title</span></div><button class="secondary-button scene-icon" title="本文へ戻る" aria-label="本文へ戻る" @onclick="RequestCloseAsync" disabled="@_busy"><CaptureIcon Name="Close" /></button></header>
+        <header class="scene-header"><div><h2 id="scene-editor-title">場面フロー</h2><span>@Title</span></div><button class="secondary-button scene-icon" title="本文へ戻る" aria-label="本文へ戻る" @onclick="RequestCloseAsync" disabled="@_busy"><CaptureIcon Name="Back" /></button></header>
         <div class="scene-toolbar">
             <label class="scene-jump">場面<select @key="_jumpVersion" aria-label="場面を選択" value="@_selectedId" @onchange="JumpAsync" disabled="@_busy"><option value="">@(_isNew ? "新しい場面" : "場面を選択")</option>@foreach (var scene in Scenes) { <option value="@scene.Id">@SceneName(scene.Definition)</option> }</select></label>
             <div class="scene-tools"><button class="secondary-button scene-icon" title="場面を追加" aria-label="場面を追加" @onclick="NewSceneAsync" disabled="@(_busy || _snapshot is null)"><CaptureIcon Name="Plus" /></button><button class="secondary-button" @onclick="OpenTags" disabled="@(_busy || _snapshot is null)"><CaptureIcon Name="Tag" />作品タグ</button><button class="secondary-button scene-icon" title="場面フローを更新" aria-label="場面フローを更新" @onclick="RefreshAsync" disabled="@_busy"><CaptureIcon Name="Refresh" /></button></div>
@@ -61,7 +61,7 @@
                                 <label class="scene-preview-label">参照区間<select aria-label="プレビューする本文区間" value="@_previewRangeId" @onchange="PreviewRangeChangedAsync">@foreach (var range in _ranges.Where(r => draft.RangeIds.Contains(r.Id))) { <option value="@range.Id">@RangeName(range)</option> }</select></label>
                                 <div class="scene-preview" aria-busy="@_previewBusy">@if (_previewBusy) { <span role="status">本文・画像を取得中…</span> } else { @if (_previewImage is not null) { <img src="@_previewImage" alt="参照区間の本文を受信した頃の画像" /> }<div>@foreach (var text in _previewTexts) { <p>@text</p> }@if (_previewTexts.Count == 0 && _previewError is null) { <p class="scene-muted">この区間には有効な本文がありません。</p> }</div> }</div>
                                 @if (_previewError is not null) { <p class="scene-error" role="alert">@_previewError</p> }
-                                <div class="scene-preview-actions"><button class="secondary-button" @onclick="RefreshPreviewAsync">再読込</button><button class="secondary-button" @onclick="OpenPreviewRangeAsync">区間の本文へ</button></div>
+                                <div class="scene-preview-actions"><button class="secondary-button" @onclick="RefreshPreviewAsync"><CaptureIcon Name="Refresh" />再読込</button><button class="secondary-button" @onclick="OpenPreviewRangeAsync"><CaptureIcon Name="Next" />区間の本文へ</button></div>
                             }
                         </section>
                         <section><div class="scene-section-heading"><h4>接続</h4><span>即時保存</span></div>
@@ -99,7 +99,7 @@
     }
     @if (_confirmation is { } confirmation)
     {
-        <section class="scene-subdialog scene-confirm" role="alertdialog" aria-modal="true" aria-labelledby="scene-confirm-title"><h3 id="scene-confirm-title">@confirmation</h3><p>@_confirmationDetail</p><div class="scene-tag-actions"><button class="secondary-button" @onclick="CancelConfirmation" disabled="@_busy">キャンセル</button><button class="launch-button" @onclick="ConfirmAsync" disabled="@_busy">続ける</button></div></section>
+        <section class="scene-subdialog scene-confirm" role="alertdialog" aria-modal="true" aria-labelledby="scene-confirm-title" aria-describedby="scene-confirm-impact"><h3 id="scene-confirm-title">@confirmation</h3><p id="scene-confirm-impact">@_confirmationDetail</p><div class="scene-tag-actions"><button class="secondary-button" @onclick="CancelConfirmation" disabled="@_busy">キャンセル</button><button class="launch-button" @onclick="ConfirmAsync" disabled="@_busy">@_confirmationActionLabel</button></div></section>
     }
     @if (_busy) { <div class="scene-busy" role="status"><span>処理中…</span></div> }
 </section></div>
@@ -116,7 +116,7 @@
     private long? _selectedId;
     private SceneDraft? _draft;
     private bool _busy, _dirty, _isNew, _tagManager, _disposed;
-    private string? _error, _notice, _confirmation, _confirmationDetail;
+    private string? _error, _notice, _confirmation, _confirmationDetail, _confirmationActionLabel;
     private Func<Task>? _confirmedAction;
     private long _connectionTarget, _managedTagId, _previewRangeId;
     private string _tagName = "";
@@ -177,7 +177,7 @@
     }
     private Task GuardDraftAsync(Func<Task> action)
     {
-        if (_dirty || _isNew) { _jumpVersion++; Confirm("未保存の変更を破棄しますか？", "保存済みの場面・接続・作品タグと元の本文・画像は変更しません。", async () => { _dirty = _isNew = false; await action(); }); return Task.CompletedTask; }
+        if (_dirty || _isNew) { _jumpVersion++; Confirm("未保存の変更を破棄しますか？", "保存済みの場面・接続・作品タグと元の本文・画像は変更しません。", "変更を破棄", async () => { _dirty = _isNew = false; await action(); }); return Task.CompletedTask; }
         return action();
     }
     private Task SelectAsync(long id, bool fromList = false) => id == 0 || id == _selectedId ? Task.CompletedTask : GuardDraftAsync(() => RunAsync(async () => { await LoadSceneAsync(id); _focusSceneList = fromList; }));
@@ -193,8 +193,8 @@
         else await GuardDraftAsync(() => Closed.InvokeAsync());
         if (!_disposed) StateHasChanged();
     }
-    private void Confirm(string title, string detail, Func<Task> action) { _confirmation = title; _confirmationDetail = detail; _confirmedAction = action; }
-    private void CancelConfirmation() { _confirmation = _confirmationDetail = null; _confirmedAction = null; }
+    private void Confirm(string title, string detail, string actionLabel, Func<Task> action) { _confirmation = title; _confirmationDetail = detail; _confirmationActionLabel = actionLabel; _confirmedAction = action; }
+    private void CancelConfirmation() { _confirmation = _confirmationDetail = _confirmationActionLabel = null; _confirmedAction = null; }
     private async Task ConfirmAsync() { var action = _confirmedAction; CancelConfirmation(); if (action is not null) await action(); }
     private void MarkDirty() => _dirty = true;
     private void PositionChanged() { MarkDirty(); _reveal = true; }
@@ -210,7 +210,12 @@
         _selectedId = id; _isNew = _dirty = false; _notice = "場面を保存しました。";
         await ReloadAsync(); await LoadSceneAsync(id); await Changed.InvokeAsync();
     });
-    private void ConfirmDeleteScene() => Confirm("場面を削除しますか？", "この場面と手編集の接続だけを削除します。元の本文・画像・区間・作品タグは残ります。", () => RunAsync(async () => { if (_selectedId is not { } id) return; await SceneStore.DeleteScenarioSceneAsync(CaptureGameId, id); await ReloadAsync(); await LoadSceneAsync(Scenes.FirstOrDefault()?.Id); await Changed.InvokeAsync(); }, "場面を削除しました。"));
+    private void ConfirmDeleteScene()
+    {
+        if (Scenes.FirstOrDefault(scene => scene.Id == _selectedId) is not { } selected) return;
+        Confirm($"「{SceneName(selected.Definition)}」を削除しますか？", "この場面と手編集の接続だけを削除します。元の本文・画像・区間・作品タグは残ります。", "場面を削除",
+            () => RunAsync(async () => { await SceneStore.DeleteScenarioSceneAsync(CaptureGameId, selected.Id); await ReloadAsync(); await LoadSceneAsync(Scenes.FirstOrDefault()?.Id); await Changed.InvokeAsync(); }, "場面を削除しました。"));
+    }
     private Task SetConnectionAsync(long target, bool connected) => RunAsync(async () => { if (_selectedId is not { } id || _dirty || _isNew) return; await SceneStore.SetScenarioSceneConnectionAsync(CaptureGameId, id, target, connected); _notice = "接続を保存しました。"; await ReloadAsync(); await Changed.InvokeAsync(); });
     private async Task ChangeDraftTagsAsync(string[] names)
     {
@@ -264,7 +269,12 @@
     private void ChangeManagedTag(ChangeEventArgs args) { _managedTagId = long.TryParse(args.Value?.ToString(), out var id) ? id : 0; _tagName = _snapshot?.Tags.FirstOrDefault(t => t.Id == _managedTagId)?.Name ?? ""; }
     private void SelectTagSpeaker(ChangeEventArgs args) => _tagName = args.Value?.ToString() ?? "";
     private Task SaveTagAsync() => RunAsync(async () => { if (_managedTagId == 0) _managedTagId = await SceneStore.GetOrCreateScenarioGameTagAsync(CaptureGameId, _tagName); else await SceneStore.RenameScenarioGameTagAsync(CaptureGameId, _managedTagId, _tagName); _notice = "作品タグを保存しました。"; await ReloadAsync(); await Changed.InvokeAsync(); });
-    private void ConfirmDeleteTag() => Confirm("作品タグを削除しますか？", "作品内の場面・区間とのタグ関連だけを外します。本文・画像・場面・区間は削除しません。", () => RunAsync(async () => { await SceneStore.DeleteScenarioGameTagAsync(CaptureGameId, _managedTagId); _managedTagId = 0; _tagName = ""; _notice = "作品タグを削除しました。"; await ReloadAsync(); await Changed.InvokeAsync(); }));
+    private void ConfirmDeleteTag()
+    {
+        if (_snapshot?.Tags.FirstOrDefault(tag => tag.Id == _managedTagId) is not { } selected) return;
+        Confirm($"作品タグ「{selected.Name}」を削除しますか？", "作品内の場面・区間とのタグ関連だけを外します。本文・画像・場面・区間は削除しません。", "タグを削除",
+            () => RunAsync(async () => { await SceneStore.DeleteScenarioGameTagAsync(CaptureGameId, selected.Id); _managedTagId = 0; _tagName = ""; _notice = "作品タグを削除しました。"; await ReloadAsync(); await Changed.InvokeAsync(); }));
+    }
     private sealed class SceneDraft(ScenarioSceneEdit edit)
     {
         public string Title { get; set; } = edit.Title;

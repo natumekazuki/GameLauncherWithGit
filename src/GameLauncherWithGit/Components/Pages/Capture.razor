@@ -47,14 +47,14 @@
                 <strong class="capture-game-title">@(_snapshot.Profile?.Title ?? "ゲームなし")</strong>
                 <div class="capture-recording-actions" aria-label="記録と経路">
                     <button class="secondary-button capture-icon-button" title="@(_snapshot.Paused ? "記録を再開（次の本文から別経路）" : "記録を一時停止")" aria-label="@(_snapshot.Paused ? "記録を再開" : "記録を一時停止")" aria-pressed="@(_snapshot.Paused ? "true" : "false")" @onclick="() => ToggleRecordingPauseAsync(displayedLive, !displayedPaused)" disabled="@(_busy || !_snapshot.Connected || _snapshot.Preview)"><CaptureIcon Name="@(_snapshot.Paused ? "Play" : "Pause")" /></button>
-                    <button class="secondary-button capture-icon-button" title="ここで経路を区切る（次の本文から別経路）" aria-label="ここで経路を区切る" @onclick="() => BreakLivePathAsync(displayedLive)" disabled="@(_busy || !_snapshot.Recording)"><CaptureIcon Name="PathBreak" /></button>
+                    <button class="secondary-button capture-icon-button" title="次の本文から別経路" aria-label="次の本文から別経路" @onclick="() => BreakLivePathAsync(displayedLive)" disabled="@(_busy || !_snapshot.Recording)"><CaptureIcon Name="PathBreak" /></button>
                 </div>
                 <div class="capture-play-range" aria-label="プレイ中の区間指定">
                     <span class="capture-range-caption">区間</span>
-                    <button class="launch-button capture-icon-button" title="区間を開始" aria-label="ここから開始" @onclick="() => StartLiveRangeAsync(displayedLive)" disabled="@(_busy || !_snapshot.Recording || _snapshot.RangeStart is not null || displayedPending is not null)"><CaptureIcon Name="Play" /></button>
+                    <button class="launch-button capture-icon-button" title="区間を開始" aria-label="区間を開始" @onclick="() => StartLiveRangeAsync(displayedLive)" disabled="@(_busy || !_snapshot.Recording || _snapshot.RangeStart is not null || displayedPending is not null)"><CaptureIcon Name="Start" /></button>
                     @if (displayedPending is null)
                     {
-                        <button class="launch-button capture-icon-button" title="区間を終了" aria-label="ここまでで終了" @onclick="() => EndLiveRangeAsync(displayedLive)" disabled="@(_busy || !_snapshot.RangeCanEnd)"><CaptureIcon Name="Stop" /></button>
+                        <button class="launch-button capture-icon-button" title="末尾を固定" aria-label="末尾を固定" @onclick="() => EndLiveRangeAsync(displayedLive)" disabled="@(_busy || !_snapshot.RangeCanEnd)"><CaptureIcon Name="End" /></button>
                     }
                     else
                     {
@@ -80,7 +80,7 @@
                         @foreach (var profile in _profiles) { <option value="@profile.Id">@profile.Title@(profile.GameId is null ? "（登録なし）" : "")</option> }
                     </select></label>
                 }
-                <label class="capture-filter" title="区間"><CaptureIcon Name="Range" /><select aria-label="区間" @bind="_rangeId" @bind:after="ChangeRangeAsync" disabled="@_busy">
+                <label class="capture-filter" title="区間"><CaptureIcon Name="Range" /><select @ref="_rangeFilter" aria-label="区間" @bind="_rangeId" @bind:after="ChangeRangeAsync" disabled="@_busy">
                     <option value="0">ゲーム全体</option>
                     @foreach (var range in _ranges) { <option value="@range.Id">@RangeName(range)</option> }
                 </select></label>
@@ -100,7 +100,7 @@
                     </form>
                     <button class="secondary-button capture-text-button" @onclick="OpenHistoryManagementAsync" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="History" />履歴管理</button>
                 </div>
-                <p class="capture-search-status" role="status">@(_busy ? "読込中…" : HistorySearchPending ? "検索ボタンで入力した名前・本文を適用します。" : "")</p>
+                <p class="capture-search-status" role="status">@(_busy ? "読込中…" : HistorySearchPending ? "検索条件は未適用" : "")</p>
             }
             <div class="capture-tools">
                 <div class="capture-tool-group capture-view-tools">
@@ -115,14 +115,14 @@
                     else
                     {
                         <button class="secondary-button capture-icon-button" title="前の200件" aria-label="前の200件" @onclick="PreviousAsync" disabled="@(_busy || _offset == 0)"><CaptureIcon Name="Previous" /></button>
-                        <span class="capture-page-count">@(_items.Count == 0 ? "0" : $"{_offset + 1}–{_offset + _items.Count}")</span>
+                        <span class="capture-page-count">@(_itemsError is not null ? "—" : _items.Count == 0 ? "0" : $"{_offset + 1}–{_offset + _items.Count}")</span>
                         <button class="secondary-button capture-icon-button" title="次の200件" aria-label="次の200件" @onclick="NextAsync" disabled="@(_busy || !_hasMore)"><CaptureIcon Name="Next" /></button>
                         <button class="secondary-button capture-icon-button" title="更新" aria-label="更新" @onclick="RefreshAsync" disabled="@_busy"><CaptureIcon Name="Refresh" /></button>
                     }
                 </div>
                 <div class="capture-tool-group" aria-label="本文で区間指定" inert="@_flowOpen">
-                    <button class="secondary-button capture-icon-button" title="本文から区間を指定" aria-label="本文で区間指定" aria-pressed="@(_pickingRange ? "true" : "false")" @onclick="ToggleTextRange" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Pick" /></button>
-                    <button class="secondary-button capture-icon-button" title="区間を保存" aria-label="区間を保存" @onclick="() => OpenTextRangeAsync(displayedProfile, displayedFirst, displayedLast)" disabled="@(_busy || !TextRangeValid)"><CaptureIcon Name="Save" /></button>
+                    <button class="secondary-button capture-icon-button" title="本文から区間を選ぶ" aria-label="本文から区間を選ぶ" aria-pressed="@(_pickingRange ? "true" : "false")" @onclick="ToggleTextRange" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Pick" /></button>
+                    <button class="secondary-button capture-icon-button" title="区間名を入力" aria-label="区間名を入力" @onclick="() => OpenTextRangeAsync(displayedProfile, displayedFirst, displayedLast)" disabled="@(_busy || !TextRangeValid)"><CaptureIcon Name="Save" /></button>
                     <button class="secondary-button capture-icon-button" title="本文の区間指定を解除" aria-label="本文の区間指定を解除" @onclick="ClearTextRangeAsync" disabled="@(_busy || !_pickingRange)"><CaptureIcon Name="Close" /></button>
                     <button class="secondary-button capture-icon-button" title="選択範囲を独立したフローチャートにする" aria-label="選択範囲を独立したフローチャートにする" @onclick="OpenIndependentFlow" disabled="@(_busy || !TextRangeValid)"><CaptureIcon Name="Flow" /></button>
                 </div>
@@ -139,7 +139,7 @@
                 <div class="capture-tool-group capture-utilities">
                     <button class="secondary-button capture-icon-button" title="観測した経路" aria-label="観測した経路を表示" aria-pressed="@(_flowOpen ? "true" : "false")" @onclick="ToggleFlowAsync" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Flow" /></button>
                     <button class="secondary-button capture-icon-button" title="場面フローを編集" aria-label="場面フローを編集" @onclick="OpenSceneEditor" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Edit" /></button>
-                    <button class="secondary-button capture-icon-button" title="スクリーンショット設定" aria-label="スクリーンショット設定" @onclick="OpenScreenshotSettings" disabled="@_busy"><CaptureIcon Name="Camera" /></button>
+                    <button class="secondary-button capture-text-button" aria-label="スクリーンショット設定" @onclick="OpenScreenshotSettings" disabled="@_busy"><CaptureIcon Name="Camera" />撮影設定</button>
                     <button class="secondary-button capture-icon-button" title="抽出設定" aria-label="抽出設定" @onclick="OpenSettings" disabled="@_busy"><CaptureIcon Name="Settings" /></button>
                     <button class="secondary-button capture-icon-button" title="本文TXT出力（条件の全件）" aria-label="条件の全本文をTXT出力" @onclick="() => OpenExportAsync(false)" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Export" /></button>
                     <button class="secondary-button capture-icon-button" title="ZIP出力（構造情報・完全版）" aria-label="条件の全件をZIP出力" @onclick="() => OpenExportAsync(true)" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Archive" /></button>
@@ -175,7 +175,14 @@
                 else { <p role="status">フローチャートを取得できませんでした。更新して再試行してください。</p> }
             }
             <div class="capture-feed" hidden="@_flowOpen" @ref="_feed" tabindex="0" aria-label="抽出本文">
-                @if (_items.Count == 0) { <p class="capture-empty">@EmptyMessage</p> }
+                @if (_itemsError is not null)
+                {
+                    <div class="capture-feed-error">
+                        <p role="alert">本文を読み込めませんでした：@_itemsError</p>
+                        <button class="secondary-button capture-text-button" @onclick="RefreshAsync" disabled="@_busy"><CaptureIcon Name="Refresh" />本文を再読込</button>
+                    </div>
+                }
+                else if (_items.Count == 0) { <p class="capture-empty">@EmptyMessage</p> }
                 @foreach (var item in _items)
                 {
                     <article class="capture-item @(IsRangeEdge(item) || _flowHighlighted == item.StartPosition ? "capture-range-edge" : "")" @key="item.Id">
@@ -198,7 +205,7 @@
                             }
                             else
                             {
-                                <button class="secondary-button capture-icon-button" title="@(_rangeId != 0 ? "修正はゲーム全体で" : "修正")" aria-label="修正" @onclick="() => Edit(item)" disabled="@(_busy || !CanEdit)"><CaptureIcon Name="Edit" /></button>
+                                <button class="secondary-button capture-icon-button" title="@(_rangeId != 0 ? "訂正はゲーム全体で" : "話者・分類を訂正")" aria-label="話者・分類を訂正" @onclick="() => Edit(item)" disabled="@(_busy || !CanEdit)"><CaptureIcon Name="Edit" /></button>
                                 <button class="secondary-button capture-icon-button" title="@(_rangeId != 0 ? "分割はゲーム全体で" : "原文・分割")" aria-label="原文・分割" @onclick="() => OpenPartitionAsync(item)" disabled="@(_busy || !CanEdit)"><CaptureIcon Name="Split" /></button>
                                 @if (!_live)
                                 {
@@ -248,8 +255,12 @@
             else if (_galleryImage is not null) { <img src="@_galleryImage" alt="この本文を受信した頃に撮影したゲーム画面" @onerror="ScreenshotDecodeFailed" /> }
         </div>
         <div class="capture-gallery-navigation">
+            @if (_galleryError is not null)
+            {
+                <button class="secondary-button capture-icon-button" title="画像を再読込" aria-label="画像を再読込" @onclick="ReloadScreenshotAsync" disabled="@_busy"><CaptureIcon Name="Refresh" /></button>
+            }
             <button class="secondary-button capture-icon-button" title="前の画像" aria-label="前の画像" @onclick="() => ChangeScreenshotAsync(-1)" disabled="@(_busy || _galleryIndex == 0)"><CaptureIcon Name="Previous" /></button>
-            <span>@(_eventScreenshots.Count == 0 ? "0枚" : $"{_galleryIndex + 1} / {_eventScreenshots.Count}枚")</span>
+            <span>@(_galleryCountUnknown ? "件数未確認" : _eventScreenshots.Count == 0 ? "0枚" : $"{_galleryIndex + 1} / {_eventScreenshots.Count}枚")</span>
             <button class="secondary-button capture-icon-button" title="次の画像" aria-label="次の画像" @onclick="() => ChangeScreenshotAsync(1)" disabled="@(_busy || _galleryIndex + 1 >= _eventScreenshots.Count)"><CaptureIcon Name="Next" /></button>
         </div>
     </section></div>
@@ -346,9 +357,9 @@
 @if (_rangeSelection is not null)
 {
     <div class="modal-backdrop"><section id="capture-editor" class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-range-title">
-        <header class="capture-dialog-header"><h2 id="capture-range-title">区間</h2><button class="secondary-button capture-icon-button" title="キャンセル" aria-label="キャンセル" @onclick="() => CancelRangeDraftAsync(displayedDraftTarget!, displayedDraft!)" disabled="@_busy"><CaptureIcon Name="Close" /></button></header>
+        <header class="capture-dialog-header"><h2 id="capture-range-title">区間</h2><button class="secondary-button capture-icon-button" title="区間を取り消す" aria-label="区間を取り消す" @onclick="() => CancelRangeDraftAsync(displayedDraftTarget!, displayedDraft!)" disabled="@_busy"><CaptureIcon Name="Close" /></button></header>
         <CaptureRangeFields @bind-Name="_rangeName" @bind-Tags="_rangeTags" AvailableTags="AvailableRangeTags" SuggestedTags="_gameSpeakers" Disabled="_busy" />
-        <div class="capture-dialog-actions"><button class="launch-button capture-icon-button" title="保存" aria-label="保存" @onclick="() => SaveRangeAsync(displayedDraftTarget!, displayedDraft!)" disabled="@_busy"><CaptureIcon Name="Check" /></button></div>
+        <div class="capture-dialog-actions"><button class="launch-button capture-text-button" @onclick="() => SaveRangeAsync(displayedDraftTarget!, displayedDraft!)" disabled="@(_busy || string.IsNullOrWhiteSpace(_rangeName))"><CaptureIcon Name="Save" />区間を保存</button></div>
     </section></div>
 }
 
@@ -488,11 +499,11 @@
 @if (_edit is not null)
 {
     <div class="modal-backdrop"><section id="capture-editor" class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-edit-title">
-        <header class="capture-dialog-header"><h2 id="capture-edit-title">修正</h2><button class="secondary-button capture-icon-button" title="キャンセル" aria-label="キャンセル" @onclick="CloseEditors" disabled="@_busy"><CaptureIcon Name="Close" /></button></header>
+        <header class="capture-dialog-header"><h2 id="capture-edit-title">話者・分類の訂正</h2><button class="secondary-button capture-icon-button" title="キャンセル" aria-label="キャンセル" @onclick="CloseEditors" disabled="@_busy"><CaptureIcon Name="Close" /></button></header>
         <p class="capture-raw">@_edit.Text</p>
         <label>分類<select @bind="_editLabel"><option value="0">未判定</option>@foreach (var label in ClassificationChoices(_editLabel)) { <option value="@label.Id">@ClassificationChoiceName(label)</option> }</select></label>
         <label>話者<input @bind="_editSpeaker" placeholder="未確定" disabled="@IsNarration(_editLabel)" /></label>
-        <div class="capture-dialog-actions"><button class="launch-button capture-icon-button" title="保存" aria-label="保存" @onclick="SaveEditAsync" disabled="@_busy"><CaptureIcon Name="Check" /></button></div>
+        <div class="capture-dialog-actions"><button class="launch-button capture-text-button" aria-label="訂正を保存" @onclick="SaveEditAsync" disabled="@_busy"><CaptureIcon Name="Save" />保存</button></div>
     </section></div>
 }
 @if (_partition is not null)
@@ -538,8 +549,7 @@
             <CaptureTagsEditor Label="このタグの区間を除外" @bind-Tags="_exportExcludeTags" AvailableTags="AvailableRangeTags" AllowCreate="false" Disabled="_busy" />
             <p class="capture-muted">各欄はいずれかのタグに一致する区間が対象。重なる部分は除外を優先します。</p>
         }
-        else { <p class="capture-muted">このゲームにはタグ付きの区間がありません。</p> }
-        <div class="capture-dialog-actions"><button class="launch-button capture-text-button" @onclick="SaveExportAsync" disabled="@_busy"><CaptureIcon Name="Export" />@(_busy ? "出力中…" : "出力する")</button></div>
+        <div class="capture-dialog-actions"><button class="launch-button capture-text-button" @onclick="SaveExportAsync" disabled="@_busy"><CaptureIcon Name="@(_exportArchive ? "Archive" : "Export")" />@(_busy ? "出力中…" : _exportArchive ? "ZIPを保存" : "TXTを保存")</button></div>
     </section></div>
 }
 
@@ -559,11 +569,13 @@
     private long _countsSavedCount;
     private ScreenshotCleanupResult? _screenshotCleanup;
     private int _galleryIndex;
+    private bool _galleryCountUnknown;
     private string? _galleryImage, _galleryError;
     private IReadOnlyList<CaptureProfile> _profiles = [];
     private IReadOnlyList<CaptureRange> _ranges = [];
     private IReadOnlyList<CaptureLabel> _labels = [];
     private IReadOnlyList<CaptureTextItem> _items = [];
+    private string? _itemsError;
     private IReadOnlyList<CaptureProcess> _processes = [];
     private CaptureProfile? _profile;
     private long _profileId, _rangeId, _bulkLabel;
@@ -603,7 +615,8 @@
     private IJSObjectReference? _module;
     private DotNetObjectReference<Capture>? _self;
     private CaptureTextItem? _edit, _partition;
-    private bool _focusEditor, _focusSettingsTab, _restoreFocus, _settingsOpen, _bulkOpen;
+    private bool _focusEditor, _focusSettingsTab, _restoreFocus, _focusRangeFilter, _settingsOpen, _bulkOpen;
+    private ElementReference _rangeFilter;
     private string _candidateKey = "";
     private bool? _scrollToEnd;
     private long _editLabel;
@@ -677,6 +690,11 @@
         if (_focusSettingsTab) { _focusSettingsTab = false; if (_settingsOpen) await _module.InvokeVoidAsync("focusSettingsTab"); }
         if (_focusHistoryContent) { _focusHistoryContent = false; await _module.InvokeVoidAsync("focusEditorContent"); }
         if (_restoreFocus) { _restoreFocus = false; await _module.InvokeVoidAsync("restoreFocus"); }
+        if (_focusRangeFilter && !_busy)
+        {
+            _focusRangeFilter = false;
+            if (!_flowOpen && !EditorOpen) await _rangeFilter.FocusAsync(preventScroll: true);
+        }
     }
     private async Task PollAsync()
     {
@@ -745,7 +763,21 @@
     }
     private async Task LoadItemsAsync()
     {
-        var items = _profileId == 0 ? [] : await QueryItemsAsync(LatestOrder ? 200 : 201, FollowingView ? 0 : _offset, LatestOrder);
+        IReadOnlyList<CaptureTextItem> items;
+        try
+        {
+            items = _profileId == 0 ? [] : await QueryItemsAsync(LatestOrder ? 200 : 201, FollowingView ? 0 : _offset, LatestOrder);
+            _itemsError = null;
+        }
+        catch (Exception ex)
+        {
+            _itemsError = ex.Message;
+            _items = [];
+            _hasMore = false;
+            _selected.Clear();
+            _screenshotCountsError = null;
+            return;
+        }
         _hasMore = items.Count > 200;
         _items = items.Take(200).ToArray();
         await LoadScreenshotCountsAsync();
@@ -985,6 +1017,7 @@
         await RecordingOperations.SaveDesktopRangeAsync(expected, draft, _rangeName, _rangeTags);
         _snapshot = CaptureService.Snapshot;
         CloseEditors(); ClearTextRange(); _offset = 0;
+        _focusRangeFilter = true;
         var saved = _snapshot;
         try { await RefreshRangeStateAsync(saved); }
         catch (InvalidOperationException) when (CaptureService.Snapshot.OperationVersion != saved.OperationVersion) { }
@@ -1104,7 +1137,17 @@
     }
     private bool IsNarration(long id) => _labels.FirstOrDefault(x => x.Id == id)?.Kind == CaptureKind.Narration;
     private void Edit(CaptureTextItem item) { _edit = item; _editLabel = item.LabelId ?? 0; _editSpeaker = item.Speaker ?? ""; _following = false; _focusEditor = true; }
-    private Task SaveEditAsync() => RunAsync(async () => { if (_edit is null) return; await Store.SetCaptureLabelsAsync(_edit.SessionId, [_edit.Id], _editLabel == 0 ? null : _editLabel); await Store.SetCaptureSpeakerAsync(_edit.SessionId, _edit.Id, IsNarration(_editLabel) ? null : _editSpeaker); CloseEditors(); await LoadItemsAsync(); }, "修正を保存しました。");
+    private Task SaveEditAsync() => RunAsync(async () =>
+    {
+        if (_edit is not { } item) return;
+        // A narration label hides the speaker; it does not erase the stored value.
+        var changeSpeaker = !IsNarration(_editLabel) && (item.Kind != CaptureKind.Narration || !string.IsNullOrWhiteSpace(_editSpeaker));
+        await Store.CorrectCaptureItemAsync(_profileId, item, changeLabel: true, _editLabel == 0 ? null : _editLabel,
+            changeSpeaker, _editSpeaker);
+        CloseEditors();
+        await LoadItemsAsync();
+        _message = "訂正を保存しました。";
+    });
     private Task OpenPartitionAsync(CaptureTextItem item) => RunAsync(async () =>
     {
         _partition = item; _following = false;
@@ -1128,14 +1171,25 @@
     private Task OpenScreenshotsAsync(CaptureTextItem item) => RunAsync(async () =>
     {
         _screenshotItem = item; _following = false; _focusEditor = true;
-        _galleryIndex = 0; _galleryImage = _galleryError = null; _eventScreenshots = [];
+        _galleryIndex = 0;
+        await LoadScreenshotGalleryAsync(item);
+    });
+    private Task ReloadScreenshotAsync() => RunAsync(() =>
+        _screenshotItem is { } item ? LoadScreenshotGalleryAsync(item) : Task.CompletedTask);
+    private async Task LoadScreenshotGalleryAsync(CaptureTextItem item)
+    {
+        _galleryImage = _galleryError = null;
+        _galleryCountUnknown = true;
+        _eventScreenshots = [];
         try
         {
             _eventScreenshots = await ScreenshotStore.GetEventScreenshotsAsync(_profileId, new(item.SessionId, item.Sequence));
+            _galleryCountUnknown = false;
+            _galleryIndex = Math.Clamp(_galleryIndex, 0, Math.Max(0, _eventScreenshots.Count - 1));
             await LoadScreenshotImageAsync();
         }
         catch (Exception ex) { _galleryError = $"画像を読み込めませんでした：{ex.Message}"; }
-    });
+    }
     private Task ChangeScreenshotAsync(int direction) => RunAsync(async () =>
     {
         _galleryIndex = Math.Clamp(_galleryIndex + direction, 0, Math.Max(0, _eventScreenshots.Count - 1));

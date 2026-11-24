@@ -38,7 +38,13 @@ public partial class PlayRecordingPanel
     {
         _nextBefore = page.NextBefore;
         var rows = page.Items.Reverse().ToArray();
-        if (_textItems is null || !_textItems.SequenceEqual(rows)) _textItems = rows;
+        if (_textItems is null || !_textItems.SequenceEqual(rows))
+        {
+            _textItems = rows;
+            var ids = rows.Select(row => row.Id).ToHashSet();
+            foreach (var id in _rowButtons.Keys.Where(id => !ids.Contains(id)).ToArray()) _rowButtons.Remove(id);
+            foreach (var id in ids) _rowButtons.TryAdd(id, new());
+        }
         _textError = false;
     }
 
@@ -50,7 +56,11 @@ public partial class PlayRecordingPanel
 
     private Task ShowLatestAsync() => ChangeTextViewAsync(true, null);
     private Task ShowHistoryAsync() => ChangeTextViewAsync(false, null);
-    private Task OpenRangeAsync(DisplayTarget target, long rangeId) => ReadForDisplayedTargetAsync(target, () => OpenTextViewAsync(false, rangeId));
+    private Task OpenRangeAsync(DisplayTarget target, long rangeId) => ReadForDisplayedTargetAsync(target, async () =>
+    {
+        await OpenTextViewAsync(false, rangeId);
+        FocusAfterRender(FocusTarget.Text);
+    });
 
     private Task ChangeTextViewAsync(bool latest, long? rangeId) => RunForegroundAsync(() => OpenTextViewAsync(latest, rangeId));
 
@@ -112,6 +122,13 @@ public partial class PlayRecordingPanel
         _editItem = item;
         _editLabel = item.LabelId ?? 0;
         _editSpeaker = item.Speaker ?? "";
+        FocusAfterRender(FocusTarget.Classification, item.Id);
+    }
+
+    private void CancelTextEdit()
+    {
+        if (_editItem is { } item) FocusAfterRender(FocusTarget.EditButton, item.Id);
+        CloseTextEditor();
     }
 
     private void CloseTextEditor()
@@ -134,6 +151,12 @@ public partial class PlayRecordingPanel
 
     private Task OpenGalleryAsync(DisplayTarget target, CaptureTextItem item) => ReadForDisplayedTargetAsync(target, () => ShowGalleryAsync(item));
 
+    private void ReturnFromGallery()
+    {
+        if (_galleryItem is { } item) FocusAfterRender(FocusTarget.GalleryButton, item.Id);
+        CloseGallery();
+    }
+
     private Task ShowGalleryAsync(CaptureTextItem item, string? imageId = null, bool showRawText = false)
     {
         CloseTextEditor();
@@ -141,6 +164,7 @@ public partial class PlayRecordingPanel
         _galleryItem = item;
         _galleryText = showRawText ? item.RawText : item.Text;
         _preferredGalleryImageId = imageId;
+        FocusAfterRender(FocusTarget.Gallery, item.Id);
         return LoadGalleryImageAsync();
     }
 
