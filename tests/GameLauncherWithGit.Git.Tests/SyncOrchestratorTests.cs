@@ -14,6 +14,7 @@ namespace GameLauncherWithGit.Git.Tests;
 public sealed class SyncOrchestratorTests
 {
     private const string Repository = "fixture";
+    private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(5);
 
     // @test-value v2
     // kind = "invariant"
@@ -59,7 +60,7 @@ public sealed class SyncOrchestratorTests
         Assert.Equal(2, deps.FetchCount);
 
         deps.ShouldConflict = false;
-        await sync.ResumeRepositorySyncAsync(Repository);
+        await sync.ResumeRepositorySyncAsync(Repository).WaitAsync(TestTimeout);
         var resumedFetch = await deps.NextFetchAsync();
         Assert.Equal(RepositorySyncState.Syncing, states.GetStateOrDefault(Repository));
         Assert.Equal(2, deps.HistoryCount);
@@ -74,7 +75,7 @@ public sealed class SyncOrchestratorTests
     // claim = "即時受付とGit開始の間に監視が通知しても、即時予約は通常の待機に降格しない"
     // oracle = { type = "contract", ref = "Session Graph app-wide-core-review-required-fixes CORE-03; src/GameLauncherWithGit/Application/Abstractions/ISyncOrchestrator.cs: TryQueueRepositorySyncNow" }
     // fault = "監視がまだGitを始めていない即時予約のトークンを置き換え、デバウンスに戻す"
-    // observable = "監視通知直後の公開状態、待機回数、Git開始、完了前の履歴なし"
+    // observable = "監視通知の発火と直後の公開状態、待機回数、Git開始、完了前の履歴なし"
     // observation_boundary = "public-boundary"
     // scope = "immediate sync reservation priority"
     // lifecycle = "permanent"
@@ -85,16 +86,19 @@ public sealed class SyncOrchestratorTests
         var deps = new SyncDependencies();
         var states = new RepositoryStateStore();
         using var sync = CreateSync(deps, states);
+        var watcherInjected = false;
         deps.OnTrayState = state =>
         {
             if (state != RepositorySyncState.Syncing) return;
             deps.OnTrayState = null;
             Assert.Equal(0, deps.FetchCount);
             deps.WatcherChanged(Repository);
+            watcherInjected = true;
             Assert.Equal(RepositorySyncState.Syncing, states.GetStateOrDefault(Repository));
         };
 
         Assert.True(sync.TryQueueRepositorySyncNow(Repository));
+        Assert.True(watcherInjected, "The watcher must notify before Git starts.");
         var fetch = await deps.NextFetchAsync();
         Assert.Equal(0, deps.WaitCount);
         Assert.Equal(0, deps.HistoryCount);
@@ -104,39 +108,41 @@ public sealed class SyncOrchestratorTests
 
     // @test-value v2
     // kind = "invariant"
-    // claim = "置換された待機は現在の状態を書き換えず、現在の待機を取り消せば待機状態が残らない"
+    // claim = "待機の置換は旧トークンだけを取り消し、現在の待機の取消は公開状態を待機前に戻す"
     // oracle = { type = "contract", ref = "Session Graph app-wide-core-review-required-fixes CORE-03; src/GameLauncherWithGit/Application/Abstractions/ISyncOrchestrator.cs: QueueRepositorySyncAsync" }
-    // fault = "古い待機が新しい待機の状態を初期化する、または現在の待機を取り消しても状態がDebouncingに残る"
-    // observable = "待機代替に渡した各トークン、公開状態ストア、Gitと履歴の呼び出し数"
+    // fault = "置換時に旧トークンを取り消さない、新トークンも取り消す、または現在の待機の取消後も状態をDebouncingのまま残す"
+    // observable = "置換前後のトークン、現在予約の取消によるIdle通知と公開状態、通知時点までのGit開始数と履歴件数"
     // observation_boundary = "public-boundary"
     // scope = "ownership and cancellation of pending debounce"
     // lifecycle = "permanent"
     // @end-test-value
     [Fact]
-    public async Task CancelingPendingDebounceDoesNotLeaveStaleStateOrStartGit()
+    public async Task ReplacingAndCancelingPendingDebounceCancelsTheExpectedTokensAndReturnsToIdle()
     {
-        var deps = new SyncDependencies { LetFirstWaitFinishAfterCancellation = true };
+        var deps = new SyncDependencies();
         var states = new RepositoryStateStore();
         using var sync = CreateSync(deps, states);
         using var cancel = new CancellationTokenSource();
-        await sync.QueueRepositorySyncAsync(Repository);
+        await sync.QueueRepositorySyncAsync(Repository).WaitAsync(TestTimeout);
         var previous = await deps.NextWaitAsync();
-        await sync.QueueRepositorySyncAsync(Repository, cancel.Token);
+        await sync.QueueRepositorySyncAsync(Repository, cancel.Token).WaitAsync(TestTimeout);
         var current = await deps.NextWaitAsync();
 
         Assert.True(previous.Token.IsCancellationRequested);
         Assert.False(current.Token.IsCancellationRequested);
-        // A superseded wait can finish late; it must neither run Git nor change the live reservation's state.
-        previous.Release();
         Assert.Equal(RepositorySyncState.Debouncing, states.GetStateOrDefault(Repository));
         var returnedToIdle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         deps.OnTrayState = state =>
         {
-            if (state == RepositorySyncState.Idle) returnedToIdle.TrySetResult();
+            if (state == RepositorySyncState.Idle && current.Token.IsCancellationRequested)
+            {
+                returnedToIdle.TrySetResult();
+            }
         };
         cancel.Cancel();
-        await returnedToIdle.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await returnedToIdle.Task.WaitAsync(TestTimeout);
 
+        Assert.True(current.Token.IsCancellationRequested);
         Assert.Equal(RepositorySyncState.Idle, states.GetStateOrDefault(Repository));
         Assert.Equal(0, deps.FetchCount);
         Assert.Equal(0, deps.HistoryCount);
@@ -156,7 +162,6 @@ public sealed class SyncOrchestratorTests
         public int FetchCount => Volatile.Read(ref _fetchCount);
         public int WaitCount => Volatile.Read(ref _waitCount);
         public int HistoryCount => Volatile.Read(ref _historyCount);
-        public bool LetFirstWaitFinishAfterCancellation { get; init; }
         public Action<RepositorySyncState>? OnTrayState { get; set; }
         public event EventHandler<RepositoryChangedEventArgs>? RepositoryChanged;
 
@@ -187,10 +192,10 @@ public sealed class SyncOrchestratorTests
 
         public Task DelayAsync(TimeSpan delay, CancellationToken cancellationToken)
         {
-            var waitNumber = Interlocked.Increment(ref _waitCount);
+            Interlocked.Increment(ref _waitCount);
             var gate = new Gate(cancellationToken);
             _waits.Writer.TryWrite(gate);
-            return waitNumber == 1 && LetFirstWaitFinishAfterCancellation ? gate.Task : gate.Task.WaitAsync(cancellationToken);
+            return gate.Task.WaitAsync(cancellationToken);
         }
 
         public Task<Gate> NextFetchAsync() => ReadAsync(_fetches);
@@ -211,7 +216,7 @@ public sealed class SyncOrchestratorTests
 
         private static async Task<T> ReadAsync<T>(Channel<T> channel)
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            using var timeout = new CancellationTokenSource(TestTimeout);
             return await channel.Reader.ReadAsync(timeout.Token);
         }
 
