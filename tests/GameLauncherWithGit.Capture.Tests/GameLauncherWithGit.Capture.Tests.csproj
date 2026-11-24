@@ -27,10 +27,14 @@
     <Compile Include="../../src/GameLauncherWithGit/Application/Abstractions/IGameLibraryService.cs" Link="IGameLibraryService.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Application/Abstractions/ILauncherService.cs" Link="ILauncherService.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Application/Services/SaveLinkService.cs" Link="SaveLinkService.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Application/Services/AppDataPaths.cs" Link="AppDataPaths.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Application/Services/GameLibraryService.cs" Link="GameLibraryService.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Application/Services/LauncherService.cs" Link="LauncherService.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/IGitService.cs" Link="IGitService.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Models/GitCommandResult.cs" Link="GitCommandResult.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/ILocalSaveLinkOperator.cs" Link="ILocalSaveLinkOperator.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/IThumbnailService.cs" Link="IThumbnailService.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Services/LocalSaveLinkOperator.cs" Link="LocalSaveLinkOperator.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Models/Junction*.cs" Link="%(Filename)%(Extension)" />
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Models/DirectoryHydrationResult.cs" Link="DirectoryHydrationResult.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Application/Models/RepositorySyncHistory*.cs" Link="%(Filename)%(Extension)" />

@@ -8,10 +8,22 @@ namespace GameLauncherWithGit.Infrastructure.Services;
 public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 {
 	private readonly ILogger<LocalSaveLinkOperator> _logger;
+	private readonly Func<string, string, CancellationToken, Task<JunctionEnsureResult>>? _createRestoredJunction;
 
 	public LocalSaveLinkOperator(ILogger<LocalSaveLinkOperator> logger)
 	{
 		_logger = logger;
+#if WINDOWS
+		_createRestoredJunction = CreateJunctionAsync;
+#endif
+	}
+
+	internal LocalSaveLinkOperator(
+		ILogger<LocalSaveLinkOperator> logger,
+		Func<string, string, CancellationToken, Task<JunctionEnsureResult>> createRestoredJunction)
+	{
+		_logger = logger;
+		_createRestoredJunction = createRestoredJunction;
 	}
 
 	public async Task<JunctionEnsureResult> EnsureJunctionAsync(
@@ -274,9 +286,11 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 			return new JunctionEnsureResult(false, validationError);
 		}
 
-#if !WINDOWS
-		return new JunctionEnsureResult(false, "ジャンクション操作は Windows でのみ利用できます。");
-#else
+		if (_createRestoredJunction is null)
+		{
+			return new JunctionEnsureResult(false, "ジャンクション操作は Windows でのみ利用できます。");
+		}
+
 		try
 		{
 			if (!Directory.Exists(normalizedTargetPath))
@@ -286,15 +300,20 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 					$"ターゲットディレクトリが存在しません。path={normalizedTargetPath}");
 			}
 
-			if (File.Exists(normalizedLocalPath) && !Directory.Exists(normalizedLocalPath))
+			if (TryGetPathAttributes(normalizedLocalPath, out var attributes, out var isMissing, out var error))
 			{
-				return new JunctionEnsureResult(
-					false,
-					$"ローカルパスがディレクトリではありません。path={normalizedLocalPath}");
-			}
+				if (!attributes.HasFlag(FileAttributes.Directory))
+				{
+					return new JunctionEnsureResult(false, $"ローカルパスがディレクトリではありません。path={normalizedLocalPath}");
+				}
 
-			if (Directory.Exists(normalizedLocalPath))
-			{
+				if (!attributes.HasFlag(FileAttributes.ReparsePoint))
+				{
+					return new JunctionEnsureResult(
+						false,
+						$"ローカルの通常フォルダは保持しました。リンクは復元できていません。ローカルとリンク先のデータを手動で確認してください。local={normalizedLocalPath}, target={normalizedTargetPath}");
+				}
+
 				var resolvedLinkTarget = ResolveDirectoryLinkTarget(normalizedLocalPath);
 				if (!string.IsNullOrWhiteSpace(resolvedLinkTarget))
 				{
@@ -308,15 +327,16 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 						$"ローカルパスは別のリンク先を指しています。path={normalizedLocalPath}, actual={resolvedLinkTarget}, expected={normalizedTargetPath}");
 				}
 
-				var localInfo = new DirectoryInfo(normalizedLocalPath);
-				if (localInfo.Attributes.HasFlag(FileAttributes.ReparsePoint))
-				{
-					return new JunctionEnsureResult(
-						false,
-						$"ローカルパスのリンク先を解決できません。手動確認してください。path={normalizedLocalPath}");
-				}
+				return new JunctionEnsureResult(
+					false,
+					$"ローカルパスのリンク先を解決できません。手動確認してください。path={normalizedLocalPath}");
+			}
 
-				Directory.Delete(normalizedLocalPath, recursive: true);
+			if (!isMissing)
+			{
+				return new JunctionEnsureResult(
+					false,
+					$"ローカルパスを確認できません。手動確認してください。path={normalizedLocalPath}, reason={error}");
 			}
 
 			var localParentPath = Path.GetDirectoryName(normalizedLocalPath);
@@ -325,7 +345,7 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 				Directory.CreateDirectory(localParentPath);
 			}
 
-			var createResult = await CreateJunctionAsync(
+			var createResult = await _createRestoredJunction(
 				normalizedLocalPath,
 				normalizedTargetPath,
 				cancellationToken);
@@ -351,7 +371,6 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 				false,
 				$"ジャンクション再作成に失敗しました。local={normalizedLocalPath}, target={normalizedTargetPath}, reason={ex.Message}");
 		}
-#endif
 	}
 
 #if WINDOWS
@@ -814,6 +833,14 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 		return $"{normalizedLocalPath}.restore-{timestamp}-{Guid.NewGuid():N}";
 	}
 
+	private sealed record CopyDirectoryResult(
+		bool IsSuccess,
+		string Message,
+		bool IsCanceled,
+		IReadOnlyList<string> CreatedDirectories,
+		IReadOnlyList<string> CreatedFiles);
+#endif
+
 	private static string? ResolveDirectoryLinkTarget(string localPath)
 	{
 		try
@@ -837,14 +864,6 @@ public sealed class LocalSaveLinkOperator : ILocalSaveLinkOperator
 			return null;
 		}
 	}
-
-	private sealed record CopyDirectoryResult(
-		bool IsSuccess,
-		string Message,
-		bool IsCanceled,
-		IReadOnlyList<string> CreatedDirectories,
-		IReadOnlyList<string> CreatedFiles);
-#endif
 
 	private static bool TryNormalizeDistinctPaths(
 		string localPath,

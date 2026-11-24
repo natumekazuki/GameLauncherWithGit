@@ -13,7 +13,7 @@ public sealed class LauncherService : ILauncherService
 	private readonly ISaveLinkService _saveLinkService;
 	private readonly IGitService _gitService;
 	private readonly ILogger<LauncherService> _logger;
-	private readonly Func<string, Task<bool>> _beginCapture;
+	private readonly ScenarioCaptureService _capture;
 	private readonly Func<GameCardItem, LaunchResult> _startGameProcess;
 
 	public LauncherService(
@@ -22,7 +22,7 @@ public sealed class LauncherService : ILauncherService
 		IGitService gitService,
 		ILogger<LauncherService> logger,
 		ScenarioCaptureService capture)
-		: this(gameLibraryService, saveLinkService, gitService, logger, capture.BeginGameAsync)
+		: this(gameLibraryService, saveLinkService, gitService, logger, capture, startGameProcess: null)
 	{
 	}
 
@@ -31,14 +31,14 @@ public sealed class LauncherService : ILauncherService
 		ISaveLinkService saveLinkService,
 		IGitService gitService,
 		ILogger<LauncherService> logger,
-		Func<string, Task<bool>> beginCapture,
-		Func<GameCardItem, LaunchResult>? startGameProcess = null)
+		ScenarioCaptureService capture,
+		Func<GameCardItem, LaunchResult>? startGameProcess)
 	{
 		_gameLibraryService = gameLibraryService;
 		_saveLinkService = saveLinkService;
 		_gitService = gitService;
 		_logger = logger;
-		_beginCapture = beginCapture;
+		_capture = capture;
 		_startGameProcess = startGameProcess ?? StartGameProcess;
 	}
 
@@ -127,7 +127,7 @@ public sealed class LauncherService : ILauncherService
 		var showCapture = false;
 		try
 		{
-			showCapture = await _beginCapture(gameId);
+			showCapture = await _capture.BeginGameForLaunchAsync(gameId);
 		}
 		catch (Exception ex)
 		{

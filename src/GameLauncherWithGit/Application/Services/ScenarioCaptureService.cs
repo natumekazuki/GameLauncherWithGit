@@ -155,9 +155,12 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
         return items.Select(item => speakers.TryGetValue(item.Id, out var speaker) ? item with { Speaker = speaker } : item).ToArray();
     }
 
-    public Task<bool> BeginGameAsync(string gameId) => RunOperationAsync(() => BeginGameCoreAsync(gameId));
+    public Task<bool> BeginGameAsync(string gameId) => RunOperationAsync(() => BeginGameCoreAsync(gameId, reportFailure: false));
 
-    private async Task<bool> BeginGameCoreAsync(string gameId)
+    // The launcher already started the game and must distinguish a failed follow-up from a normal skip.
+    internal Task<bool> BeginGameForLaunchAsync(string gameId) => RunOperationAsync(() => BeginGameCoreAsync(gameId, reportFailure: true));
+
+    private async Task<bool> BeginGameCoreAsync(string gameId, bool reportFailure)
     {
         try
         {
@@ -192,6 +195,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
         {
             _logger.LogError(ex, "Capture startup failed. game={Game}", gameId);
             lock (_gate) _status = "抽出の開始に失敗しました。ログを確認してください。";
+            if (reportFailure) throw;
             return false;
         }
     }

@@ -24,21 +24,29 @@ public sealed class GameLibraryRegistrationTests : IAsyncDisposable
     // claim = "新規登録の成功後、ゲームとセーブリンク定義を読み出せるが実リンクは存在しない"
     // oracle = { type = "contract", ref = "docs/design/game-save-link-manager.md §8.1 ゲーム新規作成時の保存整合性" }
     // fault = "ゲームだけ登録してリンク定義を保存しない、または保存時にリンクを適用する"
-    // observable = "ストアから読み出した新規行とリンク定義、定義されたローカル・ターゲットパスの有無"
+    // observable = "ストアから読み出した新規行とリンク定義、リンク操作代替の呼び出し数、対象パスの有無"
     // observation_boundary = "public-boundary"
     // scope = "SQLite game registration with save links"
     // lifecycle = "permanent"
     // @end-test-value
     [Fact]
-    public async Task InsertPersistsGameAndLinkDefinitionWithoutCreatingDirectories()
+    public async Task CreatePersistsGameAndLinkDefinitionWithoutApplyingLink()
     {
         var game = Game("new");
         var link = Link("link", game.Id, 0);
 
-        await _store.InsertWithSaveLinksAsync(game, [link]);
+        var dependencies = new RegistrationDependencies();
+        var saveLinks = new SaveLinkService(_store, dependencies, NullLogger<SaveLinkService>.Instance);
+        var games = new GameLibraryService(_store, saveLinks, dependencies, dependencies,
+            NullLogger<GameLibraryService>.Instance, Path.Combine(_directory.FullName, "thumbnails"));
 
+        var created = await games.CreateWithSaveLinksAsync(new(game.Title, "", null, null, false),
+            [new(link.Id, link.DisplayName, link.LocalPath, link.TargetPath, link.EnsureOnLaunch)]);
+
+        Assert.Equal(game, created);
         Assert.Equal(game, await _store.FindByIdAsync(game.Id));
         Assert.Equal(link, Assert.Single(await _store.GetByGameIdAsync(game.Id)));
+        Assert.Equal(0, dependencies.LinkOperations);
         Assert.Null(new DirectoryInfo(link.LocalPath).LinkTarget);
         Assert.False(Directory.Exists(link.LocalPath));
         Assert.False(Directory.Exists(link.TargetPath));
@@ -74,8 +82,8 @@ public sealed class GameLibraryRegistrationTests : IAsyncDisposable
 
     // @test-value v2
     // kind = "invariant"
-    // claim = "先行リンク解除後に編集を中断すると、元のリンク定義を保持し、解除したリンクを復元する"
-    // oracle = { type = "contract", ref = "docs/design/game-save-link-manager.md §8.2 リンク解除フロー（ローカル通常フォルダ復元）" }
+    // claim = "先行リンク解除後に編集を中断すると、元のリンク定義を保持し、復元可能な先行解除分を復元する"
+    // oracle = { type = "contract", ref = "docs/design/game-save-link-manager.md §8.2; src/GameLauncherWithGit/Application/Abstractions/ISaveLinkService.cs: UnlinkRemovedLinksAsync" }
     // fault = "呼び出しがキャンセルされたため、既に解除したリンクの復元まで省略する"
     // observable = "中断例外、ローカル操作代替の有効リンク集合とSQLiteのリンク定義"
     // observation_boundary = "component-behavior"
@@ -97,6 +105,84 @@ public sealed class GameLibraryRegistrationTests : IAsyncDisposable
 
         Assert.All(links, link => Assert.Contains(link.LocalPath, filesystem.ActiveLinks));
         Assert.Equal(links, await _store.GetByGameIdAsync(game.Id));
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "通常フォルダがある場合の復元は手動確認を返してローカルセーブを保持し、未存在の場合だけ再作成へ進む"
+    // oracle = { type = "contract", ref = "docs/design/game-save-link-manager.md §8.2 リンク解除フロー（ローカル通常フォルダ復元）" }
+    // fault = "解除後の通常フォルダを削除してリンクを再作成する、または復元できないのに成功とする"
+    // observable = "復元結果、手動確認の文言、合成ファイルの内容、再作成代替へのパス、旧DB定義"
+    // observation_boundary = "component-behavior"
+    // scope = "save-link rollback with existing local directory or missing local path"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RestorePreservesSaveDataAndOnlyRecreatesAtMissingLocalPath(bool localExists)
+    {
+        var game = Game("saved");
+        var link = Link("first", game.Id, 0);
+        await _store.InsertWithSaveLinksAsync(game, [link]);
+        Directory.CreateDirectory(link.TargetPath);
+        var targetSave = Path.Combine(link.TargetPath, "save.dat");
+        await File.WriteAllTextAsync(targetSave, "original");
+        var localSave = Path.Combine(link.LocalPath, "save.dat");
+        if (localExists)
+        {
+            Directory.CreateDirectory(link.LocalPath);
+            await File.WriteAllTextAsync(localSave, "saved after unlink");
+        }
+
+        var creates = new List<(string Local, string Target)>();
+        var filesystem = new LocalSaveLinkOperator(NullLogger<LocalSaveLinkOperator>.Instance, (local, target, _) =>
+        {
+            creates.Add((local, target));
+            return Task.FromResult(new JunctionEnsureResult(true, "fixture"));
+        });
+        var saveLinks = new SaveLinkService(_store, filesystem, NullLogger<SaveLinkService>.Instance);
+
+        var error = await saveLinks.RollbackUnlinkedLinksAsync(game.Id, [link]);
+
+        if (localExists)
+        {
+            Assert.Contains("手動で確認", error);
+            Assert.Equal("saved after unlink", await File.ReadAllTextAsync(localSave));
+            Assert.Empty(creates);
+        }
+        else
+        {
+            Assert.Null(error);
+            Assert.Equal((link.LocalPath, link.TargetPath), Assert.Single(creates));
+        }
+
+        Assert.Equal("original", await File.ReadAllTextAsync(targetSave));
+        Assert.Equal(link, Assert.Single(await _store.GetByGameIdAsync(game.Id)));
+    }
+
+    private sealed class RegistrationDependencies : ILocalSaveLinkOperator, IGitService, IThumbnailService
+    {
+        public int LinkOperations { get; private set; }
+
+        private Task<T> UnexpectedLinkOperation<T>()
+        {
+            LinkOperations++;
+            throw new InvalidOperationException("Registration must not operate on links.");
+        }
+
+        public Task<JunctionEnsureResult> EnsureJunctionAsync(string localPath, string targetPath, CancellationToken cancellationToken) =>
+            UnexpectedLinkOperation<JunctionEnsureResult>();
+        public Task<JunctionRemoveResult> RemoveJunctionWithRestoreAsync(string localPath, string targetPath, CancellationToken cancellationToken) =>
+            UnexpectedLinkOperation<JunctionRemoveResult>();
+        public Task<JunctionEnsureResult> RestoreJunctionAsync(string localPath, string targetPath, CancellationToken cancellationToken) =>
+            UnexpectedLinkOperation<JunctionEnsureResult>();
+        public Task<DirectoryHydrationResult> HydrateDirectoryAsync(string targetPath, CancellationToken cancellationToken) =>
+            UnexpectedLinkOperation<DirectoryHydrationResult>();
+        public Task<GitCommandResult> CheckAvailabilityAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<GitCommandResult> RunAsync(string repositoryPath, IReadOnlyList<string> arguments, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+        public Task<string?> CreateThumbnailAsync(string sourceImagePath, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
     private sealed class CancelAfterFirstUnlink(GameSaveLinkItem[] links, CancellationTokenSource cancellation)

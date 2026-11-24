@@ -21,14 +21,24 @@ public sealed class GameLibraryService : IGameLibraryService
 		IGitService gitService,
 		IThumbnailService thumbnailService,
 		ILogger<GameLibraryService> logger)
+		: this(store, saveLinkService, gitService, thumbnailService, logger, Path.Combine(AppDataPaths.Directory, "thumbnails"))
+	{
+	}
+
+	internal GameLibraryService(
+		IGameLibraryStore store,
+		ISaveLinkService saveLinkService,
+		IGitService gitService,
+		IThumbnailService thumbnailService,
+		ILogger<GameLibraryService> logger,
+		string managedThumbnailDirectoryPath)
 	{
 		_store = store;
 		_saveLinkService = saveLinkService;
 		_gitService = gitService;
 		_thumbnailService = thumbnailService;
 		_logger = logger;
-		_managedThumbnailDirectoryPath = Path.GetFullPath(
-			Path.Combine(AppDataPaths.Directory, "thumbnails"));
+		_managedThumbnailDirectoryPath = Path.GetFullPath(managedThumbnailDirectoryPath);
 	}
 
 	public Task<GameCardItem> CreateAsync(GameEditInput input, CancellationToken cancellationToken = default) =>
