@@ -14,6 +14,7 @@
 @inject PlayRecordingOperations RecordingOperations
 @inject IPathPickerService Picker
 @inject IJSRuntime JS
+@inject NavigationManager Navigation
 
 @{
     var displayedLive = PlayRecordingOperations.DesktopTarget(_snapshot, _snapshot.Profile?.Id ?? 0);
@@ -650,6 +651,7 @@
     private sealed class PartDraft { public string Text { get; set; } = ""; public long Label { get; set; } public string Speaker { get; set; } = ""; }
     protected override async Task OnInitializedAsync()
     {
+        _message = Navigation.HistoryEntryState;
         try
         {
             _snapshot = CaptureService.Snapshot; _profiles = await Store.GetCaptureProfilesAsync();

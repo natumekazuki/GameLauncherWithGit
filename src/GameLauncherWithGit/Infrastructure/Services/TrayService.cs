@@ -277,7 +277,7 @@ public sealed class TrayService : ITrayService, IDisposable
 		catch (Exception ex)
 		{
 			_logger.LogError(ex, "Tray menu command failed. command=sync-now");
-			await AppendTrayErrorAsync($"トレイメニューの「今すぐ同期」に失敗しました。{ex.Message}");
+			await AppendTrayErrorAsync($"トレイメニューの「すべて同期」に失敗しました。{ex.Message}");
 		}
 	}
 

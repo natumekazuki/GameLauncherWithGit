@@ -1125,9 +1125,26 @@ else
             {
                 SetNotification("起動前同期を実行中です...", null);
                 var result = await LauncherService.LaunchAsync(gameId);
-                var loaded = await ReloadGamesAsync();
-                SetNotification(loaded ? result.Message : $"{result.Message} 一覧の再読込に失敗しました。", result.IsSuccess && loaded);
-                if (result.ShowCapture) Navigation.NavigateTo("capture");
+                if (result.ShowCapture)
+                {
+                    Navigation.NavigateTo("capture", new NavigationOptions { HistoryEntryState = result.Message });
+                    return;
+                }
+
+                SetNotification(result.Message, result.IsSuccess);
+                try
+                {
+                    if (await ReloadGamesAsync())
+                    {
+                        return;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _libraryLoadError = ex.Message;
+                }
+
+                SetNotification($"{result.Message} 一覧の再読込に失敗しました。", false, addToHistory: false);
             });
     }
 
@@ -1894,8 +1911,7 @@ else
                     }
                     else
                     {
-                        var created = await GameLibraryService.CreateAsync(input);
-                        await SaveLinksForCreatedGameAsync(created.Id, saveLinkInputs);
+                        var created = await GameLibraryService.CreateWithSaveLinksAsync(input, saveLinkInputs);
                         savedTitle = created.Title;
                     }
 
@@ -1926,43 +1942,6 @@ else
                     }
                 }
             });
-    }
-
-    private async Task SaveLinksForCreatedGameAsync(string gameId, IReadOnlyList<GameSaveLinkEditInput> saveLinkInputs)
-    {
-        try
-        {
-            await SaveLinkService.ReplaceForGameAsync(gameId, saveLinkInputs);
-        }
-        catch (Exception ex)
-        {
-            var rollbackError = await TryRollbackCreatedGameAsync(gameId);
-            if (string.IsNullOrWhiteSpace(rollbackError))
-            {
-                throw new InvalidOperationException(
-                    $"セーブリンク保存に失敗したため、作成済みゲームをロールバックしました。reason={ex.Message}",
-                    ex);
-            }
-
-            throw new InvalidOperationException(
-                $"セーブリンク保存に失敗し、作成済みゲームのロールバックにも失敗しました。gameId={gameId}, rollbackReason={rollbackError}, reason={ex.Message}",
-                ex);
-        }
-    }
-
-    private async Task<string?> TryRollbackCreatedGameAsync(string gameId)
-    {
-        try
-        {
-            var isDeleted = await GameLibraryService.DeleteAsync(gameId);
-            return isDeleted
-                ? null
-                : $"gameId={gameId} の削除結果が false でした。";
-        }
-        catch (Exception rollbackEx)
-        {
-            return rollbackEx.Message;
-        }
     }
 
     private async Task PickExecutablePathAsync()
@@ -3525,7 +3504,7 @@ else
                 try
                 {
                     await SyncOrchestrator.ResumeRepositorySyncAsync(repositoryKey);
-                    SetNotification($"同期を再開しました: {game.Title}", true);
+                    SetNotification($"同期再開を受け付けました: {game.Title}", null);
                 }
                 catch (Exception ex)
                 {
