@@ -25,7 +25,8 @@ public sealed class PlayRecordingWebHost(
     public async Task<IReadOnlyList<GameCardItem>> GetEligibleGamesAsync()
     {
         var configuredIds = (await capture.GetCaptureProfilesAsync())
-            .Where(IsConfigured).Select(profile => profile.GameId!).ToHashSet(StringComparer.Ordinal);
+            .Where(profile => profile.GameId is not null && profile.HasConfirmedRecordingSetup)
+            .Select(profile => profile.GameId!).ToHashSet(StringComparer.Ordinal);
         return (await games.GetAllAsync()).Where(game => configuredIds.Contains(game.Id)).ToArray();
     }
 
@@ -127,13 +128,10 @@ public sealed class PlayRecordingWebHost(
     private async Task<GameCardItem> RequireEligibleGameAsync(string gameId)
     {
         if (string.IsNullOrWhiteSpace(gameId) || await games.FindByIdAsync(gameId) is not { } game
-            || !(await capture.GetCaptureProfilesAsync()).Any(profile => IsConfigured(profile) && profile.GameId == game.Id))
+            || await capture.FindCaptureProfileAsync(game.Id) is not { HasConfirmedRecordingSetup: true })
             throw new InvalidOperationException("登録済みで、シナリオ抽出の設定を確定したゲームを選んでください。");
         return game;
     }
-
-    private static bool IsConfigured(CaptureProfile profile) => profile.GameId is not null && profile.Enabled
-        && !string.IsNullOrWhiteSpace(profile.BodyExecutablePath) && profile.Rules.Selections.Any(s => s.Role == CaptureRole.Body);
 
     private static Uri RequireServeOrigin(Uri origin)
     {

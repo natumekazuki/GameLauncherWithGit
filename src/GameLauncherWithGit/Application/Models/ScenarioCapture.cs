@@ -20,7 +20,13 @@ public sealed record CaptureRules
 }
 
 public sealed record CaptureProfile(long Id, string? GameId, string Title, bool Enabled,
-    string? BodyExecutablePath, CaptureRules Rules);
+    string? BodyExecutablePath, CaptureRules Rules)
+{
+    /// <summary>Whether the saved setup permits configured recording, independent of the live process state.</summary>
+    [System.Diagnostics.CodeAnalysis.MemberNotNullWhen(true, nameof(BodyExecutablePath))]
+    internal bool HasConfirmedRecordingSetup => Enabled && !string.IsNullOrWhiteSpace(BodyExecutablePath)
+        && Rules.Selections.Any(selection => selection.Role == CaptureRole.Body);
+}
 public sealed record CaptureLabel(long Id, long CaptureGameId, string Name, CaptureKind Kind);
 public sealed record CaptureSession(long Id, long CaptureGameId, DateTimeOffset StartedAt, DateTimeOffset? EndedAt);
 public sealed record CaptureSource(uint ProcessId, ulong Address, ulong Context, ulong Context2, string HookCode, string HookName)

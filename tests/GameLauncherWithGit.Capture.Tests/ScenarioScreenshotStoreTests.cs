@@ -153,6 +153,35 @@ public sealed class ScenarioScreenshotStoreTests : IDisposable
 
     // @test-value v2
     // kind = "invariant"
+    // claim = "画像一覧・件数の読取は、実在する本文の添付なしと削除済み本文の読取失敗を区別する"
+    // oracle = { type = "contract", ref = "README.md: シナリオ抽出（履歴一覧の画像ボタンと件数取得失敗）; docs/design/scenario-extraction.md: 手動スクリーンショットと分析用ZIP" }
+    // fault = "取得回が残っているだけで削除済み本文を有効とみなし、画像一覧や件数を空・ゼロで返す"
+    // observable = "削除前の空の画像一覧とゼロ件、削除後の読取例外、同じ取得回に残した別本文のゼロ件"
+    // observation_boundary = "public-boundary"
+    // scope = "SQLite screenshot list and count distinguish an invalid displayed event from a valid event with no attachment"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task DeletedEventIsNotAnEmptyScreenshotListOrZeroCount()
+    {
+        var (game, session) = await StartAsync();
+        await Append(session, 1);
+        await Append(session, 2);
+        var deleted = new CaptureEventKey(session, 1);
+        var remaining = new CaptureEventKey(session, 2);
+        Assert.Empty(await _store.GetEventScreenshotsAsync(game, deleted));
+        Assert.Equal(0, (await _store.GetScreenshotCountsAsync(game, [deleted]))[deleted]);
+
+        await _store.DeleteCaptureEventsAsync(game, [deleted]);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => _store.GetEventScreenshotsAsync(game, deleted));
+        await Assert.ThrowsAsync<ArgumentException>(() => _store.GetScreenshotCountsAsync(game, [remaining, deleted]));
+        Assert.Empty(await _store.GetEventScreenshotsAsync(game, remaining));
+        Assert.Equal(0, (await _store.GetScreenshotCountsAsync(game, [remaining]))[remaining]);
+    }
+
+    // @test-value v2
+    // kind = "invariant"
     // claim = "未保存・名前・空本文・別ゲームのイベントへの撮影保存を拒否し既存共有画像を損なわない"
     // oracle = { type = "contract", ref = "https://github.com/natumekazuki/GameLauncherWithGit/issues/22" }
     // fault = "所有者やBody存在を検証せず添付を作る、または失敗rollbackで既存画像を削除する"

@@ -89,8 +89,7 @@ public sealed partial class PlayRecordingOperations(ScenarioCaptureService captu
         var recording = ours && live.Formal && !live.Paused;
         var pending = Pending(profile.Id);
         return new PlayRecordingState(CurrentTarget(profile.Id), profile.Title, recording, ours && live.Formal && live.Paused,
-            !live.Active && profile.Enabled && !string.IsNullOrWhiteSpace(profile.BodyExecutablePath)
-                && profile.Rules.Selections.Any(x => x.Role == CaptureRole.Body), ours && live.Formal,
+            !live.Active && profile.HasConfirmedRecordingSetup, ours && live.Formal,
             ours ? live.RangeStart : null, pending)
         {
             CanStartRange = recording && live.LastBody is not null && live.RangeStart is null && pending is null,

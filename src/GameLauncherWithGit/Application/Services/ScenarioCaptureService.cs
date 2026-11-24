@@ -198,8 +198,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
 
     internal async Task StartConfiguredCoreAsync(CaptureProfile profile)
     {
-        if (!profile.Enabled || string.IsNullOrWhiteSpace(profile.BodyExecutablePath)
-            || !profile.Rules.Selections.Any(x => x.Role == CaptureRole.Body) || OperationState.Active)
+        if (!profile.HasConfirmedRecordingSetup || OperationState.Active)
             throw new InvalidOperationException("ゲームの記録設定と現在の接続状態を確認してください。");
         if ((await _store.GetCaptureProfilesAsync()).Any(other => other.Id != profile.Id && other.GameId is not null
             && string.Equals(other.BodyExecutablePath, profile.BodyExecutablePath, StringComparison.OrdinalIgnoreCase)))
@@ -228,7 +227,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
         {
             await FinishCoreAsync();
             profile = (await _store.GetCaptureProfilesAsync()).Single(x => x.Id == profile.Id);
-            if (requiredPath is not null && (!profile.Enabled || !profile.Rules.Selections.Any(x => x.Role == CaptureRole.Body)
+            if (requiredPath is not null && (!profile.HasConfirmedRecordingSetup
                 || !string.Equals(profile.BodyExecutablePath, requiredPath, StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidOperationException("ゲームの記録設定が更新されました。");
             var labels = await _store.GetCaptureLabelsAsync(profile.Id);
