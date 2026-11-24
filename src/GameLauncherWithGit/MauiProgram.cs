@@ -61,6 +61,7 @@ public static class MauiProgram
 		builder.Services.AddSingleton<IScenarioScreenshotStore>(serviceProvider => serviceProvider.GetRequiredService<SqliteGameLibraryStore>());
 		builder.Services.AddSingleton<IScenarioScreenshotPlatform, ScenarioScreenshotPlatform>();
 		builder.Services.AddSingleton<ScenarioScreenshotService>();
+		builder.Services.AddSingleton<PlayRecordingOperations>();
 		builder.Services.AddSingleton<IGameLibraryStore>(serviceProvider => serviceProvider.GetRequiredService<SqliteGameLibraryStore>());
 		builder.Services.AddSingleton<IRepositorySyncHistoryStore>(serviceProvider => serviceProvider.GetRequiredService<SqliteGameLibraryStore>());
 		builder.Services.AddSingleton<ISaveLinkStore>(serviceProvider => serviceProvider.GetRequiredService<SqliteGameLibraryStore>());
