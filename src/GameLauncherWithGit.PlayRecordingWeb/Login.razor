@@ -4,22 +4,28 @@
 @attribute [AllowAnonymous]
 @inject PlayRecordingWebView View
 
-<main class="play-web-login">
+<main class="play-web-entry">
     <h1>プレイ中の記録</h1>
     <form method="post" action="@(new Uri(View.Origin, "/login"))">
         <AntiforgeryToken />
-        <label for="code">PCに表示された接続コード</label>
-        <input id="code" name="code" type="password" autocomplete="one-time-code"
-               minlength="32" maxlength="32" spellcheck="false" required />
-        @if (Error == "code")
+        <div class="play-web-field">
+            <label for="code">PCに表示された接続コード</label>
+            <input id="code" name="code" type="password" autocomplete="one-time-code"
+                   minlength="32" maxlength="32" spellcheck="false" required
+                   aria-invalid="@(InvalidCode ? "true" : null)"
+                   aria-describedby="@(InvalidCode ? "play-web-code-error" : null)" />
+        </div>
+        <button class="play-web-action play-web-action-primary" type="submit">接続</button>
+        @if (InvalidCode)
         {
-            <p role="alert">接続コードが無効です。PCで接続コードを発行し直してください。</p>
+            <p id="play-web-code-error" class="play-web-error" role="alert">接続コードが無効です。PCで接続コードを発行し直してください。</p>
         }
-        <button type="submit">接続</button>
     </form>
 </main>
 
 @code {
     [SupplyParameterFromQuery(Name = "error")]
     public string? Error { get; set; }
+
+    private bool InvalidCode => Error == "code";
 }
