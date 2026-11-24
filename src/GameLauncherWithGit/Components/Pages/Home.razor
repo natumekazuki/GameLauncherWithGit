@@ -139,13 +139,16 @@ else
                         var hasRepository = gitVisualState != GitRepositoryVisualState.NotConfigured;
                         var canResumeSync = CanResumeRepositorySync(game);
                         var hasThumbnail = HasThumbnail(game);
-                        var thumbnailDataUri = hasThumbnail ? GetThumbnailDataUri(game) : null;
-                        var showCardTitle = _showCardTitle || thumbnailDataUri is null;
+                        var thumbnail = hasThumbnail ? GetThumbnailSource(game) : null;
+                        var hasDisplayImage = thumbnail is { DecodeFailed: false };
+                        var showCardTitle = _showCardTitle || !hasDisplayImage;
                         <article @key="game.Id" class="@GetGameCardClass(gitVisualState)" aria-label="@game.Title">
-                            @if (thumbnailDataUri is not null)
+                            @if (thumbnail is { DecodeFailed: false })
                             {
                                 <div class="game-thumbnail-panel @(IsLaunchDisabled(game) ? string.Empty : "game-thumbnail-launchable")" @ondblclick="() => LaunchFromThumbnailAsync(game)" title="@(IsLaunchDisabled(game) ? GetLaunchButtonTitle(game) : "ダブルクリックで起動")">
-                                    <img class="game-thumbnail-image" src="@thumbnailDataUri" alt="@(showCardTitle ? string.Empty : game.Title)" />
+                                    <img @key="thumbnail" class="game-thumbnail-image" src="@thumbnail.DataUri"
+                                         alt="@(showCardTitle ? string.Empty : game.Title)"
+                                         @onerror="() => MarkThumbnailDecodeFailed(game.Id, thumbnail)" />
                                 </div>
                             }
                             <div class="home-card-content">
@@ -159,7 +162,7 @@ else
                                     {
                                         <span class="status-badge @GetStatusClass(effectiveStatus)">@(canResumeSync ? "同期停止" : GetStatusLabel(effectiveStatus))</span>
                                     }
-                                    @if (hasThumbnail && thumbnailDataUri is null)
+                                    @if (hasThumbnail && !hasDisplayImage)
                                     {
                                         <span class="home-media-error">画像を読み込めません</span>
                                     }
@@ -1038,7 +1041,7 @@ else
     private bool _focusLibraryHeading;
     private readonly HashSet<string> _registeredWatcherRepositoryIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _pinningGameIds = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, string> _thumbnailDataUriCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ThumbnailSource> _thumbnailCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, IReadOnlyList<GameSaveLinkItem>> _saveLinksByGame = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _saveLinkLoadFailedGameIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, IReadOnlyList<RepositorySyncHistoryItem>> _syncHistoryByRepository = new(StringComparer.OrdinalIgnoreCase);
@@ -1097,7 +1100,7 @@ else
             _ = SyncOrchestrator;
             if (await ReloadGamesAsync())
             {
-                await RefreshRepositoryWatchersAsync();
+                RefreshRepositoryWatchers();
             }
             StartStateRefreshLoop();
         }
@@ -1740,20 +1743,23 @@ else
 
                     CloseDeleteConfirm(force: true);
                     _focusLibraryHeading = true;
-                    if (await ReloadGamesAsync())
+                    if (_games is not null)
                     {
-                        await RefreshRepositoryWatchersAsync();
-                        SetNotification($"ゲーム登録を削除しました: {targetTitle}", true);
+                        _games = _games.Where(game => !string.Equals(game.Id, targetGameId, StringComparison.OrdinalIgnoreCase)).ToArray();
                     }
-                    else
-                    {
-                        SetNotification($"「{targetTitle}」の登録は削除しました。一覧の再読込に失敗しました。", false);
-                    }
+
+                    var removalError = TryRefreshRepositoryWatchers(removeOnly: true);
+                    var reloadError = await ReloadGamesAsync()
+                        ? TryRefreshRepositoryWatchers()
+                        : AppendError("一覧の再読込に失敗しました。", removalError);
+                    SetNotification(reloadError is null
+                        ? $"ゲーム登録を削除しました: {targetTitle}"
+                        : $"「{targetTitle}」の登録は削除しました。{reloadError}", reloadError is null);
                 }
                 catch (Exception ex)
                 {
                     SetNotification(registrationDeleted
-                        ? $"「{targetTitle}」の登録は削除しました。監視の更新に失敗しました: {ex.Message}"
+                        ? $"「{targetTitle}」の登録は削除しました。削除後の更新に失敗しました: {ex.Message}"
                         : $"ゲーム削除に失敗しました: {ex.Message}", false);
                 }
                 finally
@@ -1876,8 +1882,12 @@ else
                             }
                             catch (Exception ex)
                             {
-                                if (await ReloadGamesAsync()) await RefreshRepositoryWatchersAsync();
-                                SetNotification($"ゲーム設定は保存しました。シナリオ抽出設定は保存できませんでした。開き直して確認してください: {ex.Message}", false);
+                                var refreshError = await ReloadGamesAsync()
+                                    ? TryRefreshRepositoryWatchers()
+                                    : "一覧の再読込に失敗しました。";
+                                SetNotification(AppendError(
+                                    $"ゲーム設定は保存しました。シナリオ抽出設定は保存できませんでした。開き直して確認してください: {ex.Message}",
+                                    refreshError), false);
                                 return;
                             }
                         }
@@ -1892,7 +1902,7 @@ else
                     shouldCloseEditor = true;
                     if (await ReloadGamesAsync())
                     {
-                        await RefreshRepositoryWatchersAsync();
+                        RefreshRepositoryWatchers();
                         SetNotification($"{(_isEditMode ? "ゲーム設定を更新しました" : "ゲームを登録しました")}: {savedTitle}", true);
                     }
                     else
@@ -2810,11 +2820,11 @@ else
         {
             if (await ReloadGamesAsync())
             {
-                await RefreshRepositoryWatchersAsync();
-                SetNotification(_saveLinkLoadFailedGameIds.Count == 0
+                var watcherError = TryRefreshRepositoryWatchers();
+                SetNotification(watcherError ?? (_saveLinkLoadFailedGameIds.Count == 0
                     ? "ゲーム一覧を読み込みました。"
-                    : "読み込めないセーブリンクがあります。対象ゲームの編集はできません。",
-                    _saveLinkLoadFailedGameIds.Count == 0);
+                    : "読み込めないセーブリンクがあります。対象ゲームの編集はできません。"),
+                    watcherError is null && _saveLinkLoadFailedGameIds.Count == 0);
             }
             _focusLibraryHeading = true;
         });
@@ -2909,11 +2919,26 @@ else
             .ToArray();
     }
 
-    private Task RefreshRepositoryWatchersAsync()
+    private static string AppendError(string message, string? error) => error is null ? message : $"{message} {error}";
+
+    private string? TryRefreshRepositoryWatchers(bool removeOnly = false)
+    {
+        try
+        {
+            RefreshRepositoryWatchers(removeOnly);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return $"監視の更新に失敗しました: {ex.Message}";
+        }
+    }
+
+    private void RefreshRepositoryWatchers(bool removeOnly = false)
     {
         if (_games is null)
         {
-            return Task.CompletedTask;
+            return;
         }
 
         var activeRepositoryIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -2930,7 +2955,6 @@ else
                 continue;
             }
 
-            RepositoryWatcherService.Register(repositoryKey, repositoryKey);
             activeRepositoryIds.Add(repositoryKey);
         }
 
@@ -2940,15 +2964,19 @@ else
         foreach (var repositoryId in staleRepositoryIds)
         {
             RepositoryWatcherService.Unregister(repositoryId);
+            _registeredWatcherRepositoryIds.Remove(repositoryId);
         }
 
-        _registeredWatcherRepositoryIds.Clear();
+        if (removeOnly)
+        {
+            return;
+        }
+
         foreach (var repositoryId in activeRepositoryIds)
         {
+            RepositoryWatcherService.Register(repositoryId, repositoryId);
             _registeredWatcherRepositoryIds.Add(repositoryId);
         }
-
-        return Task.CompletedTask;
     }
 
     private void UnregisterAllWatchers()
@@ -3055,7 +3083,7 @@ else
         _stateRefreshCts.Dispose();
         UnregisterAllWatchers();
         _pinningGameIds.Clear();
-        _thumbnailDataUriCache.Clear();
+        _thumbnailCache.Clear();
         _editorSaveLinks.Clear();
         _saveLinksByGame.Clear();
         _syncHistoryByRepository.Clear();
@@ -3388,7 +3416,7 @@ else
         return !string.IsNullOrWhiteSpace(game.ThumbnailPath);
     }
 
-    private string? GetThumbnailDataUri(GameCardItem game)
+    private ThumbnailSource? GetThumbnailSource(GameCardItem game)
     {
         var path = NormalizeThumbnailPath(game.ThumbnailPath);
         if (path is null)
@@ -3396,7 +3424,7 @@ else
             return null;
         }
 
-        if (_thumbnailDataUriCache.TryGetValue(path, out var cached))
+        if (_thumbnailCache.TryGetValue(path, out var cached))
         {
             return cached;
         }
@@ -3414,9 +3442,9 @@ else
                 return null;
             }
 
-            var dataUri = $"data:image/png;base64,{Convert.ToBase64String(bytes)}";
-            _thumbnailDataUriCache[path] = dataUri;
-            return dataUri;
+            var source = new ThumbnailSource($"data:image/png;base64,{Convert.ToBase64String(bytes)}");
+            _thumbnailCache[path] = source;
+            return source;
         }
         catch
         {
@@ -3424,11 +3452,27 @@ else
         }
     }
 
+    private void MarkThumbnailDecodeFailed(string gameId, ThumbnailSource source)
+    {
+        var game = _games?.FirstOrDefault(game => game.Id == gameId);
+        var path = NormalizeThumbnailPath(game?.ThumbnailPath);
+        if (path is not null && _thumbnailCache.TryGetValue(path, out var current) && ReferenceEquals(current, source))
+        {
+            source.DecodeFailed = true;
+        }
+    }
+
+    private sealed class ThumbnailSource(string dataUri)
+    {
+        public string DataUri { get; } = dataUri;
+        public bool DecodeFailed { get; set; }
+    }
+
     private void SyncThumbnailCache()
     {
         if (_games is null)
         {
-            _thumbnailDataUriCache.Clear();
+            _thumbnailCache.Clear();
             return;
         }
 
@@ -3438,13 +3482,13 @@ else
             .Select(static path => path!)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var stalePaths = _thumbnailDataUriCache.Keys
+        var stalePaths = _thumbnailCache.Keys
             .Where(path => !activePaths.Contains(path))
             .ToArray();
 
         foreach (var stalePath in stalePaths)
         {
-            _thumbnailDataUriCache.Remove(stalePath);
+            _thumbnailCache.Remove(stalePath);
         }
     }
 

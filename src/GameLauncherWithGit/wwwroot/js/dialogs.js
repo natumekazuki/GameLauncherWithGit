@@ -86,8 +86,10 @@
         }
 
         const focusable = Array.from(dialog.querySelectorAll(
-            'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
-        )).filter(element => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden');
+            'a[href], button, input, select, textarea, details > summary:first-of-type, [tabindex]'
+        )).filter(element => element.tabIndex >= 0 && !element.matches(':disabled')
+            && !element.closest('[inert]') && element.getClientRects().length > 0
+            && getComputedStyle(element).visibility === 'visible');
 
         if (focusable.length === 0) {
             event.preventDefault();
@@ -95,8 +97,10 @@
             return;
         }
 
-        const index = focusable.indexOf(document.activeElement);
-        if (index === -1 || (event.shiftKey && index === 0) || (!event.shiftKey && index === focusable.length - 1)) {
+        const active = document.activeElement;
+        const boundary = event.shiftKey ? focusable[0] : focusable.at(-1);
+        const beyondBoundary = event.shiftKey ? Node.DOCUMENT_POSITION_PRECEDING : Node.DOCUMENT_POSITION_FOLLOWING;
+        if (!dialog.contains(active) || active === boundary || (boundary.compareDocumentPosition(active) & beyondBoundary)) {
             event.preventDefault();
             focusable[event.shiftKey ? focusable.length - 1 : 0].focus();
         }

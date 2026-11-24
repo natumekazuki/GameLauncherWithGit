@@ -60,7 +60,7 @@
 .startup-error-panel h2 { font-size: 1.35rem; }
 
 .game-grid {
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, calc(280px * var(--game-card-scale))), 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, max(11rem, calc(280px * var(--game-card-scale)))), 1fr));
     align-items: start;
     gap: 1rem;
 }
