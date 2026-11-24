@@ -16,6 +16,8 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
     private readonly ILunaCaptureHost _host;
     private readonly ILogger<ScenarioCaptureService> _logger;
     private readonly object _gate = new();
+    private readonly SemaphoreSlim _operations = new(1, 1);
+    private long _operationVersion;
     private readonly Channel<WriteWork> _writes = Channel.CreateBounded<WriteWork>(new BoundedChannelOptions(MaxEvents)
     { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
     private readonly LinkedList<CaptureReceived> _buffer = [];
@@ -49,6 +51,28 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
 
     public event Action? StateChanged;
 
+    internal async Task<T> RunOperationAsync<T>(Func<Task<T>> action)
+    {
+        await _operations.WaitAsync();
+        try { return await action(); }
+        finally { _operations.Release(); }
+    }
+
+    internal Task RunOperationAsync(Func<Task> action) => RunOperationAsync(async () => { await action(); return true; });
+
+    internal void ChangeOperationVersion() { lock (_gate) _operationVersion++; }
+
+    internal (long Version, long? ProfileId, long? SessionId, bool Active, bool Formal, bool Paused,
+        CapturePosition? LastBody, CapturePosition? RangeStart) OperationState
+    {
+        get
+        {
+            lock (_gate) return (_operationVersion, _profile?.Id, _session, _active || _finishing || _connecting,
+                _active && !_finishing && _connected && !_preview && _session is not null,
+                _paused, _lastBodyPosition, _rangeStart);
+        }
+    }
+
     public (ScreenshotTarget Target, int ProcessId) FreezeScreenshotTarget()
     {
         lock (_gate)
@@ -59,6 +83,14 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
                 throw new InvalidOperationException("正式記録を開始し、本文を受信してから撮影してください。");
             return (new(_profile.Id, new(session, position.Sequence)), _process.Id);
         }
+    }
+
+    internal void RequireScreenshotProcessAlive(ScreenshotTarget target, int processId)
+    {
+        lock (_gate)
+            if (_profile?.Id != target.CaptureGameId || _session != target.Event.SessionId
+                || _body is not { } body || body.Id != processId || body.HasExited)
+                throw new InvalidOperationException("撮影対象のゲームが終了しました。");
     }
 
     public ScenarioCaptureService(IScenarioCaptureStore store, ILunaCaptureHost host, ILogger<ScenarioCaptureService> logger)
@@ -76,6 +108,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
         {
             lock (_gate) return new()
             {
+                OperationVersion = _operationVersion,
                 Profile = _profile,
                 SessionId = _session,
                 Status = _status,
@@ -92,7 +125,8 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
                 Lost = _lost,
                 Candidates = _candidates.Values.ToArray(),
                 PreviewItems = _preview ? BuildPreviewItems() : [],
-                RangeStart = _rangeStart
+                RangeStart = _rangeStart,
+                RangeCanEnd = _rangeStart is not null && _lastBodyPosition?.CompareTo(_rangeStart) > 0
             };
         }
     }
@@ -120,7 +154,9 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
         return items.Select(item => speakers.TryGetValue(item.Id, out var speaker) ? item with { Speaker = speaker } : item).ToArray();
     }
 
-    public async Task<bool> BeginGameAsync(string gameId)
+    public Task<bool> BeginGameAsync(string gameId) => RunOperationAsync(() => BeginGameCoreAsync(gameId));
+
+    private async Task<bool> BeginGameCoreAsync(string gameId)
     {
         try
         {
@@ -131,6 +167,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
                 if (_active || _finishing) { _logger.LogWarning("Capture is already active; second capture skipped. game={Game}", gameId); return false; }
             lock (_gate)
             {
+                _operationVersion++;
                 _profile = profile; _session = null; _active = true; _connected = false; _needsProcess = true;
                 _labels = labels;
                 _sequence = _received = _saved = _lost = 0; _status = "ゲーム本体を選択してください";
@@ -143,7 +180,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
                 var matches = GetProcesses().Where(x => string.Equals(x.Path, profile.BodyExecutablePath, StringComparison.OrdinalIgnoreCase)).ToArray();
                 if (matches.Length == 1)
                 {
-                    try { await SelectProcessAsync(matches[0].Id, preview: false); }
+                    try { await SelectProcessCoreAsync(matches[0].Id, preview: false); }
                     catch when (Snapshot.NeedsProcess) { return true; }
                 }
             }
@@ -157,7 +194,22 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
         }
     }
 
-    public async Task SelectProcessAsync(int id, bool preview = true)
+    internal async Task StartConfiguredCoreAsync(CaptureProfile profile)
+    {
+        if (!profile.Enabled || string.IsNullOrWhiteSpace(profile.BodyExecutablePath)
+            || !profile.Rules.Selections.Any(x => x.Role == CaptureRole.Body) || OperationState.Active)
+            throw new InvalidOperationException("ゲームの記録設定と現在の接続状態を確認してください。");
+        var matches = GetProcesses().Where(x => string.Equals(x.Path, profile.BodyExecutablePath,
+            StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (matches.Length != 1)
+            throw new InvalidOperationException("記録対象のゲームを1つだけ起動してください。");
+        lock (_gate) { _profile = profile; _session = null; _operationVersion++; }
+        await SelectProcessCoreAsync(matches[0].Id, preview: false, requiredPath: profile.BodyExecutablePath);
+    }
+
+    public Task SelectProcessAsync(int id, bool preview = true) => RunOperationAsync(() => SelectProcessCoreAsync(id, preview));
+
+    internal async Task SelectProcessCoreAsync(int id, bool preview = true, string? requiredPath = null)
     {
         CaptureProfile profile;
         lock (_gate)
@@ -165,11 +217,15 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
             if (_connecting || _finishing) throw new InvalidOperationException("接続処理の完了を待ってください。");
             profile = _profile ?? throw new InvalidOperationException("ゲームが選択されていません。");
             _connecting = true;
+            _operationVersion++;
         }
         try
         {
-            await FinishAsync();
+            await FinishCoreAsync();
             profile = (await _store.GetCaptureProfilesAsync()).Single(x => x.Id == profile.Id);
+            if (requiredPath is not null && (!profile.Enabled || !profile.Rules.Selections.Any(x => x.Role == CaptureRole.Body)
+                || !string.Equals(profile.BodyExecutablePath, requiredPath, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException("ゲームの記録設定が更新されました。");
             var labels = await _store.GetCaptureLabelsAsync(profile.Id);
             lock (_gate)
             {
@@ -183,6 +239,13 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
             var candidate = GetProcesses().SingleOrDefault(x => x.Id == id)
                 ?? throw new InvalidOperationException("対象プロセスが見つかりません。");
             var process = Process.GetProcessById(id);
+            if (requiredPath is not null)
+            {
+                bool matches;
+                try { matches = string.Equals(process.MainModule?.FileName, requiredPath, StringComparison.OrdinalIgnoreCase); }
+                catch { process.Dispose(); throw; }
+                if (!matches) { process.Dispose(); throw new InvalidOperationException("起動中のゲームが変わりました。"); }
+            }
             process.EnableRaisingEvents = true;
             process.Exited += OnBodyExited;
             lock (_gate) { _body = process; _process = candidate; }
@@ -193,19 +256,22 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
                 if (!_active || _body != process) throw new InvalidOperationException("接続中にゲーム本体が終了しました。");
                 _connected = true; _status = "テスト受信中（保存しません）";
             }
-            if (!preview && profile.Rules.Selections.Any(x => x.Role == CaptureRole.Body)) await ConfirmProcessAsync();
+            if (!preview && profile.Rules.Selections.Any(x => x.Role == CaptureRole.Body))
+                await ConfirmProcessCoreAsync(persistSetup: requiredPath is null);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Capture connection failed. game={Game} pid={Pid}", profile.Id, id);
-            await FinishAsync();
+            await FinishCoreAsync();
             lock (_gate) { _needsProcess = true; _status = "接続失敗・選び直して再試行できます"; }
             throw;
         }
         finally { lock (_gate) _connecting = false; StateChanged?.Invoke(); }
     }
 
-    public async Task ConfirmProcessAsync()
+    public Task ConfirmProcessAsync() => RunOperationAsync(() => ConfirmProcessCoreAsync());
+
+    internal async Task ConfirmProcessCoreAsync(bool persistSetup = true)
     {
         CaptureProfile profile; CaptureProcess target; Process body;
         lock (_gate)
@@ -221,11 +287,12 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
         var session = await _store.BeginCaptureSessionAsync(profile.Id);
         try
         {
-            await _store.SaveCaptureProfileAsync(profile);
+            if (persistSetup) await _store.SaveCaptureProfileAsync(profile);
             lock (_gate)
             {
                 if (!_active || !_connected || _body != body) throw new InvalidOperationException("確定中に接続が終了しました。");
                 _profile = profile; _session = session; _preview = false; _paused = false; _pathEpoch++;
+                _operationVersion++;
                 _sequence = _received = _saved = _lost = 0;
                 _lastBodyPosition = new(session, 0, 0); _status = "記録中・受信待ち";
                 _buffer.Clear(); _attempted.Clear(); _bufferBytes = 0;
@@ -239,19 +306,18 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
 
     private async void OnBodyExited(object? sender, EventArgs args)
     {
-        lock (_gate) if (sender != _body) return;
-        await FinishAsync();
+        if (sender is Process process) await RunOperationAsync(() => FinishCoreAsync(process));
     }
 
     private void OnConnection(uint pid, bool connected)
     {
+        Process body;
         lock (_gate)
         {
-            if (_body?.Id != pid) return;
-            _connected = connected;
-            _status = connected ? (_preview ? "テスト受信中（保存しません）" : "記録中・受信待ち") : "切断されました";
+            if (_body is not { } current || current.Id != pid) return;
+            body = current;
         }
-        if (!connected) _ = FinishAsync();
+        if (!connected) _ = RunOperationAsync(() => FinishCoreAsync(body));
     }
 
     private void OnOutput(CaptureSource source, string text)
@@ -316,6 +382,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
             if (!_active || !_connected || _preview || _paused || _lastBodyPosition is null) throw new InvalidOperationException("取得中のゲームで区間を開始してください。");
             if (_rangeStart is not null) throw new InvalidOperationException("指定中の区間を終了または取り消してください。");
             _rangeStart = _lastBodyPosition;
+            _operationVersion++;
         }
     }
 
@@ -327,11 +394,15 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
             if (_rangeStart.CompareTo(_lastBodyPosition) >= 0) throw new InvalidOperationException("開始後の本文がまだ届いていません。");
             var selection = new CaptureRangeSelection(_profile.Id, _rangeStart, _lastBodyPosition);
             _rangeStart = null;
+            _operationVersion++;
             return selection;
         }
     }
 
-    public void CancelRange() { lock (_gate) _rangeStart = null; }
+    public void CancelRange()
+    {
+        lock (_gate) { _rangeStart = null; _operationVersion++; }
+    }
 
     public void BreakPath()
     {
@@ -340,6 +411,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
             RequireFormalConnection();
             if (_paused) throw new InvalidOperationException("記録を再開してから経路を区切ってください。");
             _pathEpoch++;
+            _operationVersion++;
             // Candidate backfill must not cross a user-declared path boundary.
             _buffer.Clear(); _bufferBytes = 0;
             _status = "次の本文から別経路で記録します";
@@ -354,6 +426,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
             RequireFormalConnection();
             if (_paused) return;
             _paused = true; _pathEpoch++;
+            _operationVersion++;
             _lastBodyPosition = null;
             _buffer.Clear(); _bufferBytes = 0;
             foreach (var key in _candidates.Keys.ToArray())
@@ -370,6 +443,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
             RequireFormalConnection();
             if (!_paused) return;
             _paused = false;
+            _operationVersion++;
             _status = "記録再開・次の本文から別経路";
         }
         StateChanged?.Invoke();
@@ -407,7 +481,10 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
         }
     }
 
-    public async Task SaveRulesAsync(CaptureRules rules, CaptureSource? selectedSource = null)
+    public Task SaveRulesAsync(CaptureRules rules, CaptureSource? selectedSource = null) =>
+        RunOperationAsync(() => SaveRulesCoreAsync(rules, selectedSource));
+
+    internal async Task SaveRulesCoreAsync(CaptureRules rules, CaptureSource? selectedSource = null)
     {
         CaptureProfile profile;
         lock (_gate) profile = _profile ?? throw new InvalidOperationException("ゲームが選択されていません。");
@@ -507,12 +584,15 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
         }
     }
 
-    public async Task FinishAsync()
+    public Task FinishAsync() => RunOperationAsync(() => FinishCoreAsync());
+
+    internal async Task FinishCoreAsync(Process? expectedBody = null)
     {
         Process? body; long? session;
         lock (_gate)
         {
-            if (!_active) return;
+            if (!_active || (expectedBody is not null && _body != expectedBody)) return;
+            _operationVersion++;
             _active = false; _finishing = true; _connected = false; _needsProcess = true; _preview = false; _paused = false;
             _rangeStart = null;
             body = _body; _body = null; session = _session;

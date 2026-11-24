@@ -6,6 +6,7 @@ public interface IScenarioScreenshotStore
 {
     Task<ScenarioScreenshot> SaveScreenshotAsync(ScreenshotTarget target, ScreenshotImageData image, DateTimeOffset capturedAt, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ScenarioScreenshot>> GetEventScreenshotsAsync(long captureGameId, CaptureEventKey key);
+    Task<byte[]> ReadEventScreenshotPngAsync(long captureGameId, CaptureEventKey key, string imageId);
     /// <summary>Reads only event/image metadata. Valid events without attachments return an empty image list; invalid references fail.</summary>
     Task<IReadOnlyList<ScenarioScreenshotEventMetadata>> GetEventScreenshotMetadataAsync(long captureGameId,
         IReadOnlyCollection<CaptureEventKey> events, CancellationToken cancellationToken = default);

@@ -41,6 +41,140 @@ public sealed class ScenarioScreenshotServiceTests : IAsyncDisposable
             new(Name.HookCode, Name.HookName, Name.Context, Name.Context2, CaptureRole.Name)] });
     }
 
+    private PlayRecordingOperations Play => new(_capture, _store, _screenshots, _store);
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "PCで始めWebで終了した同じ区間の同時保存は、固定された本文の境界で一度だけ成功する"
+    // oracle = { type = "contract", ref = "WithMate Session Graph play-recording-web / play-recording-web-sharing-proposal; README.md: シナリオ抽出" }
+    // fault = "端末ごとに区間状態を分ける、保存時の最新本文で終了位置を置き換える、または同じ確定区間を二重作成する"
+    // observable = "PCとWebが取得する区間選択、競合時の成功数、SQLiteの保存区間の件数・境界・タグ"
+    // observation_boundary = "public-boundary"
+    // scope = "shared live range from desktop start through web freeze and concurrent save"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task DesktopAndWebSaveTheSameFrozenLiveRangeOnlyOnce()
+    {
+        await BeginPreviewAsync(); await _capture.ConfirmProcessAsync();
+        var play = Play;
+        var profile = _capture.Snapshot.Profile!.Id;
+        var start = PlayRecordingOperations.DesktopTarget(_capture.Snapshot, profile);
+        await play.StartDesktopRangeAsync(start);
+        var live = await play.GetStateAsync("game");
+        Assert.NotNull(live.RangeStart);
+        Assert.False(live.CanEndRange);
+        _host.Emit(Body, "この本文で終了");
+        var frozen = await play.EndRangeAsync("game", live.Target);
+        var ready = await play.GetStateAsync("game");
+        Assert.Same(frozen, ready.PendingRange);
+        Assert.Same(frozen, await play.GetDesktopPendingRangeAsync(ready.Target));
+        _host.Emit(Body, "保存操作までに届いた次の本文");
+
+        static async Task<bool> Saved(Task<long> call)
+        {
+            try { return await call > 0; }
+            catch (InvalidOperationException) { return false; }
+        }
+        var successes = await Task.WhenAll(
+            Saved(play.SaveDesktopRangeAsync(ready.Target, frozen, "PC", ["PC"])),
+            Saved(play.SaveRangeAsync("game", ready.Target, frozen, "Web", ["Web"])));
+        Assert.Single(successes, saved => saved);
+        var after = await play.GetStateAsync("game");
+        Assert.Null(after.PendingRange);
+        var range = Assert.Single(await play.GetRangesAsync("game", after.Target));
+        Assert.Equal(frozen.Start, range.Start);
+        Assert.Equal(frozen.End, range.End);
+        Assert.Equal(1, range.End.Sequence);
+        Assert.Equal(range.Name, Assert.Single(range.Tags));
+        Assert.Single(await _store.GetGameCaptureItemsAsync(profile, rangeId: range.Id));
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "取得を終了して別ゲームに切り替えた場合と同じゲームの新しい取得回で、以前のWeb表示・区間を再利用できない"
+    // oracle = { type = "contract", ref = "WithMate Session Graph play-recording-web / play-web-product-coordination; play-web-recording-operations-work" }
+    // fault = "gameId一致だけで古いボタンを受け入れる、他ゲーム取得中に旧選択を書き込む、または取消済み区間を保存する"
+    // observable = "各操作の拒否、現在の取得回IDと取得状態、旧本文の可読性、両ゲームの保存区間件数"
+    // observation_boundary = "public-boundary"
+    // scope = "capture lifecycle, re-entry for the same configured game, and range cancellation"
+    // lifecycle = "permanent"
+    // risk_tags = ["authorization"]
+    // @end-test-value
+    [Fact]
+    public async Task OldTargetsCannotActAfterCancellationOrSameGameReentry()
+    {
+        await BeginPreviewAsync(); await _capture.ConfirmProcessAsync();
+        var play = Play;
+        var first = await play.GetStateAsync("game");
+        await play.StartRangeAsync("game", first.Target);
+        _host.Emit(Body, "初回本文");
+        var collecting = await play.GetStateAsync("game");
+        var frozen = await play.EndRangeAsync("game", collecting.Target);
+        var draft = await play.GetStateAsync("game");
+        await play.CancelDesktopRangeAsync(draft.Target);
+        var cancelled = await play.GetStateAsync("game");
+        Assert.Null(cancelled.PendingRange);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => play.SaveRangeAsync("game", cancelled.Target, frozen, "取消済み", []));
+        await play.FinishAsync("game", cancelled.Target);
+        await BeginPreviewAsync("other"); await _capture.ConfirmProcessAsync();
+        var blocked = await play.GetStateAsync("game");
+        Assert.False(blocked.CanStart);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => play.GetItemsAsync("game", blocked.Target));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => play.FinishAsync("game", draft.Target));
+        var other = await play.GetStateAsync("other");
+        Assert.True(other.Recording);
+        await play.FinishAsync("other", other.Target);
+
+        var beforeRestart = await play.GetStateAsync("game");
+        Assert.True(beforeRestart.CanStart);
+        await play.StartAsync("game", beforeRestart.Target);
+        var restarted = await play.GetStateAsync("game");
+        Assert.True(restarted.Recording);
+        Assert.NotEqual(first.Target.SessionId, restarted.Target.SessionId);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => play.PauseAsync("game", first.Target));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => play.StartRangeAsync("game", cancelled.Target));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => play.SaveRangeAsync("game", restarted.Target, frozen, "旧取得回", []));
+        Assert.Empty(await play.GetRangesAsync("game", restarted.Target));
+        Assert.Empty(await _store.GetCaptureRangesAsync(other.Target.ProfileId));
+        Assert.Equal("初回本文", Assert.Single((await play.GetItemsAsync("game", restarted.Target)).Items).Text);
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "Web撮影はゲーム窓専用経路を使い、許可ゲームの対象本文に添付したPNGだけを返す"
+    // oracle = { type = "contract", ref = "WithMate Session Graph play-recording-web / play-web-product-coordination; play-web-recording-operations-work" }
+    // fault = "PCで手動指定した別PID窓やデスクトップ画素を取得する、または他ゲームや異なる本文の画像IDを読み出す"
+    // observable = "platformの使用経路と対象窓、範囲内のPNGバイト、別本文・別ゲームの読取拒否"
+    // observation_boundary = "public-boundary"
+    // scope = "game-only screenshot source and reading the exact game, event and image association"
+    // lifecycle = "permanent"
+    // risk_tags = ["authorization", "privacy"]
+    // @end-test-value
+    [Fact]
+    public async Task GameScreenshotIgnoresDesktopWindowOverrideAndCannotBeReadFromAnotherEvent()
+    {
+        await BeginPreviewAsync(); await _capture.ConfirmProcessAsync();
+        var play = Play;
+        var state = await play.GetStateAsync("game");
+        _screenshots.SelectWindow(_platform.Windows[1]);
+        _host.Emit(Body, "撮影対象");
+        var key = _capture.FreezeScreenshotTarget().Target.Event;
+        await play.TakeScreenshotAsync("game", state.Target);
+        Assert.Empty(_platform.Captured);
+        Assert.Equal(_platform.Windows[0], Assert.Single(_platform.GameWindowsCaptured));
+        var image = Assert.Single(await play.GetScreenshotsAsync("game", state.Target, key));
+        Assert.Equal(FakePlatform.Frame.PngBytes, await play.ReadScreenshotAsync("game", state.Target, key, image.ImageId));
+        _host.Emit(Body, "画像なし本文");
+        await _capture.FlushPendingAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => play.ReadScreenshotAsync("game", state.Target,
+            key with { Sequence = key.Sequence + 1 }, image.ImageId));
+        await play.FinishAsync("game", state.Target);
+        await BeginPreviewAsync("other"); await _capture.ConfirmProcessAsync();
+        var other = await play.GetStateAsync("other");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => play.ReadScreenshotAsync("other", other.Target, key, image.ImageId));
+    }
+
     // @test-value v2
     // kind = "invariant"
     // claim = "テスト受信・本文未受信・名前のみ・空本文・終了後は撮影せず、空白だけの本文は保存しても撮影対象を進めない"
@@ -454,6 +588,7 @@ public sealed class ScenarioScreenshotServiceTests : IAsyncDisposable
             return await inner.SaveScreenshotAsync(target, image, capturedAt, cancellationToken);
         }
         public Task<IReadOnlyList<ScenarioScreenshot>> GetEventScreenshotsAsync(long game, CaptureEventKey key) => inner.GetEventScreenshotsAsync(game, key);
+        public Task<byte[]> ReadEventScreenshotPngAsync(long game, CaptureEventKey key, string imageId) => inner.ReadEventScreenshotPngAsync(game, key, imageId);
         public Task<IReadOnlyList<ScenarioScreenshotEventMetadata>> GetEventScreenshotMetadataAsync(long game, IReadOnlyCollection<CaptureEventKey> keys, CancellationToken cancellationToken = default) => inner.GetEventScreenshotMetadataAsync(game, keys, cancellationToken);
         public Task<IReadOnlyDictionary<CaptureEventKey, int>> GetScreenshotCountsAsync(long game, IReadOnlyCollection<CaptureEventKey> keys) => inner.GetScreenshotCountsAsync(game, keys);
         public Task<ScreenshotCleanupResult> CleanupUnreferencedScreenshotsAsync() => inner.CleanupUnreferencedScreenshotsAsync();
@@ -478,6 +613,7 @@ public sealed class ScenarioScreenshotServiceTests : IAsyncDisposable
             Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l1sAAAAASUVORK5CYII="), new string('a', 64));
         public CaptureWindow[] Windows = [new((nint)1, Environment.ProcessId, "test-body", "本文窓"), new((nint)2, int.MaxValue, "separate-renderer", "別PID描画窓")];
         public List<CaptureWindow> Captured = [];
+        public List<CaptureWindow> GameWindowsCaptured = [];
         public List<ScreenshotHotkey> RegisteredKeys = [];
         public HashSet<ScreenshotHotkey> FailedKeys = [];
         public ScreenshotHotkey? ActiveKey;
@@ -491,6 +627,11 @@ public sealed class ScenarioScreenshotServiceTests : IAsyncDisposable
             Captured.Add(target);
             var next = _nextFrame; _nextFrame = null;
             return next?.Task.WaitAsync(cancellationToken) ?? Task.FromResult(Frame);
+        }
+        public Task<ScenarioScreenshotFrame> CaptureGameWindowAsync(CaptureWindow target, CancellationToken cancellationToken = default)
+        {
+            GameWindowsCaptured.Add(target);
+            return Task.FromResult(Frame);
         }
         public Task RegisterHotkeyAsync(ScreenshotHotkey hotkey, Action callback)
         {

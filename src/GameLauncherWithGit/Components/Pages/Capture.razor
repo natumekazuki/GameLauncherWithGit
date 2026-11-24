@@ -11,9 +11,21 @@
 @inject IScenarioSceneFlowStore SceneStore
 @inject ScenarioScreenshotService Screenshots
 @inject ScenarioCaptureService CaptureService
+@inject PlayRecordingOperations RecordingOperations
 @inject IPathPickerService Picker
 @inject IJSRuntime JS
 
+@{
+    var displayedLive = PlayRecordingOperations.DesktopTarget(_snapshot, _snapshot.Profile?.Id ?? 0);
+    var displayedProfile = PlayRecordingOperations.DesktopTarget(_snapshot, _profileId);
+    var displayedPaused = _snapshot.Paused;
+    var displayedProcessId = _processId;
+    var displayedPending = _pendingLiveRange;
+    var displayedDraft = _rangeSelection;
+    var displayedDraftTarget = _rangeDraftTarget;
+    var displayedFirst = _rangeFirst;
+    var displayedLast = _rangeLast;
+}
 <PageTitle>シナリオ抽出</PageTitle>
 <section class="capture-page">
     <header class="capture-header">
@@ -34,14 +46,21 @@
             <div class="capture-livebar">
                 <strong class="capture-game-title">@(_snapshot.Profile?.Title ?? "ゲームなし")</strong>
                 <div class="capture-recording-actions" aria-label="記録と経路">
-                    <button class="secondary-button capture-icon-button" title="@(_snapshot.Paused ? "記録を再開（次の本文から別経路）" : "記録を一時停止")" aria-label="@(_snapshot.Paused ? "記録を再開" : "記録を一時停止")" aria-pressed="@(_snapshot.Paused ? "true" : "false")" @onclick="ToggleRecordingPauseAsync" disabled="@(_busy || !_snapshot.Connected || _snapshot.Preview)"><CaptureIcon Name="@(_snapshot.Paused ? "Play" : "Pause")" /></button>
-                    <button class="secondary-button capture-icon-button" title="ここで経路を区切る（次の本文から別経路）" aria-label="ここで経路を区切る" @onclick="BreakLivePathAsync" disabled="@(_busy || !_snapshot.Recording)"><CaptureIcon Name="PathBreak" /></button>
+                    <button class="secondary-button capture-icon-button" title="@(_snapshot.Paused ? "記録を再開（次の本文から別経路）" : "記録を一時停止")" aria-label="@(_snapshot.Paused ? "記録を再開" : "記録を一時停止")" aria-pressed="@(_snapshot.Paused ? "true" : "false")" @onclick="() => ToggleRecordingPauseAsync(displayedLive, !displayedPaused)" disabled="@(_busy || !_snapshot.Connected || _snapshot.Preview)"><CaptureIcon Name="@(_snapshot.Paused ? "Play" : "Pause")" /></button>
+                    <button class="secondary-button capture-icon-button" title="ここで経路を区切る（次の本文から別経路）" aria-label="ここで経路を区切る" @onclick="() => BreakLivePathAsync(displayedLive)" disabled="@(_busy || !_snapshot.Recording)"><CaptureIcon Name="PathBreak" /></button>
                 </div>
                 <div class="capture-play-range" aria-label="プレイ中の区間指定">
                     <span class="capture-range-caption">区間</span>
-                    <button class="launch-button capture-icon-button" title="区間を開始" aria-label="ここから開始" @onclick="StartLiveRangeAsync" disabled="@(_busy || !_snapshot.Recording || _snapshot.RangeStart is not null)"><CaptureIcon Name="Play" /></button>
-                    <button class="launch-button capture-icon-button" title="区間を終了" aria-label="ここまでで終了" @onclick="EndLiveRangeAsync" disabled="@(_busy || _snapshot.RangeStart is null)"><CaptureIcon Name="Stop" /></button>
-                    <button class="secondary-button capture-icon-button" title="区間指定を取消" aria-label="区間指定を取消" @onclick="CancelLiveRange" disabled="@(_busy || _snapshot.RangeStart is null)"><CaptureIcon Name="Close" /></button>
+                    <button class="launch-button capture-icon-button" title="区間を開始" aria-label="ここから開始" @onclick="() => StartLiveRangeAsync(displayedLive)" disabled="@(_busy || !_snapshot.Recording || _snapshot.RangeStart is not null || displayedPending is not null)"><CaptureIcon Name="Play" /></button>
+                    @if (displayedPending is null)
+                    {
+                        <button class="launch-button capture-icon-button" title="区間を終了" aria-label="ここまでで終了" @onclick="() => EndLiveRangeAsync(displayedLive)" disabled="@(_busy || !_snapshot.RangeCanEnd)"><CaptureIcon Name="Stop" /></button>
+                    }
+                    else
+                    {
+                        <button class="launch-button capture-icon-button" title="区間を保存" aria-label="固定した区間を保存" @onclick="() => OpenRangeDraft(displayedPending, displayedLive)" disabled="@_busy"><CaptureIcon Name="Save" /></button>
+                    }
+                    <button class="secondary-button capture-icon-button" title="区間指定を取消" aria-label="区間指定を取消" @onclick="() => CancelLiveRangeAsync(displayedLive)" disabled="@(_busy || (_snapshot.RangeStart is null && displayedPending is null))"><CaptureIcon Name="Close" /></button>
                 </div>
                 <div class="capture-live-details">
                     <span class="capture-connection" role="status" title="@_snapshot.Status">@_snapshot.Status</span>
@@ -103,7 +122,7 @@
                 </div>
                 <div class="capture-tool-group" aria-label="本文で区間指定" inert="@_flowOpen">
                     <button class="secondary-button capture-icon-button" title="本文から区間を指定" aria-label="本文で区間指定" aria-pressed="@(_pickingRange ? "true" : "false")" @onclick="ToggleTextRange" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Pick" /></button>
-                    <button class="secondary-button capture-icon-button" title="区間を保存" aria-label="区間を保存" @onclick="OpenTextRange" disabled="@(_busy || !TextRangeValid)"><CaptureIcon Name="Save" /></button>
+                    <button class="secondary-button capture-icon-button" title="区間を保存" aria-label="区間を保存" @onclick="() => OpenTextRangeAsync(displayedProfile, displayedFirst, displayedLast)" disabled="@(_busy || !TextRangeValid)"><CaptureIcon Name="Save" /></button>
                     <button class="secondary-button capture-icon-button" title="本文の区間指定を解除" aria-label="本文の区間指定を解除" @onclick="ClearTextRangeAsync" disabled="@(_busy || !_pickingRange)"><CaptureIcon Name="Close" /></button>
                     <button class="secondary-button capture-icon-button" title="選択範囲を独立したフローチャートにする" aria-label="選択範囲を独立したフローチャートにする" @onclick="OpenIndependentFlow" disabled="@(_busy || !TextRangeValid)"><CaptureIcon Name="Flow" /></button>
                 </div>
@@ -302,7 +321,7 @@
             {
                 <div class="capture-history-section" role="status">
                     <p>このゲームは取得中です。削除するには取得を停止してください。ゲーム自体は終了しません。</p>
-                    <button class="secondary-button capture-text-button" @onclick="StopHistoryCaptureAsync" disabled="@_busy"><CaptureIcon Name="Stop" />取得を停止</button>
+                    <button class="secondary-button capture-text-button" @onclick="() => StopHistoryCaptureAsync(displayedProfile)" disabled="@_busy"><CaptureIcon Name="Stop" />取得を停止</button>
                 </div>
             }
         </div>
@@ -328,9 +347,8 @@
 {
     <div class="modal-backdrop"><section id="capture-editor" class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-range-title">
         <header class="capture-dialog-header"><h2 id="capture-range-title">区間</h2><button class="secondary-button capture-icon-button" title="キャンセル" aria-label="キャンセル" @onclick="CloseEditors" disabled="@_busy"><CaptureIcon Name="Close" /></button></header>
-        <label>名前<input @bind="_rangeName" /></label>
-        <CaptureTagsEditor Label="区間タグ" @bind-Tags="_rangeTags" AvailableTags="AvailableRangeTags" SuggestedTags="_gameSpeakers" Disabled="_busy" />
-        <div class="capture-dialog-actions"><button class="launch-button capture-icon-button" title="保存" aria-label="保存" @onclick="SaveRangeAsync" disabled="@_busy"><CaptureIcon Name="Check" /></button></div>
+        <CaptureRangeFields @bind-Name="_rangeName" @bind-Tags="_rangeTags" AvailableTags="AvailableRangeTags" SuggestedTags="_gameSpeakers" Disabled="_busy" />
+        <div class="capture-dialog-actions"><button class="launch-button capture-icon-button" title="保存" aria-label="保存" @onclick="() => SaveRangeAsync(displayedDraftTarget!, displayedDraft!)" disabled="@_busy"><CaptureIcon Name="Check" /></button></div>
     </section></div>
 }
 
@@ -363,7 +381,7 @@
                         <div class="capture-process-list" aria-label="ゲーム本体プロセス" role="group">
                             @foreach (var process in VisibleProcesses)
                             {
-                                <button class="capture-process secondary-button" aria-pressed="@(process.Id == _processId ? "true" : "false")" @onclick="() => SelectProcess(process.Id)" disabled="@(_busy || _snapshot.Connecting)">
+                                <button class="capture-process secondary-button" aria-pressed="@(process.Id == _processId ? "true" : "false")" @onclick="() => SelectProcess(process.Id, displayedLive)" disabled="@(_busy || _snapshot.Connecting || displayedLive != _settingsTarget)">
                                     <strong>@(string.IsNullOrEmpty(process.WindowTitle) ? process.Name : process.WindowTitle)</strong>
                                     <span>@process.Name · PID @process.Id</span><small>@process.Path</small>
                                 </button>
@@ -372,7 +390,7 @@
                         </div>
                         <div class="capture-process-action">
                             <span class="capture-setting-status">@(_snapshot.Connected && !_snapshot.Preview ? "切替は現在の記録を終了" : "")</span>
-                            <button class="launch-button capture-text-button" @onclick="ConnectAsync" disabled="@(_busy || _snapshot.Connecting || _windowCountdown > 0 || SelectedProcess is null || _snapshot.Profile is null)"><CaptureIcon Name="Link" />テスト接続</button>
+                            <button class="launch-button capture-text-button" @onclick="() => ConnectAsync(displayedLive, displayedProcessId)" disabled="@(_busy || _snapshot.Connecting || _windowCountdown > 0 || SelectedProcess is null || _snapshot.Profile is null || displayedLive != _settingsTarget)"><CaptureIcon Name="Link" />テスト接続</button>
                         </div>
                     </section>
             }
@@ -445,7 +463,7 @@
             }
             else if (_live && _snapshot.Preview)
             {
-                <button class="launch-button capture-text-button" @onclick="ConfirmProcessAsync" disabled="@(_busy || !_snapshot.Connected || !_snapshot.Preview || !_snapshot.Candidates.Any(x => x.Role == CaptureRole.Body))"><CaptureIcon Name="Check" />確定して記録</button>
+                <button class="launch-button capture-text-button" @onclick="() => ConfirmProcessAsync(displayedLive)" disabled="@(_busy || !_snapshot.Connected || !_snapshot.Preview || !_snapshot.Candidates.Any(x => x.Role == CaptureRole.Body))"><CaptureIcon Name="Check" />確定して記録</button>
             }
             else
             {
@@ -594,7 +612,10 @@
     private List<PartDraft> _parts = [];
     private bool _pickingRange;
     private CaptureTextItem? _rangeFirst, _rangeLast;
-    private CaptureRangeSelection? _rangeSelection;
+    private PlayRecordingRangeSelection? _rangeSelection, _pendingLiveRange;
+    private PlayRecordingTarget? _rangeDraftTarget;
+    private PlayRecordingTarget? _settingsTarget;
+    private long _rangeListsVersion = -1;
     private string _rangeName = "";
     private bool EditorOpen => _sceneEditorOpen || _independentFlowConfirm || _exportOpen || _screenshotSettingsOpen || _screenshotItem is not null || _settingsOpen || _bulkOpen || _edit is not null || _partition is not null || _rangeSelection is not null || _historyDialog != HistoryDialog.None;
     private bool FollowingView => _live && _rangeId == 0 && !_pickingRange;
@@ -675,6 +696,11 @@
                 {
                     _profileId = _snapshot.Profile?.Id ?? 0; _profiles = await Store.GetCaptureProfilesAsync(); await LoadProfileAsync();
                 }
+                if (!_busy)
+                {
+                    try { await RefreshRangeStateAsync(next); }
+                    catch (InvalidOperationException) when (CaptureService.Snapshot.OperationVersion != next.OperationVersion) { }
+                }
                 if (FollowingView && _following && !_busy && !EditorOpen && _selected.Count == 0)
                 { await LoadItemsAsync(); _scrollToEnd = true; }
                 else if (!_busy && Screenshots.Snapshot.SavedCount != _countsSavedCount)
@@ -698,6 +724,7 @@
         _sceneEditorOpen = false; _flowOpen = false; _flowGraph = null; _flowHighlighted = null;
         _profile = _profiles.FirstOrDefault(x => x.Id == _profileId);
         _labels = _profile is null ? [] : await Store.GetCaptureLabelsAsync(_profile.Id);
+        _rangeListsVersion = -1;
         _ranges = _profile is null ? [] : await Store.GetCaptureRangesAsync(_profile.Id);
         await LoadTagChoicesAsync();
         _rangeId = 0; _rangeFirst = _rangeLast = null; _pickingRange = false;
@@ -706,6 +733,15 @@
         _exportIncludeTags = _exportExcludeTags = [];
         if (_profile is not null) { _split = _profile.Rules.SplitDialogue; _outside = _profile.Rules.OutsideIsNarration; }
         await LoadItemsAsync();
+    }
+    private async Task RefreshRangeStateAsync(CaptureSnapshot displayed)
+    {
+        _pendingLiveRange = _live && _profileId != 0 && displayed.Profile?.Id == _profileId
+            ? await RecordingOperations.GetDesktopPendingRangeAsync(PlayRecordingOperations.DesktopTarget(displayed, _profileId)) : null;
+        if (_profileId == 0 || _rangeListsVersion == displayed.OperationVersion) return;
+        _ranges = await Store.GetCaptureRangesAsync(_profileId);
+        await LoadTagChoicesAsync();
+        _rangeListsVersion = displayed.OperationVersion;
     }
     private async Task LoadItemsAsync()
     {
@@ -775,10 +811,10 @@
         _deletionTargets = await Store.GetCaptureDeletionTargetsAsync(_profileId, _selected.ToArray());
         _historyDialog = HistoryDialog.DeleteSelected; _focusEditor = true;
     });
-    private Task StopHistoryCaptureAsync() => RunAsync(async () =>
+    private Task StopHistoryCaptureAsync(PlayRecordingTarget expected) => RunAsync(async () =>
     {
         if (!HistoryCaptureActive) return;
-        await CaptureService.FinishAsync(); _snapshot = CaptureService.Snapshot;
+        await RecordingOperations.FinishDesktopAsync(expected); _snapshot = CaptureService.Snapshot;
         _historyCounts = await Store.GetCaptureHistoryCountsAsync(_profileId);
         _focusHistoryContent = true;
     }, "取得を停止しました。ゲームは実行中のままです。");
@@ -830,12 +866,12 @@
         _textSearchInput = _textSearch = _speakerSearchInput = _speakerSearch = "";
         await SceneFlowChangedAsync(); await LoadItemsAsync(); _scrollToEnd = false;
     });
-    private Task ToggleRecordingPauseAsync() => RunAsync(() =>
+    private Task ToggleRecordingPauseAsync(PlayRecordingTarget expected, bool pause) => RunAsync(async () =>
     {
-        if (_snapshot.Paused) CaptureService.ResumeRecording(); else CaptureService.PauseRecording();
-        _snapshot = CaptureService.Snapshot; return Task.CompletedTask;
+        await RecordingOperations.PauseDesktopAsync(expected, pause);
+        _snapshot = CaptureService.Snapshot;
     });
-    private Task BreakLivePathAsync() => RunAsync(() => { CaptureService.BreakPath(); _snapshot = CaptureService.Snapshot; return Task.CompletedTask; });
+    private Task BreakLivePathAsync(PlayRecordingTarget expected) => RunAsync(async () => { await RecordingOperations.BreakDesktopPathAsync(expected); _snapshot = CaptureService.Snapshot; });
     private Task ToggleFlowAsync() => RunAsync(async () => { _flowOpen = !_flowOpen; if (_flowOpen) { _following = false; await LoadFlowAsync(); } });
     private async Task LoadFlowAsync()
     {
@@ -885,9 +921,16 @@
     private Task ShowHistoryAsync() => RunAsync(async () => { _live = false; _profiles = await Store.GetCaptureProfilesAsync(); await LoadProfileAsync(); _scrollToEnd = false; });
     private Task ShowLiveAsync() => RunAsync(async () => { _snapshot = CaptureService.Snapshot; _live = true; _following = true; _profileId = _snapshot.Profile?.Id ?? 0; _profiles = await Store.GetCaptureProfilesAsync(); await LoadProfileAsync(); _scrollToEnd = true; });
     private Task FollowAsync() => RunAsync(async () => { _following = true; await LoadItemsAsync(); _scrollToEnd = true; });
-    private Task StartLiveRangeAsync() => RunAsync(() => { CaptureService.StartRange(); _snapshot = CaptureService.Snapshot; return Task.CompletedTask; });
-    private Task EndLiveRangeAsync() => RunAsync(() => { _rangeSelection = CaptureService.EndRange(); _snapshot = CaptureService.Snapshot; _rangeName = ""; _rangeTags = []; _focusEditor = true; return Task.CompletedTask; });
-    private void CancelLiveRange() { CaptureService.CancelRange(); _snapshot = CaptureService.Snapshot; }
+    private Task StartLiveRangeAsync(PlayRecordingTarget expected) => RunAsync(async () =>
+    { await RecordingOperations.StartDesktopRangeAsync(expected); _snapshot = CaptureService.Snapshot; });
+    private Task EndLiveRangeAsync(PlayRecordingTarget expected) => RunAsync(async () =>
+    {
+        _pendingLiveRange = await RecordingOperations.EndDesktopRangeAsync(expected);
+        _snapshot = CaptureService.Snapshot;
+        OpenRangeDraft(_pendingLiveRange, _pendingLiveRange.Target);
+    });
+    private Task CancelLiveRangeAsync(PlayRecordingTarget expected) => RunAsync(async () =>
+    { await RecordingOperations.CancelDesktopRangeAsync(expected); _pendingLiveRange = null; _snapshot = CaptureService.Snapshot; });
     private Task ToggleTextRange() => RunAsync(async () =>
     {
         _pickingRange = !_pickingRange; _selected.Clear(); _following = false;
@@ -905,17 +948,24 @@
     }
     private void ValidateTextRange() => _error = _rangeFirst is not null && _rangeLast is not null && !TextRangeValid
         ? "開始より後の終了位置を選んでください。" : null;
-    private void OpenTextRange()
+    private void OpenRangeDraft(PlayRecordingRangeSelection selection, PlayRecordingTarget expected)
     {
-        if (!TextRangeValid) return;
-        _rangeSelection = new(_profileId, _rangeFirst!.StartPosition, _rangeLast!.EndPosition); _rangeName = ""; _rangeTags = []; _focusEditor = true;
+        _rangeSelection = selection;
+        _rangeDraftTarget = expected;
+        _rangeName = ""; _rangeTags = []; _focusEditor = true;
     }
-    private Task SaveRangeAsync() => RunAsync(async () =>
+    private Task OpenTextRangeAsync(PlayRecordingTarget expected, CaptureTextItem? first, CaptureTextItem? last) => RunAsync(async () =>
     {
-        if (_rangeSelection is null) return;
-        await CaptureService.FlushPendingAsync();
-        await Store.SaveCaptureRangeAsync(_rangeSelection.CaptureGameId, _rangeName, _rangeSelection.Start, _rangeSelection.End, _rangeTags);
-        if (_profileId == _rangeSelection.CaptureGameId) _ranges = await Store.GetCaptureRangesAsync(_profileId);
+        if (first is null || last is null) return;
+        OpenRangeDraft(await RecordingOperations.SelectDesktopRangeAsync(expected, first, last), expected);
+    });
+    private Task SaveRangeAsync(PlayRecordingTarget expected, PlayRecordingRangeSelection draft) => RunAsync(async () =>
+    {
+        if (!ReferenceEquals(draft, _rangeSelection) || expected != _rangeDraftTarget || _profileId != draft.CaptureGameId)
+            throw new InvalidOperationException("表示中の区間が変わりました。選び直してください。");
+        await RecordingOperations.SaveDesktopRangeAsync(expected, draft, _rangeName, _rangeTags);
+        _snapshot = CaptureService.Snapshot;
+        await RefreshRangeStateAsync(_snapshot);
         CloseEditors(); ClearTextRange(); _offset = 0; await LoadItemsAsync();
     }, "区間を保存しました。");
     private void ClearSelection() => _selected.Clear();
@@ -923,6 +973,7 @@
     private void OpenSettings()
     {
         _settingsOpen = true; _settingsTab = !_live ? 2 : _snapshot.Connected ? 1 : 0; _focusEditor = true;
+        _settingsTarget = PlayRecordingOperations.DesktopTarget(_snapshot, _snapshot.Profile?.Id ?? 0);
         _candidateKey = _snapshot.Candidates.FirstOrDefault()?.Source.Key ?? ""; _processId = _snapshot.Process?.Id ?? 0;
         _pausedCandidates = null; _sourceSearch = ""; FindProcesses();
     }
@@ -934,6 +985,7 @@
     private async Task PickWindowAsync()
     {
         CancelWindowPick(); _error = null;
+        var expected = _settingsTarget;
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
         _windowPick = cancellation;
         try
@@ -943,6 +995,9 @@
                 StateHasChanged();
                 await Task.Delay(1000, cancellation.Token);
             }
+            var current = CaptureService.Snapshot;
+            if (expected != PlayRecordingOperations.DesktopTarget(current, current.Profile?.Id ?? 0))
+                throw new InvalidOperationException("記録対象が変わりました。抽出設定を開き直してください。");
             var process = CaptureService.GetForegroundProcess()
                 ?? throw new InvalidOperationException("ゲーム画面を選択できませんでした。前面にして再試行するか、一覧から選択してください。");
             FindProcesses();
@@ -955,24 +1010,28 @@
     }
     private void CancelWindowPick() { _windowPick?.Cancel(); _windowPick = null; _windowCountdown = 0; }
     private void SetSettingsTab(int tab) { CancelWindowPick(); _settingsTab = tab; _focusSettingsTab = true; }
-    private void SelectProcess(int id) { CancelWindowPick(); _processId = id; }
+    private void SelectProcess(int id, PlayRecordingTarget expected)
+    { if (expected == _settingsTarget) { CancelWindowPick(); _processId = id; } }
     private void ToggleSourcePause() => _pausedCandidates = _pausedCandidates is null ? _snapshot.Candidates : null;
     private void ChangeProcessMode(ChangeEventArgs e) => _windowsOnly = e.Value?.ToString() == "window";
-    private Task ConnectAsync() => RunAsync(async () =>
+    private Task ConnectAsync(PlayRecordingTarget expected, int processId) => RunAsync(async () =>
     {
-        if (SelectedProcess is null) throw new InvalidOperationException("一覧からゲーム本体を選択してください。");
-        try { await CaptureService.SelectProcessAsync(_processId); }
+        if (expected != _settingsTarget || SelectedProcess?.Id != processId)
+            throw new InvalidOperationException("抽出設定を開き直し、一覧からゲーム本体を選択してください。");
+        try { await RecordingOperations.ConnectDesktopAsync(expected, processId); }
         finally
         {
             _snapshot = CaptureService.Snapshot; _candidateKey = ""; _pausedCandidates = null; _sourceSearch = ""; _profile = _snapshot.Profile;
             if (_profile is not null) { _split = _profile.Rules.SplitDialogue; _outside = _profile.Rules.OutsideIsNarration; }
         }
+        _settingsTarget = PlayRecordingOperations.DesktopTarget(_snapshot, _snapshot.Profile?.Id ?? 0);
         SetSettingsTab(1);
     });
-    private Task ConfirmProcessAsync() => RunAsync(async () =>
+    private Task ConfirmProcessAsync(PlayRecordingTarget expected) => RunAsync(async () =>
     {
-        await ApplyRulesAsync();
-        await CaptureService.ConfirmProcessAsync(); _snapshot = CaptureService.Snapshot; _profile = _snapshot.Profile; _pausedCandidates = null;
+        if (expected != _settingsTarget) throw new InvalidOperationException("記録対象が変わりました。抽出設定を開き直してください。");
+        await ApplyRulesAsync(expected);
+        await RecordingOperations.ConfirmDesktopAsync(expected); _snapshot = CaptureService.Snapshot; _profile = _snapshot.Profile; _pausedCandidates = null;
         _profiles = await Store.GetCaptureProfilesAsync(); await LoadItemsAsync();
         CloseEditors();
     }, "記録を開始しました。");
@@ -999,18 +1058,23 @@
         var selections = _profile.Rules.Selections.Where(x => !x.Matches(candidate.Source)).Append(new(candidate.Source.HookCode, candidate.Source.HookName, candidate.Source.Context, candidate.Source.Context2, role, label)).ToArray();
         await PersistRulesAsync(_profile.Rules with { Selections = selections }, candidate.Source); _snapshot = CaptureService.Snapshot;
     });
-    private Task PreviewRulesAsync() => _snapshot.Preview ? RunAsync(ApplyRulesAsync) : Task.CompletedTask;
-    private Task SaveRulesAsync() => RunAsync(ApplyRulesAsync, "新着に適用しました。");
-    private async Task ApplyRulesAsync()
+    private Task PreviewRulesAsync() => _snapshot.Preview ? RunAsync(() => ApplyRulesAsync()) : Task.CompletedTask;
+    private Task SaveRulesAsync() => RunAsync(() => ApplyRulesAsync(), "新着に適用しました。");
+    private async Task ApplyRulesAsync(PlayRecordingTarget? expected = null)
     {
         if (_profile is null) return;
-        await PersistRulesAsync(_profile.Rules with { SplitDialogue = _split, OutsideIsNarration = _outside });
+        await PersistRulesAsync(_profile.Rules with { SplitDialogue = _split, OutsideIsNarration = _outside }, expected: expected);
         _snapshot = CaptureService.Snapshot;
     }
-    private async Task PersistRulesAsync(CaptureRules rules, CaptureSource? selectedSource = null)
+    private async Task PersistRulesAsync(CaptureRules rules, CaptureSource? selectedSource = null, PlayRecordingTarget? expected = null)
     {
         if (_profile is null) return;
-        if (CaptureService.Snapshot.Profile?.Id == _profile.Id) await CaptureService.SaveRulesAsync(rules, selectedSource);
+        if (expected is not null || _snapshot.Profile?.Id == _profile.Id)
+        {
+            var target = expected ?? _settingsTarget ?? PlayRecordingOperations.DesktopTarget(_snapshot, _profile.Id);
+            if (target.ProfileId != _profile.Id) throw new InvalidOperationException("記録対象が変わりました。抽出設定を開き直してください。");
+            await RecordingOperations.SaveDesktopRulesAsync(target, rules, selectedSource);
+        }
         else await Store.SaveCaptureProfileAsync(_profile with { Rules = rules });
         _profile = _profile with { Rules = rules };
         _profiles = _profiles.Select(x => x.Id == _profile.Id ? _profile : x).ToArray();

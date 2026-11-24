@@ -6,6 +6,7 @@ public interface IScenarioCaptureStore
 {
     Task<CaptureProfile> GetOrCreateCaptureProfileAsync(string gameId);
     Task<IReadOnlyList<CaptureProfile>> GetCaptureProfilesAsync();
+    Task<CaptureProfile?> FindCaptureProfileAsync(string gameId);
     Task SaveCaptureProfileAsync(CaptureProfile profile);
     Task<IReadOnlyList<CaptureLabel>> GetCaptureLabelsAsync(long profileId);
     Task<long> BeginCaptureSessionAsync(long profileId);
@@ -28,6 +29,8 @@ public interface IScenarioCaptureStore
     Task SetScenarioFlowCutAsync(long profileId, CapturePosition before);
     Task<long> CreateIndependentScenarioFlowAsync(long profileId, CapturePosition start, CapturePosition end);
     Task<IReadOnlyList<CaptureTextItem>> GetCaptureItemsAsync(long sessionId, int limit = 200, int offset = 0, long? labelId = null, bool unclassifiedOnly = false, bool latest = false);
+    Task<CaptureTextItem?> FindCaptureItemAsync(long profileId, long itemId);
+    Task CorrectCaptureItemAsync(long profileId, CaptureTextItem expected, bool changeSpeaker, string? speaker = null, long? labelId = null);
     Task SetCaptureLabelsAsync(long sessionId, IReadOnlyCollection<long> itemIds, long? labelId);
     Task SetCaptureSpeakerAsync(long sessionId, long itemId, string? speaker);
     Task SplitCaptureEventAsync(long sessionId, long sequence, IReadOnlyList<int> boundaries, IReadOnlyList<CaptureManualPart>? parts = null);

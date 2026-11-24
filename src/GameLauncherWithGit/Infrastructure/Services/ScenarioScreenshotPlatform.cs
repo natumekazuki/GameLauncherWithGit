@@ -22,6 +22,8 @@ public sealed class ScenarioScreenshotPlatform : IScenarioScreenshotPlatform
     private Action? _hotkeyCallback;
     private bool _subclassInstalled;
     private bool _disposed;
+    private readonly object _gameFrameGate = new();
+    private Task<ScenarioScreenshotFrame>? _gameFrame;
 
     public ScenarioScreenshotPlatform() => _windowProc = WindowProcedure;
 #endif
@@ -111,23 +113,95 @@ public sealed class ScenarioScreenshotPlatform : IScenarioScreenshotPlatform
         }
 
         // Freeze desktop pixels before yielding; PNG encoding and hashing must not delay capture.
-        return Task.Run(() =>
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var rgba = ScenarioScreenshotPixels.NormalizeBgra32(width, height, bgra, checked(width * 4), false);
-            using var pixels = new SKBitmap(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Opaque));
-            if (pixels.GetPixels() == 0) throw new InvalidOperationException("PNG変換用の画素を確保できませんでした。");
-            Marshal.Copy(rgba, 0, pixels.GetPixels(), rgba.Length);
-            using var image = SKImage.FromBitmap(pixels);
-            using var encoded = image.Encode(SKEncodedImageFormat.Png, 100)
-                ?? throw new InvalidOperationException("PNGへの変換に失敗しました。");
-            cancellationToken.ThrowIfCancellationRequested();
-            return new ScenarioScreenshotFrame(width, height, encoded.ToArray(), ScenarioScreenshotPixels.ComputeHash(width, height, rgba));
-        }, cancellationToken);
+        return Task.Run(() => EncodeFrame(width, height, bgra, cancellationToken), cancellationToken);
 #else
         throw Unsupported();
 #endif
     }
+
+    public async Task<ScenarioScreenshotFrame> CaptureGameWindowAsync(CaptureWindow target, CancellationToken cancellationToken = default)
+    {
+#if WINDOWS
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        Task<ScenarioScreenshotFrame> pending;
+        lock (_gameFrameGate)
+        {
+            if (_gameFrame is { IsCompleted: false }) throw new InvalidOperationException("前回のウィンドウ描画が完了していません。");
+            // PrintWindow can block in the other process. Do not block the UI, or start a second native draw
+            // while it is pending. A late frame after the caller's timeout is never saved.
+            if (_gameFrame is { IsFaulted: true }) _ = _gameFrame.Exception;
+            pending = _gameFrame = Task.Run(() => DrawGameWindow(target, cancellationToken), cancellationToken);
+        }
+        return await pending.WaitAsync(TimeSpan.FromSeconds(3), cancellationToken);
+#else
+        await Task.CompletedTask;
+        throw Unsupported();
+#endif
+    }
+
+#if WINDOWS
+    private static ScenarioScreenshotFrame DrawGameWindow(CaptureWindow target, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ValidateTarget(target);
+        if (!GetClientRect(target.Handle, out var rect)) throw NativeError("クライアント領域を取得できませんでした。");
+        var width = checked(rect.Right - rect.Left);
+        var height = checked(rect.Bottom - rect.Top);
+        if (width <= 0 || height <= 0) throw new InvalidOperationException("撮影対象に有効なクライアント領域がありません。");
+        var bgra = new byte[checked(width * height * 4)];
+        var info = new BitmapInfo
+        {
+            Header = new BitmapInfoHeader
+            {
+                Size = (uint)Marshal.SizeOf<BitmapInfoHeader>(), Width = width, Height = -height,
+                Planes = 1, BitCount = 32, SizeImage = (uint)bgra.Length
+            }
+        };
+        nint memory = 0, bitmap = 0, previous = 0;
+        try
+        {
+            memory = CreateCompatibleDC(0);
+            if (memory == 0) throw NativeError("撮影用DCを作成できませんでした。");
+            bitmap = CreateDIBSection(memory, ref info, 0, out var bits, 0, 0);
+            if (bitmap == 0 || bits == 0) throw NativeError("撮影用ビットマップを作成できませんでした。");
+            previous = SelectObject(memory, bitmap);
+            if (previous == 0 || previous == -1) throw NativeError("撮影用ビットマップを選択できませんでした。");
+            Marshal.Copy(bgra, 0, bits, bgra.Length);
+            ValidateTarget(target);
+            const uint clientOnly = 1;
+            if (!PrintWindow(target.Handle, memory, clientOnly)) throw NativeError("ゲームウィンドウが撮影に対応していません。");
+            ValidateTarget(target);
+            if (!GetClientRect(target.Handle, out var after) || after.Right - after.Left != width || after.Bottom - after.Top != height)
+                throw new InvalidOperationException("撮影中にゲームウィンドウの大きさが変わりました。");
+            if (!GdiFlush()) throw NativeError("ゲームウィンドウの画素を取得できませんでした。");
+            Marshal.Copy(bits, bgra, 0, bgra.Length);
+        }
+        finally
+        {
+            if (previous != 0 && previous != -1) SelectObject(memory, previous);
+            if (bitmap != 0) DeleteObject(bitmap);
+            if (memory != 0) DeleteDC(memory);
+        }
+        var drawn = false;
+        for (var i = 0; i < bgra.Length && !drawn; i += 4) drawn = (bgra[i] | bgra[i + 1] | bgra[i + 2]) != 0;
+        if (!drawn) throw new InvalidOperationException("ゲームウィンドウから画像を取得できませんでした。");
+        return EncodeFrame(width, height, bgra, cancellationToken);
+    }
+
+    private static ScenarioScreenshotFrame EncodeFrame(int width, int height, byte[] bgra, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var rgba = ScenarioScreenshotPixels.NormalizeBgra32(width, height, bgra, checked(width * 4), false);
+        using var pixels = new SKBitmap(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Opaque));
+        if (pixels.GetPixels() == 0) throw new InvalidOperationException("PNG変換用の画素を確保できませんでした。");
+        Marshal.Copy(rgba, 0, pixels.GetPixels(), rgba.Length);
+        using var image = SKImage.FromBitmap(pixels);
+        using var encoded = image.Encode(SKEncodedImageFormat.Png, 100)
+            ?? throw new InvalidOperationException("PNGへの変換に失敗しました。");
+        cancellationToken.ThrowIfCancellationRequested();
+        return new(width, height, encoded.ToArray(), ScenarioScreenshotPixels.ComputeHash(width, height, rgba));
+    }
+#endif
 
     public Task RegisterHotkeyAsync(ScreenshotHotkey hotkey, Action callback)
     {
@@ -276,12 +350,15 @@ public sealed class ScenarioScreenshotPlatform : IScenarioScreenshotPlatform
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(nint hwnd, StringBuilder text, int count);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool GetClientRect(nint hwnd, out Rect rect);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool ClientToScreen(nint hwnd, ref Point point);
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool PrintWindow(nint hwnd, nint dc, uint flags);
     [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(nint hwnd, int attribute, out int value, int size);
     [DllImport("user32.dll", SetLastError = true)] private static extern nint GetDC(nint hwnd);
     [DllImport("user32.dll")] private static extern int ReleaseDC(nint hwnd, nint dc);
     [DllImport("gdi32.dll", SetLastError = true)] private static extern nint CreateCompatibleDC(nint dc);
     [DllImport("gdi32.dll")] private static extern bool DeleteDC(nint dc);
     [DllImport("gdi32.dll", SetLastError = true)] private static extern nint CreateCompatibleBitmap(nint dc, int width, int height);
+    [DllImport("gdi32.dll", SetLastError = true)] private static extern nint CreateDIBSection(nint dc, ref BitmapInfo info, uint usage, out nint bits, nint section, uint offset);
+    [DllImport("gdi32.dll")] private static extern bool GdiFlush();
     [DllImport("gdi32.dll", SetLastError = true)] private static extern nint SelectObject(nint dc, nint obj);
     [DllImport("gdi32.dll")] private static extern bool DeleteObject(nint obj);
     [DllImport("gdi32.dll", SetLastError = true)] private static extern bool BitBlt(nint destination, int x, int y, int width, int height, nint source, int sourceX, int sourceY, uint operation);

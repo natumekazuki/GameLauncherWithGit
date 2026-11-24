@@ -69,6 +69,7 @@ public sealed record CaptureProcess(int Id, string Name, string Path, string Win
 
 public sealed record CaptureSnapshot
 {
+    internal long OperationVersion { get; init; }
     public CaptureProfile? Profile { get; init; }
     public long? SessionId { get; init; }
     public string Status { get; init; } = "未接続";
@@ -86,4 +87,5 @@ public sealed record CaptureSnapshot
     public CaptureCandidate[] Candidates { get; init; } = [];
     public CaptureTextItem[] PreviewItems { get; init; } = [];
     public CapturePosition? RangeStart { get; init; }
+    internal bool RangeCanEnd { get; init; }
 }

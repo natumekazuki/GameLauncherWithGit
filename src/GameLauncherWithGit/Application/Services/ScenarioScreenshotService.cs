@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 namespace GameLauncherWithGit.Application.Services;
 
 public sealed record ScreenshotFailure(DateTimeOffset OccurredAt, string Message);
+public sealed record PlayRecordingScreenshot(string ImageId, int Width, int Height, DateTimeOffset CapturedAt);
 public sealed record ScreenshotStatus(string Status, bool Busy, bool Registered, ScreenshotHotkey Hotkey,
     CaptureWindow? Window, bool ManualWindow, long SavedCount, ScreenshotFailure? LastFailure = null);
 
@@ -23,6 +24,7 @@ public sealed class ScenarioScreenshotService : IAsyncDisposable
     private readonly CancellationTokenSource _shutdown = new();
     private ScreenshotStatus _snapshot;
     private long? _windowSession;
+    private long? _registeredSession;
     private Task? _activeCapture, _disposeTask;
     private DateTimeOffset? _lastNotificationAt;
     private bool _disposed;
@@ -69,9 +71,10 @@ public sealed class ScenarioScreenshotService : IAsyncDisposable
             await _platform.UnregisterHotkeyAsync();
             Update(s => s with { Registered = false, Status = "撮影キーを変更中" });
             var registered = false;
-            if (_capture.Snapshot.Recording)
+            var capture = _capture.Snapshot;
+            if (capture.Recording)
             {
-                await _platform.RegisterHotkeyAsync(hotkey, OnHotkey);
+                await RegisterHotkeyAsync(hotkey, capture);
                 registered = true;
             }
             await _settings.SaveAsync(_settings.Get() with { ScreenshotModifiers = hotkey.Modifiers, ScreenshotVirtualKey = hotkey.VirtualKey });
@@ -84,9 +87,10 @@ public sealed class ScenarioScreenshotService : IAsyncDisposable
             try
             {
                 await _platform.UnregisterHotkeyAsync();
-                if (previous.Registered && _capture.Snapshot.Recording && !_disposed)
+                var capture = _capture.Snapshot;
+                if (previous.Registered && capture.Recording && !_disposed)
                 {
-                    await _platform.RegisterHotkeyAsync(previous.Hotkey, OnHotkey);
+                    await RegisterHotkeyAsync(previous.Hotkey, capture);
                     restored = true;
                 }
             }
@@ -115,7 +119,14 @@ public sealed class ScenarioScreenshotService : IAsyncDisposable
     }
 
     private void OnCaptureStateChanged() => _ = RefreshRegistrationAsync();
-    private void OnHotkey() => _ = CaptureAsync();
+
+    private async Task RegisterHotkeyAsync(ScreenshotHotkey hotkey, CaptureSnapshot capture)
+    {
+        var profileId = capture.Profile!.Id;
+        var sessionId = capture.SessionId!.Value;
+        await _platform.RegisterHotkeyAsync(hotkey, () => _ = CaptureAsync(profileId, sessionId));
+        _registeredSession = sessionId;
+    }
 
     private async Task RefreshRegistrationAsync()
     {
@@ -132,15 +143,17 @@ public sealed class ScenarioScreenshotService : IAsyncDisposable
                     _snapshot = _snapshot with { Window = null, ManualWindow = false };
                 }
             }
-            if (capture.Recording && !Snapshot.Registered)
+            if (capture.Recording && (!Snapshot.Registered || _registeredSession != capture.SessionId))
             {
                 ValidateHotkey(Snapshot.Hotkey);
-                await _platform.RegisterHotkeyAsync(Snapshot.Hotkey, OnHotkey);
+                if (Snapshot.Registered) await _platform.UnregisterHotkeyAsync();
+                await RegisterHotkeyAsync(Snapshot.Hotkey, capture);
                 Update(s => s with { Registered = true, Status = "撮影キーを登録しました" });
             }
             else if (!capture.Recording)
             {
                 await _platform.UnregisterHotkeyAsync();
+                _registeredSession = null;
                 Update(s => s with { Registered = false, Status = capture.Paused ? "記録の一時停止中は撮影しません" : "正式記録中に撮影できます" });
             }
         }
@@ -153,43 +166,47 @@ public sealed class ScenarioScreenshotService : IAsyncDisposable
         finally { _registration.Release(); }
     }
 
-    public Task CaptureAsync()
+    public Task CaptureAsync() => CaptureAsync(null, null);
+
+    private Task CaptureAsync(long? expectedProfile, long? expectedSession)
     {
         lock (_gate)
         {
             if (_disposed) return Task.CompletedTask;
             if (_activeCapture is { IsCompleted: false })
                 return ReportFailureAsync("撮影を保存中のため、今回の撮影は受け付けませんでした。完了後にもう一度押してください。");
-            _activeCapture = CaptureCoreAsync(_shutdown.Token);
+            _activeCapture = CaptureCoreAsync(expectedProfile, expectedSession, _shutdown.Token);
             return _activeCapture;
         }
     }
 
-    private async Task CaptureCoreAsync(CancellationToken cancellationToken)
+    internal Task CaptureGameAsync(long expectedProfile, long expectedSession)
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_activeCapture is { IsCompleted: false }) throw new InvalidOperationException("撮影を保存中です。完了後に再試行してください。");
+            _activeCapture = CaptureGameCoreAsync(expectedProfile, expectedSession, _shutdown.Token);
+            return _activeCapture;
+        }
+    }
+
+    private async Task CaptureGameCoreAsync(long expectedProfile, long expectedSession, CancellationToken cancellationToken)
+    {
+        try { await SaveCaptureAsync(expectedProfile, expectedSession, gameOnly: true, cancellationToken); }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Game screenshot capture/save failed. profile={Profile} session={Session}", expectedProfile, expectedSession);
+            throw new InvalidOperationException("ゲームの画像を保存できませんでした。ゲーム画面を前面にして再試行してください。", ex);
+        }
+        finally { Update(s => s with { Busy = false }); }
+    }
+
+    private async Task CaptureCoreAsync(long? expectedProfile, long? expectedSession, CancellationToken cancellationToken)
     {
         try
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            // Freeze the body identity before any asynchronous capture/encoding work.
-            var (target, processId) = _capture.FreezeScreenshotTarget();
-            var capturedAt = DateTimeOffset.UtcNow;
-            CaptureWindow? window;
-            lock (_gate) window = _windowSession == target.Event.SessionId && _snapshot.ManualWindow ? _snapshot.Window : null;
-            if (window is null)
-            {
-                var windows = _platform.ListWindows(processId);
-                if (windows.Count != 1)
-                    throw new InvalidOperationException(windows.Count == 0
-                        ? "本文の取得先に撮影できるウィンドウがありません。撮影設定で選択してください。"
-                        : "本文の取得先に複数のウィンドウがあります。撮影設定で選択してください。");
-                window = windows[0];
-            }
-            Update(s => s with { Busy = true, Window = window, Status = "撮影を保存中" });
-            var frame = await _platform.CaptureAsync(window, cancellationToken);
-            await _capture.FlushPendingAsync().WaitAsync(cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            await _store.SaveScreenshotAsync(target, new(frame.Width, frame.Height, frame.PixelHash, frame.PngBytes), capturedAt, cancellationToken);
-            Update(s => s with { SavedCount = s.SavedCount + 1, Status = "スクリーンショットを保存しました" });
+            await SaveCaptureAsync(expectedProfile, expectedSession, gameOnly: false, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -203,6 +220,49 @@ public sealed class ScenarioScreenshotService : IAsyncDisposable
         finally
         {
             Update(s => s with { Busy = false });
+        }
+    }
+
+    private async Task SaveCaptureAsync(long? expectedProfile, long? expectedSession, bool gameOnly, CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        // Freeze the body identity before any asynchronous capture/encoding work.
+        var (target, processId) = _capture.FreezeScreenshotTarget();
+        if (expectedProfile is not null && (target.CaptureGameId != expectedProfile || target.Event.SessionId != expectedSession))
+            throw new InvalidOperationException("撮影対象の取得回が変わりました。");
+        var capturedAt = DateTimeOffset.UtcNow;
+        CaptureWindow? window;
+        lock (_gate) window = _windowSession == target.Event.SessionId && _snapshot.ManualWindow ? _snapshot.Window : null;
+        if (gameOnly && window?.ProcessId != processId) window = null;
+        if (window is null)
+        {
+            var windows = _platform.ListWindows(processId).Where(x => x.ProcessId == processId).ToArray();
+            if (windows.Length != 1)
+                throw new InvalidOperationException(windows.Length == 0
+                    ? "本文の取得先に撮影できるウィンドウがありません。撮影設定で選択してください。"
+                    : "本文の取得先に複数のウィンドウがあります。撮影設定で選択してください。");
+            window = windows[0];
+        }
+        Update(s => s with { Busy = true, Window = gameOnly ? s.Window : window, Status = "撮影を保存中" });
+        var frame = gameOnly ? await _platform.CaptureGameWindowAsync(window, cancellationToken)
+            : await _platform.CaptureAsync(window, cancellationToken);
+        if (gameOnly) _capture.RequireScreenshotProcessAlive(target, processId);
+        await _capture.FlushPendingAsync().WaitAsync(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        await _store.SaveScreenshotAsync(target, new(frame.Width, frame.Height, frame.PixelHash, frame.PngBytes), capturedAt, cancellationToken);
+        Update(s => s with { SavedCount = s.SavedCount + 1, Status = "スクリーンショットを保存しました" });
+    }
+
+    internal async Task<IReadOnlyList<PlayRecordingScreenshot>> GetPlayScreenshotsAsync(long profileId, CaptureEventKey key) =>
+        (await _store.GetEventScreenshotsAsync(profileId, key)).Select(x => new PlayRecordingScreenshot(x.ImageId, x.Width, x.Height, x.CapturedAt)).ToArray();
+
+    internal async Task<byte[]> ReadPlayScreenshotAsync(long profileId, CaptureEventKey key, string imageId)
+    {
+        try { return await _store.ReadEventScreenshotPngAsync(profileId, key, imageId); }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Play screenshot could not be read. profile={Profile} session={Session}", profileId, key.SessionId);
+            throw new InvalidOperationException("選択した本文の画像を読み込めませんでした。", ex);
         }
     }
 

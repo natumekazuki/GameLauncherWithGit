@@ -99,6 +99,19 @@ public sealed partial class SqliteGameLibraryStore
         return await ReadEventScreenshotsAsync(connection, transaction, key);
     }
 
+    public async Task<byte[]> ReadEventScreenshotPngAsync(long captureGameId, CaptureEventKey key, string imageId)
+    {
+        await _screenshotFilesLock.WaitAsync();
+        try
+        {
+            var image = (await GetEventScreenshotsAsync(captureGameId, key))
+                .SingleOrDefault(x => string.Equals(x.ImageId, imageId, StringComparison.Ordinal))
+                ?? throw new InvalidOperationException("選択した本文の画像が見つかりません。");
+            return await File.ReadAllBytesAsync(image.FilePath);
+        }
+        finally { _screenshotFilesLock.Release(); }
+    }
+
     private async Task<List<ScenarioScreenshot>> ReadEventScreenshotsAsync(SqliteConnection connection, SqliteTransaction transaction, CaptureEventKey key)
     {
         await using var command = CaptureCommand(connection, transaction, """

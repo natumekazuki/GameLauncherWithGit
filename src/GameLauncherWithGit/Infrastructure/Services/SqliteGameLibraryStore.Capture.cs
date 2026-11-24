@@ -135,6 +135,17 @@ public sealed partial class SqliteGameLibraryStore
         return result;
     }
 
+    public async Task<CaptureProfile?> FindCaptureProfileAsync(string gameId)
+    {
+        await EnsureInitializedAsync(default);
+        await using var connection = await OpenConnectionAsync(default);
+        await using var command = CaptureCommand(connection, null, """
+            SELECT Id,CurrentGameId,Title,Enabled,BodyExecutablePath,SettingsJson FROM CaptureGames WHERE CurrentGameId=$game
+            """, ("$game", gameId));
+        await using var reader = await command.ExecuteReaderAsync();
+        return await reader.ReadAsync() ? ReadCaptureProfile(reader) : null;
+    }
+
     public async Task SaveCaptureProfileAsync(CaptureProfile profile)
     {
         await EnsureInitializedAsync(default);
@@ -273,6 +284,46 @@ public sealed partial class SqliteGameLibraryStore
         r.IsDBNull(7) ? null : r.GetInt64(7), r.IsDBNull(8) ? null : r.GetString(8),
         r.IsDBNull(9) ? null : (CaptureKind)r.GetInt32(9), r.IsDBNull(10) ? null : r.GetString(10),
         r.GetBoolean(11), r.GetBoolean(12), r.GetBoolean(13));
+
+    public async Task<CaptureTextItem?> FindCaptureItemAsync(long profileId, long itemId)
+    {
+        await EnsureInitializedAsync(default);
+        await using var connection = await OpenConnectionAsync(default);
+        return await FindCaptureItemAsync(connection, null, profileId, itemId);
+    }
+
+    private static async Task<CaptureTextItem?> FindCaptureItemAsync(SqliteConnection connection, SqliteTransaction? transaction,
+        long profileId, long itemId)
+    {
+        await using var command = CaptureCommand(connection, transaction, CaptureItemQuery + """
+             JOIN CaptureSessions s ON s.Id=i.SessionId WHERE s.CaptureGameId=$game AND i.Id=$item
+            """, ("$game", profileId), ("$item", itemId));
+        await using var reader = await command.ExecuteReaderAsync();
+        return await reader.ReadAsync() ? ReadCaptureItem(reader) : null;
+    }
+
+    public async Task CorrectCaptureItemAsync(long profileId, CaptureTextItem expected, bool changeSpeaker,
+        string? speaker = null, long? labelId = null)
+    {
+        if (changeSpeaker)
+        {
+            speaker = string.IsNullOrWhiteSpace(speaker) ? null : speaker.Trim();
+            if (speaker?.IndexOfAny(['\r', '\n']) >= 0) throw new ArgumentException("話者名は1行で入力してください。");
+        }
+        await EnsureInitializedAsync(default);
+        await using var connection = await OpenConnectionAsync(default);
+        await using var transaction = connection.BeginTransaction();
+        if (await FindCaptureItemAsync(connection, transaction, profileId, expected.Id) != expected)
+            throw new InvalidOperationException("本文が更新されました。読み込み直してから訂正してください。");
+        if (!changeSpeaker) ValidateCaptureLabel(await ReadCaptureLabelsAsync(connection, transaction, profileId), labelId);
+        var update = changeSpeaker
+            ? "UPDATE CaptureItems SET HasManualSpeaker=1,ManualSpeakerText=$value WHERE Id=$id"
+            : "UPDATE CaptureItems SET HasManualLabel=1,ManualLabelId=$value WHERE Id=$id";
+        await using var command = CaptureCommand(connection, transaction, update,
+            ("$value", changeSpeaker ? (object?)speaker : labelId), ("$id", expected.Id));
+        await command.ExecuteNonQueryAsync();
+        await transaction.CommitAsync();
+    }
 
     public async Task<IReadOnlyList<CaptureTextItem>> GetCaptureItemsAsync(long sessionId, int limit = 200,
         int offset = 0, long? labelId = null, bool unclassifiedOnly = false, bool latest = false)
