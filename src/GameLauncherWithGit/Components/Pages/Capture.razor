@@ -52,7 +52,7 @@
                 </div>
                 <div class="capture-play-range" aria-label="プレイ中の区間指定">
                     <span class="capture-range-caption">区間</span>
-                    <button class="launch-button capture-icon-button" title="区間を開始" aria-label="区間を開始" @onclick="() => StartLiveRangeAsync(displayedLive)" disabled="@(_busy || !_snapshot.Recording || _snapshot.RangeStart is not null || displayedPending is not null)"><CaptureIcon Name="Start" /></button>
+                    <button class="launch-button capture-icon-button" title="区間を開始" aria-label="区間を開始" @onclick="() => StartLiveRangeAsync(displayedLive)" disabled="@(_busy || !_snapshot.RangeCanStart || displayedPending is not null)"><CaptureIcon Name="Start" /></button>
                     @if (displayedPending is null)
                     {
                         <button class="launch-button capture-icon-button" title="末尾を固定" aria-label="末尾を固定" @onclick="() => EndLiveRangeAsync(displayedLive)" disabled="@(_busy || !_snapshot.RangeCanEnd)"><CaptureIcon Name="End" /></button>
