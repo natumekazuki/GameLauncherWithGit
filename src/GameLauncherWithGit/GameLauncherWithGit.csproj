@@ -33,7 +33,7 @@
 
         <!-- To develop, package, and publish an app to the Microsoft Store, see: https://aka.ms/MauiTemplateUnpackaged -->
         <WindowsPackageType>None</WindowsPackageType>
-        <!-- Include both .NET and the loopback MCP host's ASP.NET runtime on Windows. -->
+        <!-- Include .NET and the loopback hosts' ASP.NET runtime on Windows. -->
         <SelfContained Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">true</SelfContained>
 
         <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'">15.0</SupportedOSPlatformVersion>
@@ -64,6 +64,7 @@
 
     <ItemGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">
         <FrameworkReference Include="Microsoft.AspNetCore.App" />
+        <ProjectReference Include="..\GameLauncherWithGit.PlayRecordingWeb\GameLauncherWithGit.PlayRecordingWeb.csproj" />
         <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.4.0" />
         <None Include="Resources\TrayIcon\*.ico" CopyToOutputDirectory="PreserveNewest" Link="TrayIcon\%(Filename)%(Extension)" />
         <None Include="..\..\artifacts\luna-native\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Link="Luna\%(Filename)%(Extension)" />
@@ -72,7 +73,24 @@
 
     <ItemGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) != 'windows'">
         <Compile Remove="Infrastructure\Mcp\**\*.cs" />
+        <Compile Remove="Infrastructure\PlayRecordingWeb\**\*.cs;Components\PlayRecording\**\*.cs" />
+        <Content Remove="Components\Pages\PlayRecordingWebAccess.razor;Components\Pages\PlayRecordingWebAccess.razor.css;Components\PlayRecording\**\*.razor;Components\PlayRecording\**\*.razor.css" />
+        <RazorComponent Remove="Components\Pages\PlayRecordingWebAccess.razor;Components\PlayRecording\**\*.razor" />
+        <None Remove="Components\Pages\PlayRecordingWebAccess.razor.css;Components\PlayRecording\**\*.razor.css" />
     </ItemGroup>
+
+    <!-- Ship only the two generated scoped styles used by the Web UI, without exposing MAUI wwwroot. -->
+    <Target Name="EmbedPlayRecordingWebScopedStyles" BeforeTargets="AssignTargetPaths"
+            DependsOnTargets="_ProcessScopedCssFiles"
+            Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows' and '$(DesignTimeBuild)' != 'true'">
+        <ItemGroup>
+            <EmbeddedResource Include="$(IntermediateOutputPath)scopedcss\Components\CaptureTagsEditor.razor.rz.scp.css"
+                              LogicalName="PlayRecordingWeb.capture-tags.css" />
+            <EmbeddedResource Include="$(IntermediateOutputPath)scopedcss\Components\PlayRecording\PlayRecordingPanel.razor.rz.scp.css"
+                              LogicalName="PlayRecordingWeb.play-recording-panel.css"
+                              Condition="Exists('Components\PlayRecording\PlayRecordingPanel.razor.css')" />
+        </ItemGroup>
+    </Target>
 
     <ItemGroup>
         <PackageReference Include="Microsoft.Maui.Controls" Version="$(MauiVersion)" />

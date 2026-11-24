@@ -1,0 +1,167 @@
+@page "/play-recording-web"
+@using GameLauncherWithGit.Infrastructure.PlayRecordingWeb
+@inject PlayRecordingWebHost Host
+@implements IAsyncDisposable
+
+<PageTitle>記録Webの接続許可</PageTitle>
+
+<section class="play-web-access">
+    <header>
+        <a class="secondary-button utility-icon-button" href="/" title="ゲーム一覧に戻る" aria-label="ゲーム一覧に戻る"><CaptureIcon Name="Back" /></a>
+        <h1>記録Webの接続許可</h1>
+    </header>
+
+    @if (_error is not null)
+    {
+        <p role="alert">@_error</p>
+    }
+    @if (_games is null)
+    {
+        @if (_busy)
+        {
+            <p role="status">ゲームを読み込み中…</p>
+        }
+        else
+        {
+            <button type="button" class="secondary-button" @onclick="RefreshAsync">再読み込み</button>
+        }
+    }
+    else
+    {
+        @if (_games.Count == 0)
+        {
+            <p>シナリオ抽出の設定を確定した登録済みゲームがありません。</p>
+            <button type="button" class="secondary-button" @onclick="RefreshAsync" disabled="@_busy">再読み込み</button>
+        }
+        else
+        {
+            <label for="play-web-game">許可するゲーム</label>
+            <select id="play-web-game" @bind="_selectedGameId" disabled="@_busy">
+                <option value="">ゲームを選択</option>
+                @foreach (var game in _games)
+                {
+                    <option value="@game.Id">@game.Title</option>
+                }
+            </select>
+        }
+
+        @if (_origin is null)
+        {
+            <label for="play-web-serve">Tailscale ServeのHTTPS URL</label>
+            <input id="play-web-serve" type="url" @bind="_serveUrl" @bind:event="oninput" disabled="@_busy" />
+            <div class="play-web-actions">
+                <button type="button" class="primary-button" @onclick="StartAsync" disabled="@(!CanIssue || string.IsNullOrWhiteSpace(_serveUrl))">Web接続を開始</button>
+            </div>
+        }
+    }
+
+    @if (_origin is not null)
+    {
+        <dl>
+            <dt>接続先</dt>
+            <dd><code>@_origin.AbsoluteUri</code></dd>
+            <dt>許可中のゲーム</dt>
+            <dd>@(_permission?.GameTitle ?? "許可なし")</dd>
+            @if (_permission?.Code is { } connectionCode)
+            {
+                <dt>接続コード（@_permission.CodeExpiresAt.ToLocalTime().ToString("HH:mm:ss") まで・1回限り）</dt>
+                <dd><code>@connectionCode</code></dd>
+            }
+        </dl>
+        <div class="play-web-actions">
+            <button type="button" class="primary-button" @onclick="IssueAsync" disabled="@(!CanIssue)">
+                @(_permission is null ? "接続コードを発行" : _permission.GameId == _selectedGameId ? "旧アクセスを失効してコードを再発行" : "旧アクセスを失効してゲームを変更")
+            </button>
+            <button type="button" class="secondary-button" @onclick="RevokeAsync" disabled="@(_busy || _permission is null)">接続許可を失効</button>
+            <button type="button" class="secondary-button" @onclick="StopAsync" disabled="@_busy">Web接続を停止</button>
+        </div>
+    }
+
+    @if (_busy && _games is not null)
+    {
+        <p role="status">処理中…</p>
+    }
+</section>
+
+@code {
+    private readonly CancellationTokenSource _dispose = new();
+    private IReadOnlyList<GameCardItem>? _games;
+    private PlayRecordingWebPermission? _permission;
+    private Task? _monitor;
+    private Uri? _origin;
+    private string? _error;
+    private string _selectedGameId = "";
+    private string _serveUrl = "";
+    private bool _busy;
+
+    private bool CanIssue => !_busy && _games?.Any(game => game.Id == _selectedGameId) == true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        RefreshStatus();
+        _selectedGameId = _permission?.GameId ?? "";
+        _serveUrl = _origin?.AbsoluteUri ?? "";
+        _monitor = MonitorAsync(_dispose.Token);
+        await RefreshAsync();
+    }
+
+    private Task RefreshAsync() => RunAsync(async () => _games = await Host.GetEligibleGamesAsync(), "ゲームの読み込みに失敗しました。");
+
+    private Task StartAsync() => RunAsync(async () =>
+    {
+        if (!Uri.TryCreate(_serveUrl, UriKind.Absolute, out var origin))
+            throw new ArgumentException("Tailscale ServeのHTTPS URLを指定してください。");
+        await Host.StartAsync(_selectedGameId, origin);
+    }, "記録Webの開始に失敗しました。");
+
+    private Task IssueAsync() => RunAsync(async () => await Host.IssueAsync(_selectedGameId), "接続コードを発行できませんでした。");
+    private Task RevokeAsync() => RunAsync(Host.RevokeAsync, "接続許可を失効できませんでした。");
+    private Task StopAsync() => RunAsync(Host.StopAsync, "記録Webを停止できませんでした。");
+
+    private async Task RunAsync(Func<Task> operation, string failure)
+    {
+        if (_busy) return;
+        _busy = true;
+        _error = null;
+        try { await operation(); }
+        catch (ArgumentException ex) { _error = ex.Message; }
+        catch (InvalidOperationException ex) when (ex.Message.StartsWith("登録済みで", StringComparison.Ordinal)) { _error = ex.Message; }
+        catch (Exception) { _error = failure; }
+        finally
+        {
+            RefreshStatus();
+            _busy = false;
+        }
+    }
+
+    private void RefreshStatus()
+    {
+        _origin = Host.Origin;
+        _permission = Host.Permission;
+    }
+
+    private async Task MonitorAsync(CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                await InvokeAsync(() =>
+                {
+                    if (_origin == Host.Origin && _permission == Host.Permission) return;
+                    RefreshStatus();
+                    StateHasChanged();
+                });
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await _dispose.CancelAsync();
+        if (_monitor is not null) await _monitor;
+        _dispose.Dispose();
+    }
+}

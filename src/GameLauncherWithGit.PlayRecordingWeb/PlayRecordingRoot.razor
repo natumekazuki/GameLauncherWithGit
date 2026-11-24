@@ -1,0 +1,20 @@
+@using Microsoft.AspNetCore.Components.Web
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <base href="/" />
+    <title>プレイ中の記録</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/assets/play-recording.css" />
+</head>
+<body>
+    <Router AppAssembly="@typeof(PlayRecordingRoot).Assembly">
+        <Found Context="route">
+            <RouteView RouteData="@route" />
+        </Found>
+    </Router>
+</body>
+</html>

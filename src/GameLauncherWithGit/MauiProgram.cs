@@ -55,6 +55,7 @@ public static class MauiProgram
 		builder.Services.AddSingleton<IScenarioSceneFlowStore>(serviceProvider => serviceProvider.GetRequiredService<SqliteGameLibraryStore>());
 #if WINDOWS
 		builder.Services.AddSingleton<GameLauncherWithGit.Infrastructure.Mcp.ScenarioMcpHost>();
+		builder.Services.AddSingleton<GameLauncherWithGit.Infrastructure.PlayRecordingWeb.PlayRecordingWebHost>();
 #endif
 		builder.Services.AddSingleton<ILunaCaptureHost, LunaCaptureHost>();
 		builder.Services.AddSingleton<ScenarioCaptureService>();

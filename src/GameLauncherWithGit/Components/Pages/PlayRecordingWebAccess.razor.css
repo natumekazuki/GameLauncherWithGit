@@ -1,0 +1,18 @@
+.play-web-access {
+    display: grid;
+    gap: .75rem;
+    max-inline-size: 42rem;
+}
+
+.play-web-access header, .play-web-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: .75rem;
+}
+
+.play-web-access h1, .play-web-access dl { margin: 0; }
+.play-web-access input, .play-web-access select { padding: .5rem; }
+.play-web-access dd { margin-block-end: .5rem; overflow-wrap: anywhere; }
+.play-web-access code { user-select: all; }
+.play-web-access :focus-visible { outline: 2px solid #93c5fd; outline-offset: 3px; }

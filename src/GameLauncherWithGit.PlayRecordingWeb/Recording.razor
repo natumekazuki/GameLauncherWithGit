@@ -1,0 +1,19 @@
+@page "/"
+@using Microsoft.AspNetCore.Authorization
+@attribute [Authorize]
+
+<main id="play-recording-content">
+    <PlayRecordingMount @rendermode="new InteractiveServerRenderMode(prerender: false)" />
+</main>
+<link rel="stylesheet" href="/assets/capture-tags.css" />
+@if (View.HasPanelStyle)
+{
+    <link rel="stylesheet" href="/assets/play-recording-panel.css" />
+}
+<p id="components-reconnect-modal" class="components-reconnect-hide" role="status">
+    <a href="/" data-enhance-nav="false">もう一度接続</a>
+</p>
+<script src="/_framework/blazor.web.js" autostart="false"></script>
+<script src="/assets/play-recording.js"></script>
+
+@inject PlayRecordingWebView View

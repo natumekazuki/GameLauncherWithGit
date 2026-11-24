@@ -17,6 +17,7 @@ public partial class App : Microsoft.Maui.Controls.Application
 #if WINDOWS
 	private readonly GameLauncherWithGit.Infrastructure.Mcp.ScenarioMcpHost _mcp;
 	private readonly Task _mcpStartup;
+	private readonly GameLauncherWithGit.Infrastructure.PlayRecordingWeb.PlayRecordingWebHost _playRecordingWeb;
 #endif
 
 	public App(IAppSettingsService appSettings, GameLauncherWithGit.Application.Services.ScenarioScreenshotService screenshots,
@@ -27,6 +28,7 @@ public partial class App : Microsoft.Maui.Controls.Application
 		EnsureSingleInstance();
 #if WINDOWS
 		_mcp = services.GetRequiredService<GameLauncherWithGit.Infrastructure.Mcp.ScenarioMcpHost>();
+	_playRecordingWeb = services.GetRequiredService<GameLauncherWithGit.Infrastructure.PlayRecordingWeb.PlayRecordingWebHost>();
 		_mcpStartup = StartMcpAsync(services);
 #endif
 	}
@@ -53,6 +55,8 @@ public partial class App : Microsoft.Maui.Controls.Application
 #if WINDOWS
 		window.Destroying += async (_, _) =>
 		{
+			try { await _playRecordingWeb.DisposeAsync(); }
+			catch { Trace.WriteLine("Play recording Web shutdown failed."); }
 			await _mcpStartup;
 			try { await _mcp.DisposeAsync(); }
 			catch { Trace.WriteLine("Scenario MCP shutdown failed."); }

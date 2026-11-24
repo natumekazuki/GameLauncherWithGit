@@ -1,0 +1,11 @@
+@inject PlayRecordingWebView View
+
+@if (View.PanelType is { } panel)
+{
+    <DynamicComponent Type="@panel" />
+}
+else
+{
+    <h1>プレイ中の記録</h1>
+    <p role="status">記録画面を利用できません。</p>
+}

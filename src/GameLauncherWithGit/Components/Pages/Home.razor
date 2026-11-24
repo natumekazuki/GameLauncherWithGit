@@ -29,6 +29,10 @@
 {
     <section class="utility-bar">
         <a class="secondary-button utility-icon-button" href="capture" title="シナリオ抽出" aria-label="シナリオ抽出"><CaptureIcon Name="History" /></a>
+        @if (OperatingSystem.IsWindows())
+        {
+            <a class="secondary-button utility-icon-button" href="play-recording-web" title="記録Webの接続許可" aria-label="記録Webの接続許可"><CaptureIcon Name="Link" /></a>
+        }
         <div class="search-control">
             <input type="search"
                    class="search-input"

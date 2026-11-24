@@ -1,0 +1,29 @@
+:root {
+    color-scheme: dark;
+    color: #e5e7eb;
+    background: #0c1528;
+    font-family: system-ui, sans-serif;
+}
+
+body { margin: 0; }
+main { padding: 1rem; }
+a { color: #93c5fd; }
+:focus-visible { outline: 2px solid #93c5fd; outline-offset: 3px; }
+
+.play-web-login {
+    max-inline-size: 28rem;
+    margin: 2rem auto;
+}
+
+.play-web-login form { display: grid; gap: .75rem; }
+.play-web-login input, .play-web-login button {
+    box-sizing: border-box;
+    min-block-size: 2.75rem;
+    padding: .5rem .75rem;
+    font: inherit;
+}
+
+.play-web-login button { justify-self: start; }
+#components-reconnect-modal { padding: 1rem; }
+#components-reconnect-modal.components-reconnect-hide { display: none; }
+body:has(#components-reconnect-modal:not(.components-reconnect-hide)) #play-recording-content { display: none; }
