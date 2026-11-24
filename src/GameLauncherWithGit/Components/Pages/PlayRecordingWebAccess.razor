@@ -13,7 +13,7 @@
 
     @if (_error is not null)
     {
-        <p role="alert">@_error</p>
+        <p class="play-web-error" role="alert">@_error</p>
     }
     @if (_games is null)
     {
@@ -52,7 +52,7 @@
                 <input @ref="_urlInput" type="url" @bind="_serveUrl" @bind:event="oninput" disabled="@_busy" />
             </label>
             <div class="play-web-actions">
-                <button type="button" class="primary-button" @onclick="StartAsync" disabled="@(!CanIssue || string.IsNullOrWhiteSpace(_serveUrl))"><CaptureIcon Name="Play" />Web接続を開始</button>
+                <button type="button" class="launch-button" @onclick="StartAsync" disabled="@(!CanIssue || string.IsNullOrWhiteSpace(_serveUrl))"><CaptureIcon Name="Play" />Web接続を開始</button>
             </div>
         }
     }
@@ -71,7 +71,7 @@
             }
         </dl>
         <div class="play-web-actions">
-            <button type="button" class="primary-button" @onclick="IssueAsync" disabled="@(!CanIssue)">
+            <button type="button" class="launch-button" @onclick="IssueAsync" disabled="@(!CanIssue)">
                 <CaptureIcon Name="@(_permission is not null && _permission.GameId == _selectedGameId ? "Refresh" : "Link")" />@(_permission is null ? "接続コードを発行" : _permission.GameId == _selectedGameId ? "旧アクセスを失効してコードを再発行" : "旧アクセスを失効してゲームを変更")
             </button>
             <button type="button" class="secondary-button" @onclick="RevokeAsync" disabled="@(_busy || _permission is null)"><CaptureIcon Name="Close" />接続許可を失効</button>
@@ -137,6 +137,7 @@
         _busy = true;
         _error = null;
         try { await operation(); }
+        catch (ArgumentException ex) when (ex.ParamName == "origin") { _error = "Tailscale ServeのHTTPS URL（パスなし）を指定してください。"; }
         catch (ArgumentException ex) { _error = ex.Message; }
         catch (InvalidOperationException ex) when (ex.Message.StartsWith("登録済みで", StringComparison.Ordinal)) { _error = ex.Message; }
         catch (Exception) { _error = failure; }
