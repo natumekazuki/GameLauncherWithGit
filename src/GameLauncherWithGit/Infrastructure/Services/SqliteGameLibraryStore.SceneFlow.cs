@@ -172,7 +172,12 @@ public sealed partial class SqliteGameLibraryStore
     public async Task UpdateScenarioSceneAsync(long captureGameId, long sceneId, ScenarioSceneEdit edit, CancellationToken cancellationToken = default) =>
         _ = await SaveScenarioSceneAsync(captureGameId, sceneId, edit, cancellationToken);
 
-    private async Task<long> SaveScenarioSceneAsync(long game, long? sceneId, ScenarioSceneEdit edit, CancellationToken cancellationToken)
+    public async Task UpdateDisplayedScenarioSceneAsync(long captureGameId, ScenarioScene displayed, ScenarioSceneEdit edit,
+        CancellationToken cancellationToken = default) =>
+        _ = await SaveScenarioSceneAsync(captureGameId, displayed.Id, edit, cancellationToken, displayed);
+
+    private async Task<long> SaveScenarioSceneAsync(long game, long? sceneId, ScenarioSceneEdit edit,
+        CancellationToken cancellationToken, ScenarioScene? displayed = null)
     {
         ArgumentNullException.ThrowIfNull(edit);
         ArgumentNullException.ThrowIfNull(edit.RangeIds);
@@ -184,6 +189,8 @@ public sealed partial class SqliteGameLibraryStore
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = connection.BeginTransaction();
         await ReadScenarioMaterialVersionAsync(connection, transaction, game, cancellationToken);
+        if (displayed is not null)
+            RequireDisplayedScene(await ReadScenarioSceneFlowAsync(connection, transaction, game, cancellationToken), displayed);
         foreach (var id in edit.RangeIds) await RequireSceneOwnerAsync(connection, transaction, game, "CaptureRanges", id, cancellationToken);
         foreach (var id in edit.TagIds) await RequireSceneOwnerAsync(connection, transaction, game, "ScenarioGameTags", id, cancellationToken);
         if (sceneId is not null) await RequireSceneOwnerAsync(connection, transaction, game, "ScenarioScenes", sceneId.Value, cancellationToken);
@@ -241,11 +248,28 @@ public sealed partial class SqliteGameLibraryStore
         await transaction.CommitAsync(cancellationToken);
     }
 
-    public async Task SetScenarioSceneConnectionAsync(long captureGameId, long fromSceneId, long toSceneId, bool connected, CancellationToken cancellationToken = default)
+    public Task SetScenarioSceneConnectionAsync(long captureGameId, long fromSceneId, long toSceneId, bool connected,
+        CancellationToken cancellationToken = default) => WriteScenarioSceneConnectionAsync(captureGameId, fromSceneId, toSceneId,
+            connected, cancellationToken);
+
+    public Task SetDisplayedScenarioSceneConnectionAsync(long captureGameId, ScenarioScene from, ScenarioScene to, bool connected,
+        CancellationToken cancellationToken = default) => WriteScenarioSceneConnectionAsync(captureGameId, from.Id, to.Id,
+            connected, cancellationToken, from, to);
+
+    private async Task WriteScenarioSceneConnectionAsync(long captureGameId, long fromSceneId, long toSceneId, bool connected,
+        CancellationToken cancellationToken, ScenarioScene? displayedFrom = null, ScenarioScene? displayedTo = null)
     {
         await EnsureInitializedAsync(cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = connection.BeginTransaction();
+        if (displayedFrom is not null && displayedTo is not null)
+        {
+            var shown = await ReadScenarioSceneFlowAsync(connection, transaction, captureGameId, cancellationToken);
+            RequireDisplayedScene(shown, displayedFrom);
+            RequireDisplayedScene(shown, displayedTo);
+            if (shown.Connections.Any(x => x.FromSceneId == fromSceneId && x.ToSceneId == toSceneId) == connected)
+                throw new InvalidOperationException("接続が更新されました。読み込み直してください。");
+        }
         foreach (var scene in new[] { fromSceneId, toSceneId })
             await RequireSceneOwnerAsync(connection, transaction, captureGameId, "ScenarioScenes", scene, cancellationToken);
         await using var command = CaptureCommand(connection, transaction, connected
@@ -253,6 +277,15 @@ public sealed partial class SqliteGameLibraryStore
             : "DELETE FROM ScenarioSceneConnections WHERE FromSceneId=$from AND ToSceneId=$to", ("$from", fromSceneId), ("$to", toSceneId));
         if (await command.ExecuteNonQueryAsync(cancellationToken) > 0) await BumpScenarioMaterialRevisionAsync(connection, transaction, captureGameId);
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    private static void RequireDisplayedScene(ScenarioSceneFlowSnapshot flow, ScenarioScene scene)
+    {
+        var current = flow.Scenes.SingleOrDefault(x => x.Id == scene.Id)?.Definition;
+        var expected = scene.Definition;
+        if (current is null || current != (expected with { RangeIds = current.RangeIds, TagIds = current.TagIds })
+            || !current.RangeIds.SequenceEqual(expected.RangeIds) || !current.TagIds.SequenceEqual(expected.TagIds))
+            throw new InvalidOperationException("場面が更新されました。読み込み直してください。");
     }
 
     private static async Task<(long Id, bool Created)> GetOrCreateSceneTagAsync(SqliteConnection connection,

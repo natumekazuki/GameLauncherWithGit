@@ -7,6 +7,7 @@ namespace GameLauncherWithGit.Application.Services;
 
 public sealed record ScreenshotFailure(DateTimeOffset OccurredAt, string Message);
 public sealed record PlayRecordingScreenshot(string ImageId, int Width, int Height, DateTimeOffset CapturedAt);
+public sealed record PlayRecordingScreenshotResult(CaptureEventKey Event, string ImageId);
 public sealed record ScreenshotStatus(string Status, bool Busy, bool Registered, ScreenshotHotkey Hotkey,
     CaptureWindow? Window, bool ManualWindow, long SavedCount, ScreenshotFailure? LastFailure = null);
 
@@ -180,24 +181,25 @@ public sealed class ScenarioScreenshotService : IAsyncDisposable
         }
     }
 
-    internal Task CaptureGameAsync(long expectedProfile, long expectedSession)
+    internal Task<PlayRecordingScreenshotResult> CaptureGameAsync(long expectedProfile, long expectedSession)
     {
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_activeCapture is { IsCompleted: false }) throw new InvalidOperationException("撮影を保存中です。完了後に再試行してください。");
-            _activeCapture = CaptureGameCoreAsync(expectedProfile, expectedSession, _shutdown.Token);
-            return _activeCapture;
+            var capture = CaptureGameCoreAsync(expectedProfile, expectedSession, _shutdown.Token);
+            _activeCapture = capture;
+            return capture;
         }
     }
 
-    private async Task CaptureGameCoreAsync(long expectedProfile, long expectedSession, CancellationToken cancellationToken)
+    private async Task<PlayRecordingScreenshotResult> CaptureGameCoreAsync(long expectedProfile, long expectedSession, CancellationToken cancellationToken)
     {
-        try { await SaveCaptureAsync(expectedProfile, expectedSession, gameOnly: true, cancellationToken); }
+        try { return await SaveCaptureAsync(expectedProfile, expectedSession, gameOnly: true, cancellationToken); }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Game screenshot capture/save failed. profile={Profile} session={Session}", expectedProfile, expectedSession);
-            throw new InvalidOperationException("ゲームの画像を保存できませんでした。ゲーム画面を前面にして再試行してください。", ex);
+            throw new InvalidOperationException("ゲームの画像を保存できませんでした。ゲーム画面を前面にして再試行してください。");
         }
         finally { Update(s => s with { Busy = false }); }
     }
@@ -223,7 +225,7 @@ public sealed class ScenarioScreenshotService : IAsyncDisposable
         }
     }
 
-    private async Task SaveCaptureAsync(long? expectedProfile, long? expectedSession, bool gameOnly, CancellationToken cancellationToken)
+    private async Task<PlayRecordingScreenshotResult> SaveCaptureAsync(long? expectedProfile, long? expectedSession, bool gameOnly, CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         // Freeze the body identity before any asynchronous capture/encoding work.
@@ -249,12 +251,25 @@ public sealed class ScenarioScreenshotService : IAsyncDisposable
         if (gameOnly) _capture.RequireScreenshotProcessAlive(target, processId);
         await _capture.FlushPendingAsync().WaitAsync(cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
-        await _store.SaveScreenshotAsync(target, new(frame.Width, frame.Height, frame.PixelHash, frame.PngBytes), capturedAt, cancellationToken);
+        var saved = await _store.SaveScreenshotAsync(target, new(frame.Width, frame.Height, frame.PixelHash, frame.PngBytes), capturedAt, cancellationToken);
         Update(s => s with { SavedCount = s.SavedCount + 1, Status = "スクリーンショットを保存しました" });
+        return new(target.Event, saved.ImageId);
     }
 
-    internal async Task<IReadOnlyList<PlayRecordingScreenshot>> GetPlayScreenshotsAsync(long profileId, CaptureEventKey key) =>
-        (await _store.GetEventScreenshotsAsync(profileId, key)).Select(x => new PlayRecordingScreenshot(x.ImageId, x.Width, x.Height, x.CapturedAt)).ToArray();
+    internal async Task<IReadOnlyList<PlayRecordingScreenshot>> GetPlayScreenshotsAsync(long profileId, CaptureEventKey key)
+    {
+        try
+        {
+            await _store.GetEventScreenshotMetadataAsync(profileId, [key]);
+            return (await _store.GetEventScreenshotsAsync(profileId, key))
+                .Select(x => new PlayRecordingScreenshot(x.ImageId, x.Width, x.Height, x.CapturedAt)).ToArray();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Play screenshot metadata could not be read. profile={Profile} session={Session}", profileId, key.SessionId);
+            throw new InvalidOperationException("選択した本文の画像情報を読み込めませんでした。");
+        }
+    }
 
     internal async Task<byte[]> ReadPlayScreenshotAsync(long profileId, CaptureEventKey key, string imageId)
     {
@@ -262,7 +277,7 @@ public sealed class ScenarioScreenshotService : IAsyncDisposable
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Play screenshot could not be read. profile={Profile} session={Session}", profileId, key.SessionId);
-            throw new InvalidOperationException("選択した本文の画像を読み込めませんでした。", ex);
+            throw new InvalidOperationException("選択した本文の画像を読み込めませんでした。");
         }
     }
 

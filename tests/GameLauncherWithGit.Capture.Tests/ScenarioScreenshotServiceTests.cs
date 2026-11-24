@@ -120,6 +120,9 @@ public sealed class ScenarioScreenshotServiceTests : IAsyncDisposable
         await BeginPreviewAsync("other"); await _capture.ConfirmProcessAsync();
         var blocked = await play.GetStateAsync("game");
         Assert.False(blocked.CanStart);
+        Assert.True(blocked.BlockedByOtherGame);
+        Assert.Null(blocked.Target.SessionId);
+        Assert.Equal("game", blocked.Title);
         await Assert.ThrowsAsync<InvalidOperationException>(() => play.GetItemsAsync("game", blocked.Target));
         await Assert.ThrowsAsync<InvalidOperationException>(() => play.FinishAsync("game", draft.Target));
         var other = await play.GetStateAsync("other");
@@ -128,6 +131,9 @@ public sealed class ScenarioScreenshotServiceTests : IAsyncDisposable
 
         var beforeRestart = await play.GetStateAsync("game");
         Assert.True(beforeRestart.CanStart);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => play.StartAsync("game", beforeRestart.Target));
+        var otherProfile = (await _store.FindCaptureProfileAsync("other"))!;
+        await _store.SaveCaptureProfileAsync(otherProfile with { BodyExecutablePath = "other.exe" });
         await play.StartAsync("game", beforeRestart.Target);
         var restarted = await play.GetStateAsync("game");
         Assert.True(restarted.Recording);
@@ -145,7 +151,7 @@ public sealed class ScenarioScreenshotServiceTests : IAsyncDisposable
     // claim = "Web撮影はゲーム窓専用経路を使い、許可ゲームの対象本文に添付したPNGだけを返す"
     // oracle = { type = "contract", ref = "WithMate Session Graph play-recording-web / play-web-product-coordination; play-web-recording-operations-work" }
     // fault = "PCで手動指定した別PID窓やデスクトップ画素を取得する、または他ゲームや異なる本文の画像IDを読み出す"
-    // observable = "platformの使用経路と対象窓、範囲内のPNGバイト、別本文・別ゲームの読取拒否"
+    // observable = "platformの使用経路と対象窓、後続本文が届いた後に返る固定済み本文と画像ID、PNGバイト、別本文・別ゲームの読取拒否"
     // observation_boundary = "public-boundary"
     // scope = "game-only screenshot source and reading the exact game, event and image association"
     // lifecycle = "permanent"
@@ -160,19 +166,161 @@ public sealed class ScenarioScreenshotServiceTests : IAsyncDisposable
         _screenshots.SelectWindow(_platform.Windows[1]);
         _host.Emit(Body, "撮影対象");
         var key = _capture.FreezeScreenshotTarget().Target.Event;
-        await play.TakeScreenshotAsync("game", state.Target);
+        var (entered, release) = _platform.HoldNextGameFrame();
+        var taking = play.TakeScreenshotAsync("game", state.Target);
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            _host.Emit(Body, "画像なし本文");
+        }
+        finally { release.TrySetResult(FakePlatform.Frame); }
+        var result = await taking;
+        Assert.Equal(key, result.Event);
         Assert.Empty(_platform.Captured);
         Assert.Equal(_platform.Windows[0], Assert.Single(_platform.GameWindowsCaptured));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => play.TakeScreenshotAsync("game", state.Target));
+        Assert.Single(_platform.GameWindowsCaptured);
+        state = await play.GetStateAsync("game");
         var image = Assert.Single(await play.GetScreenshotsAsync("game", state.Target, key));
+        Assert.Equal(image.ImageId, result.ImageId);
         Assert.Equal(FakePlatform.Frame.PngBytes, await play.ReadScreenshotAsync("game", state.Target, key, image.ImageId));
-        _host.Emit(Body, "画像なし本文");
-        await _capture.FlushPendingAsync();
         await Assert.ThrowsAsync<InvalidOperationException>(() => play.ReadScreenshotAsync("game", state.Target,
             key with { Sequence = key.Sequence + 1 }, image.ImageId));
         await play.FinishAsync("game", state.Target);
         await BeginPreviewAsync("other"); await _capture.ConfirmProcessAsync();
         var other = await play.GetStateAsync("other");
         await Assert.ThrowsAsync<InvalidOperationException>(() => play.ReadScreenshotAsync("other", other.Target, key, image.ImageId));
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "PCによる同ゲームの取得元切替に割り込んだWeb保存は、旧区間を新しい取得回や旧履歴へ書かない"
+    // oracle = { type = "contract", ref = "WithMate Session Graph play-recording-web / play-web-recording-operations-work" }
+    // fault = "取得元の切替と区間保存が異なる排他境界を使い、すでに切替中の旧選択から保存できる"
+    // observable = "擬似接続中のWeb保存待ち、切替後の保存拒否、取得回IDとSQLite区間件数"
+    // observation_boundary = "public-boundary"
+    // scope = "independently scheduled PC capture-source switch and web save"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task WebSaveWaitsForDesktopSourceSwitchAndRejectsTheOldSelection()
+    {
+        await BeginPreviewAsync(); await _capture.ConfirmProcessAsync();
+        var play = Play;
+        var first = await play.GetStateAsync("game");
+        await play.StartRangeAsync("game", first.Target);
+        _host.Emit(Body, "切替前の本文");
+        var frozen = await play.EndRangeAsync("game", (await play.GetStateAsync("game")).Target);
+        var ready = await play.GetStateAsync("game");
+        var (entered, release) = _host.HoldNextConnection();
+        var switching = _capture.SelectProcessAsync(Environment.ProcessId, preview: false);
+        Task<long> save;
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            save = play.SaveRangeAsync("game", ready.Target, frozen, "旧区間", []);
+            Assert.False(save.IsCompleted);
+        }
+        finally { release.TrySetResult(); await switching; }
+        await Assert.ThrowsAsync<InvalidOperationException>(() => save);
+        var after = await play.GetStateAsync("game");
+        Assert.NotEqual(first.Target.SessionId, after.Target.SessionId);
+        Assert.Null(after.PendingRange);
+        Assert.Empty(await play.GetRangesAsync("game", after.Target));
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "本文ページ境界は新着でずれず、話者・分類の訂正は表示時と同じ本文だけに適用される"
+    // oracle = { type = "contract", ref = "WithMate Session Graph play-recording-web / play-web-product-coordination; README.md: シナリオ抽出" }
+    // fault = "新着によって前ページの末尾を再取得する、または直前の訂正を旧表示の操作で上書きする"
+    // observable = "本文ページの列、新旧表示による訂正の成否、再取得した話者・分類"
+    // observation_boundary = "public-boundary"
+    // scope = "live keyset pagination and compare-before-write text corrections"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task OlderTextPageStaysStableWhileReceivingAndCorrectionRejectsAnOldRow()
+    {
+        await BeginPreviewAsync(); await _capture.ConfirmProcessAsync();
+        var play = Play;
+        var state = await play.GetStateAsync("game");
+        foreach (var text in new[] { "一", "ニ", "三", "四" }) _host.Emit(Body, text);
+        await _capture.FlushPendingAsync();
+        var first = await play.GetItemsAsync("game", state.Target, limit: 2);
+        Assert.Equal(new[] { "三", "四" }, first.Items.Select(x => x.Text));
+        _host.Emit(Body, "五"); await _capture.FlushPendingAsync();
+        var older = await play.GetItemsAsync("game", state.Target, limit: 2, before: first.NextBefore);
+        Assert.Equal(new[] { "一", "ニ" }, older.Items.Select(x => x.Text));
+        Assert.False(older.HasMore);
+        var edit = older.Items[0];
+        await play.SetSpeakerAsync("game", state.Target, edit, "真夜");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => play.SetSpeakerAsync("game", state.Target, edit, "古い入力"));
+        var current = (await play.GetItemsAsync("game", state.Target, limit: 2, before: first.NextBefore)).Items[0];
+        Assert.Equal("真夜", current.Speaker);
+        var dialogue = Assert.Single(await play.GetLabelsAsync("game", state.Target), x => x.Kind == CaptureKind.Dialogue);
+        await play.SetLabelAsync("game", state.Target, current, dialogue.Id);
+        var corrected = (await play.GetItemsAsync("game", state.Target, limit: 2, before: first.NextBefore)).Items[0];
+        Assert.Equal(("真夜", CaptureKind.Dialogue), (corrected.Speaker, corrected.Kind));
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "区間で本文を絞り、観測出現の位置を開いたり切ったりしても、手動場面の有向接続は観測経路に混ざらない"
+    // oracle = { type = "contract", ref = "WithMate Session Graph play-recording-web / play-web-screenshot-result-and-flow-navigation; README.md: シナリオ抽出（フローチャートと場面フロー）" }
+    // fault = "区間の所有を無視する、出現内の指定位置を本文先頭へずらす、古い場面でPCの編集を上書きする、または手動辺を観測辺に混ぜる"
+    // observable = "区間本文と範囲外拒否、観測cut位置、PC編集後のWeb更新拒否、現在の手動辺と観測辺"
+    // observation_boundary = "public-boundary"
+    // scope = "navigation, observed occurrence cut, and separately authored scene connection"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task RangeAndOccurrenceNavigationKeepAuthoredConnectionsOutOfObservedFlow()
+    {
+        await BeginPreviewAsync(); await _capture.ConfirmProcessAsync();
+        var play = Play;
+        var state = await play.GetStateAsync("game");
+        _host.Emit(Body, "はじめ"); _host.Emit(Body, "後半から分岐");
+        await _capture.FlushPendingAsync();
+        var texts = (await play.GetItemsAsync("game", state.Target)).Items;
+        var second = texts[1];
+        var selection = await play.SelectRangeAsync("game", state.Target, second, second);
+        var range = await play.SaveRangeAsync("game", state.Target, selection, "分岐", []);
+        state = await play.GetStateAsync("game");
+        Assert.Equal(second, Assert.Single((await play.GetItemsAsync("game", state.Target, rangeId: range)).Items));
+        await _store.UpsertAsync(new("other", "other", "other.exe", null, null, null, GameCardStatus.Unknown));
+        var theirProfile = await _store.GetOrCreateCaptureProfileAsync("other");
+        var theirSession = await _store.BeginCaptureSessionAsync(theirProfile.Id);
+        await _store.AppendCaptureAsync(theirSession, new(1, DateTimeOffset.UtcNow, Body, "他の本文", CaptureRole.Body), new());
+        var theirRange = await _store.SaveCaptureRangeAsync(theirProfile.Id, "他の区間", new(theirSession, 1, 0), new(theirSession, 1, 4));
+        await Assert.ThrowsAsync<ArgumentException>(() => play.GetItemsAsync("game", state.Target, rangeId: theirRange));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => play.GetItemAtAsync("game", state.Target, new(theirSession, 1, 0)));
+
+        var middle = second.StartPosition with { Offset = second.Start + 2 };
+        Assert.Equal(second, await play.GetItemAtAsync("game", state.Target, middle));
+        await play.CutPathAsync("game", state.Target, middle);
+        state = await play.GetStateAsync("game");
+        Assert.Contains(middle, (await _store.GetScenarioFlowOverridesAsync(state.Target.ProfileId)).Cuts);
+        var observed = (await play.GetObservedFlowAsync("game", state.Target)).Graph;
+        var firstScene = await play.CreateSceneAsync("game", state.Target, new("開始", null, null, 0, 0, [], []));
+        state = await play.GetStateAsync("game");
+        var lastScene = await play.CreateSceneAsync("game", state.Target, new("分岐", null, null, 0, 0, [range], []));
+        state = await play.GetStateAsync("game");
+        var flow = await play.GetSceneFlowAsync("game", state.Target);
+        var from = Assert.Single(flow.Scenes, x => x.Id == firstScene);
+        var to = Assert.Single(flow.Scenes, x => x.Id == lastScene);
+        await _store.UpdateScenarioSceneAsync(state.Target.ProfileId, firstScene, from.Definition with { Title = "PCの開始" });
+        await Assert.ThrowsAsync<InvalidOperationException>(() => play.UpdateSceneAsync("game", state.Target, from, from.Definition with { Title = "旧表示" }));
+        flow = await play.GetSceneFlowAsync("game", state.Target);
+        from = Assert.Single(flow.Scenes, x => x.Id == firstScene);
+        await play.SetSceneConnectionAsync("game", state.Target, from, to, connected: true);
+        state = await play.GetStateAsync("game");
+        flow = await play.GetSceneFlowAsync("game", state.Target);
+        Assert.Equal("PCの開始", from.Definition.Title);
+        Assert.Equal(new ScenarioSceneConnection(firstScene, lastScene), Assert.Single(flow.Connections));
+        Assert.Equal(range, Assert.Single(to.Definition.RangeIds));
+        var after = (await play.GetObservedFlowAsync("game", state.Target)).Graph;
+        Assert.Equal(observed.Edges.Select(x => (x.FromBlockId, x.ToBlockId)), after.Edges.Select(x => (x.FromBlockId, x.ToBlockId)));
     }
 
     // @test-value v2
@@ -600,7 +748,19 @@ public sealed class ScenarioScreenshotServiceTests : IAsyncDisposable
     {
         public event Action<CaptureSource, string>? Output;
         public event Action<uint, bool>? ConnectionChanged;
-        public Task ConnectAsync(int processId) { ConnectionChanged?.Invoke((uint)processId, true); return Task.CompletedTask; }
+        private (TaskCompletionSource Entered, TaskCompletionSource Release)? _hold;
+        public (TaskCompletionSource Entered, TaskCompletionSource Release) HoldNextConnection() =>
+            (_hold = (new(TaskCreationOptions.RunContinuationsAsynchronously), new(TaskCreationOptions.RunContinuationsAsynchronously))).Value;
+        public async Task ConnectAsync(int processId)
+        {
+            if (_hold is { } hold)
+            {
+                _hold = null;
+                hold.Entered.TrySetResult();
+                await hold.Release.Task;
+            }
+            ConnectionChanged?.Invoke((uint)processId, true);
+        }
         public void Detach(int processId) => ConnectionChanged?.Invoke((uint)processId, false);
         public IReadOnlyList<CaptureProcess> GetProcesses() => [new(Environment.ProcessId, "test-body", Environment.ProcessPath!, "テスト用ゲーム")];
         public CaptureProcess? GetForegroundProcess() => GetProcesses()[0];
@@ -620,7 +780,10 @@ public sealed class ScenarioScreenshotServiceTests : IAsyncDisposable
         public int Signals;
         public Action? Callback;
         private TaskCompletionSource<ScenarioScreenshotFrame>? _nextFrame;
+        private (TaskCompletionSource Entered, TaskCompletionSource<ScenarioScreenshotFrame> Release)? _nextGameFrame;
         public TaskCompletionSource<ScenarioScreenshotFrame> HoldNextFrame() => _nextFrame = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public (TaskCompletionSource Entered, TaskCompletionSource<ScenarioScreenshotFrame> Release) HoldNextGameFrame() =>
+            (_nextGameFrame = (new(TaskCreationOptions.RunContinuationsAsynchronously), new(TaskCreationOptions.RunContinuationsAsynchronously))).Value;
         public IReadOnlyList<CaptureWindow> ListWindows(int? processId = null) => Windows.Where(x => processId is null || x.ProcessId == processId).ToArray();
         public Task<ScenarioScreenshotFrame> CaptureAsync(CaptureWindow target, CancellationToken cancellationToken = default)
         {
@@ -631,6 +794,12 @@ public sealed class ScenarioScreenshotServiceTests : IAsyncDisposable
         public Task<ScenarioScreenshotFrame> CaptureGameWindowAsync(CaptureWindow target, CancellationToken cancellationToken = default)
         {
             GameWindowsCaptured.Add(target);
+            if (_nextGameFrame is { } pending)
+            {
+                _nextGameFrame = null;
+                pending.Entered.TrySetResult();
+                return pending.Release.Task.WaitAsync(cancellationToken);
+            }
             return Task.FromResult(Frame);
         }
         public Task RegisterHotkeyAsync(ScreenshotHotkey hotkey, Action callback)

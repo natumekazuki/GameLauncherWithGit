@@ -965,8 +965,11 @@
             throw new InvalidOperationException("表示中の区間が変わりました。選び直してください。");
         await RecordingOperations.SaveDesktopRangeAsync(expected, draft, _rangeName, _rangeTags);
         _snapshot = CaptureService.Snapshot;
-        await RefreshRangeStateAsync(_snapshot);
-        CloseEditors(); ClearTextRange(); _offset = 0; await LoadItemsAsync();
+        CloseEditors(); ClearTextRange(); _offset = 0;
+        var saved = _snapshot;
+        try { await RefreshRangeStateAsync(saved); }
+        catch (InvalidOperationException) when (CaptureService.Snapshot.OperationVersion != saved.OperationVersion) { }
+        await LoadItemsAsync();
     }, "区間を保存しました。");
     private void ClearSelection() => _selected.Clear();
     private void OpenBulk() { _bulkOpen = true; _focusEditor = true; }
@@ -1022,9 +1025,10 @@
         finally
         {
             _snapshot = CaptureService.Snapshot; _candidateKey = ""; _pausedCandidates = null; _sourceSearch = ""; _profile = _snapshot.Profile;
+            if (_profile?.Id == expected.ProfileId)
+                _settingsTarget = PlayRecordingOperations.DesktopTarget(_snapshot, expected.ProfileId);
             if (_profile is not null) { _split = _profile.Rules.SplitDialogue; _outside = _profile.Rules.OutsideIsNarration; }
         }
-        _settingsTarget = PlayRecordingOperations.DesktopTarget(_snapshot, _snapshot.Profile?.Id ?? 0);
         SetSettingsTab(1);
     });
     private Task ConfirmProcessAsync(PlayRecordingTarget expected) => RunAsync(async () =>

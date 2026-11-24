@@ -292,6 +292,19 @@ public sealed partial class SqliteGameLibraryStore
         return await FindCaptureItemAsync(connection, null, profileId, itemId);
     }
 
+    public async Task<CaptureTextItem?> FindCaptureItemAtAsync(long profileId, CapturePosition position)
+    {
+        await EnsureInitializedAsync(default);
+        await using var connection = await OpenConnectionAsync(default);
+        await using var command = CaptureCommand(connection, null, CaptureItemQuery + """
+             JOIN CaptureSessions s ON s.Id=i.SessionId WHERE s.CaptureGameId=$game
+             AND i.SessionId=$session AND i.ReceiveSequence=$sequence AND i.StartUtf16<=$offset
+             AND i.StartUtf16+i.LengthUtf16>$offset
+            """, ("$game", profileId), ("$session", position.SessionId), ("$sequence", position.Sequence), ("$offset", position.Offset));
+        await using var reader = await command.ExecuteReaderAsync();
+        return await reader.ReadAsync() ? ReadCaptureItem(reader) : null;
+    }
+
     private static async Task<CaptureTextItem?> FindCaptureItemAsync(SqliteConnection connection, SqliteTransaction? transaction,
         long profileId, long itemId)
     {

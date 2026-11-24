@@ -35,6 +35,7 @@ public sealed record PlayRecordingState(PlayRecordingTarget Target, string Title
     public bool CanStartRange { get; init; }
     public bool CanEndRange { get; init; }
     public bool CanTakeScreenshot { get; init; }
+    public bool BlockedByOtherGame { get; init; }
 }
 
 /// <summary>
@@ -94,7 +95,8 @@ public sealed partial class PlayRecordingOperations(ScenarioCaptureService captu
         {
             CanStartRange = recording && live.LastBody is not null && live.RangeStart is null && pending is null,
             CanEndRange = recording && live.RangeStart is { } start && live.LastBody?.CompareTo(start) > 0,
-            CanTakeScreenshot = recording && live.LastBody is { Sequence: > 0 }
+            CanTakeScreenshot = recording && live.LastBody is { Sequence: > 0 },
+            BlockedByOtherGame = live.Active && !ours
         };
     });
 
@@ -105,7 +107,7 @@ public sealed partial class PlayRecordingOperations(ScenarioCaptureService captu
         try { await capture.StartConfiguredCoreAsync(profile); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            throw new InvalidOperationException("設定済みのゲームに接続できませんでした。PCで対象ゲームと取得設定を確認してください。", ex);
+            throw new InvalidOperationException("設定済みのゲームに接続できませんでした。PCで対象ゲームと取得設定を確認してください。");
         }
     });
 
@@ -114,7 +116,7 @@ public sealed partial class PlayRecordingOperations(ScenarioCaptureService captu
     public Task FinishAsync(string gameId, PlayRecordingTarget expected) => ForGameAsync(gameId, expected, () =>
     {
         RequireFormal(expected);
-        return capture.FinishCoreAsync();
+        return capture.FinishCoreAsync(reportFailure: true);
     });
 
     private void RequireFormal(PlayRecordingTarget expected)
@@ -177,8 +179,8 @@ public sealed partial class PlayRecordingOperations(ScenarioCaptureService captu
 
     private async Task<PlayRecordingRangeSelection> SelectRangeCoreAsync(PlayRecordingTarget expected, CaptureTextItem first, CaptureTextItem last)
     {
-        first = await RequireItemAsync(expected.ProfileId, first, matchDetails: false);
-        last = await RequireItemAsync(expected.ProfileId, last, matchDetails: false);
+        first = await RequireItemAsync(expected.ProfileId, first);
+        last = await RequireItemAsync(expected.ProfileId, last);
         if (first.StartPosition.CompareTo(last.EndPosition) >= 0) throw new ArgumentException("開始より後の終了位置を選んでください。");
         return new(expected, new(expected.ProfileId, first.StartPosition, last.EndPosition), live: false);
     }
@@ -197,6 +199,7 @@ public sealed partial class PlayRecordingOperations(ScenarioCaptureService captu
         else if (selection.Target != expected) throw Stale();
 
         await capture.FlushPendingAsync();
+        if (selection.Live) RequireFormal(expected);
         var rangeId = await store.SaveCaptureRangeAsync(expected.ProfileId, name, selection.Start, selection.End, tags);
         selection.Saved = true;
         if (selection.Live) _pendingRange = null;
@@ -204,11 +207,11 @@ public sealed partial class PlayRecordingOperations(ScenarioCaptureService captu
         return rangeId;
     }
 
-    private async Task<CaptureTextItem> RequireItemAsync(long profileId, CaptureTextItem expected, bool matchDetails)
+    private async Task<CaptureTextItem> RequireItemAsync(long profileId, CaptureTextItem expected)
     {
         var item = await store.FindCaptureItemAsync(profileId, expected.Id);
         if (item is null || item.SessionId != expected.SessionId || item.Sequence != expected.Sequence
-            || item.Start != expected.Start || item.Length != expected.Length || (matchDetails && item != expected)) throw Stale();
+            || item.Start != expected.Start || item.Length != expected.Length) throw Stale();
         return item;
     }
 
@@ -231,7 +234,7 @@ public sealed partial class PlayRecordingOperations(ScenarioCaptureService captu
     internal Task<long> SaveDesktopRangeAsync(PlayRecordingTarget expected, PlayRecordingRangeSelection selection, string name, IReadOnlyCollection<string> tags)
         => ForDesktopAsync(expected, !selection.Live, () => SaveRangeCoreAsync(expected, selection, name, tags));
     internal Task PauseDesktopAsync(PlayRecordingTarget expected, bool pause) => ForDesktopAsync(expected, false, () => PauseCore(expected, pause));
-    internal Task FinishDesktopAsync(PlayRecordingTarget expected) => ForDesktopAsync(expected, false, () => capture.FinishCoreAsync());
+    internal Task FinishDesktopAsync(PlayRecordingTarget expected) => ForDesktopAsync(expected, false, () => capture.FinishCoreAsync(reportFailure: true));
     internal Task ConnectDesktopAsync(PlayRecordingTarget expected, int processId) => ForDesktopAsync(expected, false, () => capture.SelectProcessCoreAsync(processId));
     internal Task ConfirmDesktopAsync(PlayRecordingTarget expected) => ForDesktopAsync(expected, false, () => capture.ConfirmProcessCoreAsync());
     internal Task SaveDesktopRulesAsync(PlayRecordingTarget expected, CaptureRules rules, CaptureSource? source)

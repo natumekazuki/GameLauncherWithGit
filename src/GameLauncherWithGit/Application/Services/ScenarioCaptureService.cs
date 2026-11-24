@@ -38,6 +38,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
     private bool _active;
     private bool _finishing;
     private bool _connected;
+    private bool _connectionLost;
     private bool _needsProcess;
     private bool _preview, _connecting, _paused;
     private long _pathEpoch;
@@ -88,7 +89,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
     internal void RequireScreenshotProcessAlive(ScreenshotTarget target, int processId)
     {
         lock (_gate)
-            if (_profile?.Id != target.CaptureGameId || _session != target.Event.SessionId
+            if (!_connected || _profile?.Id != target.CaptureGameId || _session != target.Event.SessionId
                 || _body is not { } body || body.Id != processId || body.HasExited)
                 throw new InvalidOperationException("撮影対象のゲームが終了しました。");
     }
@@ -169,6 +170,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
             {
                 _operationVersion++;
                 _profile = profile; _session = null; _active = true; _connected = false; _needsProcess = true;
+                _connectionLost = false;
                 _labels = labels;
                 _sequence = _received = _saved = _lost = 0; _status = "ゲーム本体を選択してください";
                 _lastBodyPosition = null; _rangeStart = null; _preview = true; _paused = false; _process = null;
@@ -199,6 +201,9 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
         if (!profile.Enabled || string.IsNullOrWhiteSpace(profile.BodyExecutablePath)
             || !profile.Rules.Selections.Any(x => x.Role == CaptureRole.Body) || OperationState.Active)
             throw new InvalidOperationException("ゲームの記録設定と現在の接続状態を確認してください。");
+        if ((await _store.GetCaptureProfilesAsync()).Any(other => other.Id != profile.Id && other.GameId is not null
+            && string.Equals(other.BodyExecutablePath, profile.BodyExecutablePath, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("同じ実行ファイルを使用するゲームがあります。PCで記録対象を選択してください。");
         var matches = GetProcesses().Where(x => string.Equals(x.Path, profile.BodyExecutablePath,
             StringComparison.OrdinalIgnoreCase)).ToArray();
         if (matches.Length != 1)
@@ -230,6 +235,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
             lock (_gate)
             {
                 _active = true; _connected = false; _needsProcess = false; _preview = true; _paused = false; _session = null;
+                _connectionLost = false;
                 _sequence = _received = _saved = _lost = 0; _status = "接続中";
                 _process = null; _lastBodyPosition = null;
                 _buffer.Clear(); _candidates.Clear(); _attempted.Clear(); _currentSelections.Clear(); _bufferBytes = 0;
@@ -253,7 +259,8 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
             await _host.ConnectAsync(id);
             lock (_gate)
             {
-                if (!_active || _body != process) throw new InvalidOperationException("接続中にゲーム本体が終了しました。");
+                if (!_active || _body != process || _connectionLost || process.HasExited)
+                    throw new InvalidOperationException("接続中にゲーム本体が終了しました。");
                 _connected = true; _status = "テスト受信中（保存しません）";
             }
             if (!preview && profile.Rules.Selections.Any(x => x.Role == CaptureRole.Body))
@@ -306,25 +313,41 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
 
     private async void OnBodyExited(object? sender, EventArgs args)
     {
-        if (sender is Process process) await RunOperationAsync(() => FinishCoreAsync(process));
+        if (sender is not Process process) return;
+        lock (_gate)
+        {
+            if (process != _body) return;
+            MarkConnectionLost();
+        }
+        await RunOperationAsync(() => FinishCoreAsync(process));
     }
 
     private void OnConnection(uint pid, bool connected)
     {
+        if (connected) return;
         Process body;
         lock (_gate)
         {
             if (_body is not { } current || current.Id != pid) return;
             body = current;
+            MarkConnectionLost();
         }
-        if (!connected) _ = RunOperationAsync(() => FinishCoreAsync(body));
+        _ = RunOperationAsync(() => FinishCoreAsync(body));
+    }
+
+    private void MarkConnectionLost()
+    {
+        if (!_connectionLost) _operationVersion++;
+        _connected = false;
+        _connectionLost = true;
+        _status = "切断されました";
     }
 
     private void OnOutput(CaptureSource source, string text)
     {
         lock (_gate)
         {
-            if (!_active || _paused || _body?.Id != source.ProcessId || _profile is null) return;
+            if (!_active || _paused || _connectionLost || _body?.Id != source.ProcessId || _profile is null) return;
             _received++;
             var receivedAt = DateTimeOffset.UtcNow;
             if (_candidates.ContainsKey(source.Key) || _candidates.Count < 256)
@@ -379,7 +402,8 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
     {
         lock (_gate)
         {
-            if (!_active || !_connected || _preview || _paused || _lastBodyPosition is null) throw new InvalidOperationException("取得中のゲームで区間を開始してください。");
+            RequireFormalConnection();
+            if (_paused || _lastBodyPosition is null) throw new InvalidOperationException("取得中のゲームで区間を開始してください。");
             if (_rangeStart is not null) throw new InvalidOperationException("指定中の区間を終了または取り消してください。");
             _rangeStart = _lastBodyPosition;
             _operationVersion++;
@@ -390,6 +414,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
     {
         lock (_gate)
         {
+            RequireFormalConnection();
             if (_rangeStart is null || _lastBodyPosition is null || _profile is null) throw new InvalidOperationException("区間の開始を指定してください。");
             if (_rangeStart.CompareTo(_lastBodyPosition) >= 0) throw new InvalidOperationException("開始後の本文がまだ届いていません。");
             var selection = new CaptureRangeSelection(_profile.Id, _rangeStart, _lastBodyPosition);
@@ -401,7 +426,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
 
     public void CancelRange()
     {
-        lock (_gate) { _rangeStart = null; _operationVersion++; }
+        lock (_gate) { RequireFormalConnection(); _rangeStart = null; _operationVersion++; }
     }
 
     public void BreakPath()
@@ -586,7 +611,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
 
     public Task FinishAsync() => RunOperationAsync(() => FinishCoreAsync());
 
-    internal async Task FinishCoreAsync(Process? expectedBody = null)
+    internal async Task FinishCoreAsync(Process? expectedBody = null, bool reportFailure = false)
     {
         Process? body; long? session;
         lock (_gate)
@@ -601,13 +626,19 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
             _candidates.Clear();
         }
         StateChanged?.Invoke();
+        var failed = false;
         try
         {
             if (body is not null)
             {
                 body.Exited -= OnBodyExited;
-                _host.Detach(body.Id);
-                body.Dispose();
+                try { _host.Detach(body.Id); }
+                catch (Exception ex)
+                {
+                    failed = true;
+                    _logger.LogError(ex, "Capture detach failed. session={Session}", session);
+                }
+                finally { body.Dispose(); }
             }
             await FlushPendingAsync();
             if (session is { } id)
@@ -616,8 +647,9 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
                 await _store.EndCaptureSessionAsync(id);
             }
         }
-        catch (Exception ex) { _logger.LogError(ex, "Capture finish failed. session={Session}", session); }
+        catch (Exception ex) { failed = true; _logger.LogError(ex, "Capture finish failed. session={Session}", session); }
         finally { lock (_gate) _finishing = false; }
+        if (failed && reportFailure) throw new InvalidOperationException("取得は停止しましたが、終了処理を完了できませんでした。PCで状態を確認してください。");
     }
 
     public async ValueTask DisposeAsync()

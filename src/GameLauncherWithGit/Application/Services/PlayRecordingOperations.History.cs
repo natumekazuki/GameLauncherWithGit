@@ -2,19 +2,34 @@ using GameLauncherWithGit.Application.Models;
 
 namespace GameLauncherWithGit.Application.Services;
 
-public sealed record PlayRecordingPage(IReadOnlyList<CaptureTextItem> Items, bool HasMore);
+public sealed record PlayRecordingPage(IReadOnlyList<CaptureTextItem> Items, bool HasMore)
+{
+    public CapturePosition? NextBefore => HasMore && Items.Count > 0 ? Items[0].StartPosition : null;
+}
 public sealed record PlayRecordingObservedFlow(ScenarioFlowGraph Graph, bool MatchingComplete);
 
 public sealed partial class PlayRecordingOperations
 {
-    // Capture items are returned oldest to newest within each page, with offset counted from the newest end.
-    public Task<PlayRecordingPage> GetItemsAsync(string gameId, PlayRecordingTarget expected, int limit = 40, int offset = 0) =>
+    /// <summary>
+    /// Returns oldest to newest within the page. Supply the previous page's NextBefore when loading older text
+    /// during live capture so newly appended text does not move the page boundary.
+    /// </summary>
+    public Task<PlayRecordingPage> GetItemsAsync(string gameId, PlayRecordingTarget expected, int limit = 40, int offset = 0,
+        CapturePosition? before = null, long? rangeId = null) =>
         ForGameAsync(gameId, expected, async () =>
         {
-            if (limit is < 1 or > 100 || offset < 0) throw new ArgumentOutOfRangeException(nameof(limit));
-            var items = await Store.GetGameCaptureItemsAsync(expected.ProfileId, limit + 1, offset, latest: true);
+            if (limit is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(limit));
+            if (offset < 0 || (before is not null && offset != 0)) throw new ArgumentOutOfRangeException(nameof(offset));
+            var items = await Store.GetGameCaptureItemsAsync(expected.ProfileId, limit + 1, offset, latest: true, rangeId: rangeId, before: before);
             return new PlayRecordingPage(items.TakeLast(limit).ToArray(), items.Count > limit);
         });
+
+    public Task<CaptureTextItem> GetItemAtAsync(string gameId, PlayRecordingTarget expected, CapturePosition position) =>
+        ForGameAsync(gameId, expected, () => RequireItemAtAsync(expected.ProfileId, position));
+
+    private async Task<CaptureTextItem> RequireItemAtAsync(long profileId, CapturePosition position) =>
+        await Store.FindCaptureItemAtAsync(profileId, position)
+            ?? throw new InvalidOperationException("選択した位置の本文が見つかりません。記録を読み込み直してください。");
 
     public Task<IReadOnlyList<CaptureLabel>> GetLabelsAsync(string gameId, PlayRecordingTarget expected) =>
         ForGameAsync(gameId, expected, () => Store.GetCaptureLabelsAsync(expected.ProfileId));
@@ -28,10 +43,12 @@ public sealed partial class PlayRecordingOperations
     public Task SetLabelAsync(string gameId, PlayRecordingTarget expected, CaptureTextItem item, long? labelId) =>
         ForGameAsync(gameId, expected, () => Store.CorrectCaptureItemAsync(expected.ProfileId, item, changeSpeaker: false, labelId: labelId));
 
-    public Task TakeScreenshotAsync(string gameId, PlayRecordingTarget expected) => ForGameAsync(gameId, expected, () =>
+    public Task<PlayRecordingScreenshotResult> TakeScreenshotAsync(string gameId, PlayRecordingTarget expected) => ForGameAsync(gameId, expected, async () =>
     {
         RequireFormal(expected);
-        return Screenshots.CaptureGameAsync(expected.ProfileId, expected.SessionId!.Value);
+        var result = await Screenshots.CaptureGameAsync(expected.ProfileId, expected.SessionId!.Value);
+        Capture.ChangeOperationVersion();
+        return result;
     });
 
     public Task<IReadOnlyList<PlayRecordingScreenshot>> GetScreenshotsAsync(string gameId, PlayRecordingTarget expected, CaptureEventKey key) =>
@@ -54,8 +71,17 @@ public sealed partial class PlayRecordingOperations
     public Task CutPathAsync(string gameId, PlayRecordingTarget expected, CaptureTextItem item) =>
         ForGameAsync(gameId, expected, async () =>
         {
-            var current = await RequireItemAsync(expected.ProfileId, item, matchDetails: false);
+            var current = await RequireItemAsync(expected.ProfileId, item);
             await Store.SetScenarioFlowCutAsync(expected.ProfileId, current.StartPosition);
+            Capture.ChangeOperationVersion();
+        });
+
+    public Task CutPathAsync(string gameId, PlayRecordingTarget expected, CapturePosition position) =>
+        ForGameAsync(gameId, expected, async () =>
+        {
+            await RequireItemAtAsync(expected.ProfileId, position);
+            await Store.SetScenarioFlowCutAsync(expected.ProfileId, position);
+            Capture.ChangeOperationVersion();
         });
 
     public Task<PlayRecordingObservedFlow> GetObservedFlowAsync(string gameId, PlayRecordingTarget expected) =>
@@ -86,27 +112,15 @@ public sealed partial class PlayRecordingOperations
     public Task UpdateSceneAsync(string gameId, PlayRecordingTarget expected, ScenarioScene scene, ScenarioSceneEdit edit) =>
         ForGameAsync(gameId, expected, async () =>
         {
-            RequireScene(await Scenes.GetScenarioSceneFlowAsync(expected.ProfileId), scene);
-            await Scenes.UpdateScenarioSceneAsync(expected.ProfileId, scene.Id, edit);
+            await Scenes.UpdateDisplayedScenarioSceneAsync(expected.ProfileId, scene, edit);
             Capture.ChangeOperationVersion();
         });
 
     public Task SetSceneConnectionAsync(string gameId, PlayRecordingTarget expected, ScenarioScene from, ScenarioScene to, bool connected) =>
         ForGameAsync(gameId, expected, async () =>
         {
-            var snapshot = await Scenes.GetScenarioSceneFlowAsync(expected.ProfileId);
-            RequireScene(snapshot, from);
-            RequireScene(snapshot, to);
-            await Scenes.SetScenarioSceneConnectionAsync(expected.ProfileId, from.Id, to.Id, connected);
+            await Scenes.SetDisplayedScenarioSceneConnectionAsync(expected.ProfileId, from, to, connected);
             Capture.ChangeOperationVersion();
         });
 
-    private static void RequireScene(ScenarioSceneFlowSnapshot flow, ScenarioScene scene)
-    {
-        var current = flow.Scenes.SingleOrDefault(x => x.Id == scene.Id)?.Definition;
-        var expected = scene.Definition;
-        if (current is null || current.Title != expected.Title || current.DisplayNumber != expected.DisplayNumber
-            || current.Chapter != expected.Chapter || current.X != expected.X || current.Y != expected.Y
-            || !current.RangeIds.SequenceEqual(expected.RangeIds) || !current.TagIds.SequenceEqual(expected.TagIds)) throw Stale();
-    }
 }
