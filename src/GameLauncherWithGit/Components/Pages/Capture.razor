@@ -962,13 +962,16 @@
     private Task CancelRangeDraftAsync(PlayRecordingTarget expected, PlayRecordingRangeSelection draft) => RunAsync(async () =>
     {
         if (!ReferenceEquals(draft, _rangeSelection) || expected != _rangeDraftTarget) return;
+        CloseEditors();
         if (draft.Live)
         {
-            await RecordingOperations.CancelDesktopRangeAsync(expected, draft);
-            _pendingLiveRange = null;
-            _snapshot = CaptureService.Snapshot;
+            try
+            {
+                await RecordingOperations.CancelDesktopRangeAsync(expected, draft);
+                _pendingLiveRange = null;
+            }
+            finally { _snapshot = CaptureService.Snapshot; }
         }
-        CloseEditors();
     });
     private Task SaveRangeAsync(PlayRecordingTarget expected, PlayRecordingRangeSelection draft) => RunAsync(async () =>
     {
