@@ -143,6 +143,7 @@ input[type=checkbox] { width:1rem; height:1rem; margin:0; accent-color:#85b4ff; 
 .capture-diagnostics { display:block; font-family:monospace; color:#adbed5; overflow-wrap:anywhere; }
 .capture-message { color:#b4e5ca; }
 .capture-error { color:#ffc3c3; border-color:#9a5353; }
+.capture-export-error { overflow-wrap:anywhere; }
 .capture-feedback { box-sizing:border-box; position:fixed; right:1.5rem; bottom:1.5rem; z-index:2200; display:flex; align-items:center; gap:1rem; max-width:min(34rem,calc(100vw - 3rem)); max-height:10rem; overflow:auto; padding:.75rem 1rem; background:#152238; border:1px solid; border-radius:8px; box-shadow:0 8px 24px #0006; overflow-wrap:anywhere; }
 .capture-feedback .capture-icon-button { width:2rem; height:2rem; }
 .capture-dialog { box-sizing:border-box; width:min(760px,94vw); max-height:90vh; overflow:auto; padding:1.5rem; display:grid; gap:1rem; background:#152238; color:#e6edf7; border:1px solid #52617c; border-radius:10px; scrollbar-gutter:stable; }
