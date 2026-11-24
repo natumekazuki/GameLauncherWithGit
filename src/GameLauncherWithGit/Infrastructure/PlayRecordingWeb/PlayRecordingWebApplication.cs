@@ -160,6 +160,7 @@ internal static class PlayRecordingWebApplication
         MapAsset(app, "play-recording.css", "text/css; charset=utf-8").AllowAnonymous();
         MapAsset(app, "play-recording.js", "text/javascript; charset=utf-8");
         MapScopedStyle(app, "capture-tags.css");
+        MapScopedStyle(app, "scenario-flow.css");
         MapScopedStyle(app, "play-recording-panel.css");
 
         var components = app.MapRazorComponents<PlayRecordingRoot>().AddInteractiveServerRenderMode(options =>

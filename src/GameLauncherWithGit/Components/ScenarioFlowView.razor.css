@@ -3,10 +3,10 @@
 .flow-toolbar label { display:grid; gap:.3rem; }
 .flow-toolbar select { padding:.5rem; background:#101d30; color:inherit; border:1px solid #41516b; border-radius:5px; max-width:100%; }
 .flow-toolbar span,.flow-empty,.flow-connections { color:#adbed5; font-size:.85rem; }
-.flow-canvas { overflow:auto; max-height:52vh; min-height:10rem; border:1px solid #30415a; border-radius:8px; background:#0f1929; }
-.flow-surface { position:relative; }
-.flow-surface svg { position:absolute; inset:0; }
-.flow-node { position:absolute; box-sizing:border-box; width:220px; height:90px; padding:.7rem; background:#1a2d46; border:1px solid #52617c; border-radius:6px; color:inherit; text-align:left; }
+.flow-canvas { contain:inline-size; overflow:auto; max-height:52vh; min-height:10rem; border:1px solid #30415a; border-radius:8px; background:#0f1929; }
+.flow-surface { display:block; }
+.flow-node-frame { box-sizing:border-box; width:100%; height:100%; padding:6px; }
+.flow-node { box-sizing:border-box; width:100%; height:100%; padding:.7rem; background:#1a2d46; border:1px solid #52617c; border-radius:6px; color:inherit; text-align:left; }
 .flow-node span { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; overflow-wrap:anywhere; line-height:1.5; }
 .flow-node small { display:block; color:#adbed5; margin-top:.25rem; }
 .flow-node[aria-pressed=true],.flow-visits [aria-pressed=true] { border-color:#8db8ff; background:#253c5a; }

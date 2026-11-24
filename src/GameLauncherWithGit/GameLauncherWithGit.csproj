@@ -79,13 +79,15 @@
         <None Remove="Components\Pages\PlayRecordingWebAccess.razor.css;Components\PlayRecording\**\*.razor.css" />
     </ItemGroup>
 
-    <!-- Ship only the two generated scoped styles used by the Web UI, without exposing MAUI wwwroot. -->
+    <!-- Ship only the generated scoped styles used by the Web UI, without exposing MAUI wwwroot. -->
     <Target Name="EmbedPlayRecordingWebScopedStyles" BeforeTargets="AssignTargetPaths"
             DependsOnTargets="_ProcessScopedCssFiles"
             Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows' and '$(DesignTimeBuild)' != 'true'">
         <ItemGroup>
             <EmbeddedResource Include="$(IntermediateOutputPath)scopedcss\Components\CaptureTagsEditor.razor.rz.scp.css"
                               LogicalName="PlayRecordingWeb.capture-tags.css" />
+            <EmbeddedResource Include="$(IntermediateOutputPath)scopedcss\Components\ScenarioFlowView.razor.rz.scp.css"
+                              LogicalName="PlayRecordingWeb.scenario-flow.css" />
             <EmbeddedResource Include="$(IntermediateOutputPath)scopedcss\Components\PlayRecording\PlayRecordingPanel.razor.rz.scp.css"
                               LogicalName="PlayRecordingWeb.play-recording-panel.css"
                               Condition="Exists('Components\PlayRecording\PlayRecordingPanel.razor.css')" />
