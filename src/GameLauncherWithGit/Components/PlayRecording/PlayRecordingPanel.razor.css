@@ -38,6 +38,14 @@
     line-height: 1.25;
 }
 .play-shell ::deep button { padding: .5rem .75rem; background: #20334d; cursor: pointer; }
+.play-shell ::deep .play-icon-button, .play-shell ::deep .play-labeled-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: .4rem;
+}
+.play-shell ::deep .play-icon-button { inline-size: 2.75rem; padding: 0; flex: none; }
+.play-shell ::deep button svg { flex: none; }
 .play-shell ::deep input:not([type=checkbox]), .play-shell ::deep select { width: 100%; padding: .5rem; background: var(--play-input); }
 .play-shell ::deep button:disabled { cursor: default; opacity: .55; }
 .play-shell ::deep button[aria-pressed=true] { background: #253c5a; border-color: var(--play-accent); }
@@ -68,7 +76,13 @@
 .play-controls > .play-panel { max-height: 47dvh; overflow: auto; }
 
 @media (max-width: 47.99rem) {
-    .play-body ::deep :is(input, select, button, a) { scroll-margin-block-start: 48dvh; }
+    .play-body ::deep :is(input, select, button, a, [tabindex]) { scroll-margin-block-start: 48dvh; }
+}
+
+@media (max-width: 47.99rem) and (max-height: 35rem) {
+    .play-controls { position: static; }
+    .play-controls > .play-panel { max-height: none; overflow: visible; }
+    .play-body ::deep :is(input, select, button, a, [tabindex]) { scroll-margin-block-start: .75rem; }
 }
 
 @media (min-width: 48rem) {

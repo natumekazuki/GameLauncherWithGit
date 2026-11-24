@@ -90,6 +90,7 @@ input[type=checkbox] { width:1rem; height:1rem; margin:0; accent-color:#85b4ff; 
 .capture-item p { max-width:76ch; }
 .capture-range-edge { background:#1a2d46; box-shadow:inset 3px 0 #8db8ff; }
 .capture-empty { padding:2rem 1rem; color:#adbed5; }
+.capture-feed-error { padding:1rem; overflow-wrap:anywhere; }
 .capture-settings { display:flex; flex-direction:column; gap:1rem; min-width:0; min-height:0; }
 .capture-settings section { min-width:0; min-height:0; }
 .capture-settings h3 { font-size:1rem; margin:0 0 .75rem; }
@@ -142,6 +143,7 @@ input[type=checkbox] { width:1rem; height:1rem; margin:0; accent-color:#85b4ff; 
 .capture-diagnostics { display:block; font-family:monospace; color:#adbed5; overflow-wrap:anywhere; }
 .capture-message { color:#b4e5ca; }
 .capture-error { color:#ffc3c3; border-color:#9a5353; }
+.capture-export-error { overflow-wrap:anywhere; }
 .capture-feedback { box-sizing:border-box; position:fixed; right:1.5rem; bottom:1.5rem; z-index:2200; display:flex; align-items:center; gap:1rem; max-width:min(34rem,calc(100vw - 3rem)); max-height:10rem; overflow:auto; padding:.75rem 1rem; background:#152238; border:1px solid; border-radius:8px; box-shadow:0 8px 24px #0006; overflow-wrap:anywhere; }
 .capture-feedback .capture-icon-button { width:2rem; height:2rem; }
 .capture-dialog { box-sizing:border-box; width:min(760px,94vw); max-height:90vh; overflow:auto; padding:1.5rem; display:grid; gap:1rem; background:#152238; color:#e6edf7; border:1px solid #52617c; border-radius:10px; scrollbar-gutter:stable; }
@@ -164,6 +166,7 @@ input[type=checkbox] { width:1rem; height:1rem; margin:0; accent-color:#85b4ff; 
 .capture-gallery-stage p { padding:1rem; overflow-wrap:anywhere; }
 .capture-gallery-stage:focus-visible { outline:2px solid #a4c8ff; outline-offset:3px; }
 .capture-gallery-navigation { display:flex; align-items:center; justify-content:center; gap:1rem; }
+.capture-gallery-navigation { flex-wrap:wrap; }
 .capture-gallery-navigation span { min-width:7ch; text-align:center; font-size:.85rem; font-variant-numeric:tabular-nums; }
 .modal-backdrop { position:fixed; inset:0; z-index:2000; display:flex; align-items:center; justify-content:center; padding:1rem; background:rgba(0,0,0,.65); }
 .capture-parts { overflow:auto; scrollbar-gutter:stable; }
@@ -206,4 +209,13 @@ input[type=checkbox] { width:1rem; height:1rem; margin:0; accent-color:#85b4ff; 
     .capture-settings-footer { gap:.5rem; }
     .capture-dialog { padding:1rem; }
     .capture-feedback { right:1rem; bottom:1rem; max-width:calc(100vw - 2rem); }
+}
+@media(max-width:390px) {
+    .capture-livebar { grid-template-columns:minmax(0,1fr); position:static; }
+    .capture-tools, .capture-dialog-actions { flex-wrap:wrap; }
+    .capture-tool-group { min-width:0; flex-wrap:wrap; }
+    .capture-tool-group + .capture-tool-group { padding-left:0; border-left:0; }
+    .capture-utilities { margin-left:0; }
+    .capture-item header { display:flex; flex-wrap:wrap; }
+    .capture-speaker { min-width:0; flex:1 1 4rem; }
 }

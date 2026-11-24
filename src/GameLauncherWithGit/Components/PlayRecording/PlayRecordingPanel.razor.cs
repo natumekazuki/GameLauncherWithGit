@@ -1,7 +1,9 @@
 using GameLauncherWithGit.Application.Models;
 using GameLauncherWithGit.Application.Services;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.Logging;
+using Microsoft.JSInterop;
 
 namespace GameLauncherWithGit.Components.PlayRecording;
 
@@ -12,6 +14,12 @@ public partial class PlayRecordingPanel
     [Inject] private NavigationManager Navigation { get; set; } = default!;
 
     private enum Pane { Text, Ranges, Paths, Scenes }
+    private enum FocusTarget { FinishImpact, FinishButton, Pause, Resume, RangeStatus, RangeStart, RangePicker, Ranges, Classification, EditButton, Gallery, GalleryButton, Text }
+    private (FocusTarget Target, long ItemId)? _nextFocus;
+    private ElementReference _finishImpact, _finishButton, _pauseButton, _resumeButton, _rangeStatus,
+        _startRangeButton, _pickRangeButton, _rangesTab, _editClassification, _galleryHeading, _textHeading;
+    private sealed class RowButtons { public ElementReference Edit; public ElementReference Gallery; }
+    private readonly Dictionary<long, RowButtons> _rowButtons = [];
 
     private readonly CancellationTokenSource _lifetime = new();
     private Task? _pollRead;
@@ -29,9 +37,61 @@ public partial class PlayRecordingPanel
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         // Prerender must not read from or authenticate an Interactive Server circuit.
-        if (!firstRender) return;
-        await RefreshAsync();
-        if (!_disposed && !_unauthorized) _ = PollAsync(_lifetime.Token);
+        if (firstRender)
+        {
+            await RefreshAsync();
+            if (!_disposed && !_unauthorized) _ = PollAsync(_lifetime.Token);
+            return;
+        }
+        if (_nextFocus is not { } request || _busy) return;
+        _nextFocus = null;
+        if (ControlsDisabled || _disposed) return;
+
+        var textVisible = _pane == Pane.Text && _galleryItem is null;
+        var rowVisible = textVisible && !_pickingRange && !_textError;
+        var row = _rowButtons.GetValueOrDefault(request.ItemId);
+        var destination = request.Target switch
+        {
+            FocusTarget.FinishImpact when _confirmFinish && _state?.CanFinish == true => _finishImpact,
+            FocusTarget.FinishButton when !_confirmFinish && _state?.CanFinish == true => _finishButton,
+            FocusTarget.Pause when _state is { Paused: false, Recording: true } => _pauseButton,
+            FocusTarget.Resume when _state?.Paused == true => _resumeButton,
+            FocusTarget.RangeStatus when _state is { RangeStart: not null, PendingRange: null } => _rangeStatus,
+            FocusTarget.RangeStart when _state is { Recording: true, Paused: false, CanStartRange: true } && _rangeDraft is null => _startRangeButton,
+            FocusTarget.RangePicker when textVisible && !_textError && _textItems is { Count: > 0 } && _textRangeId is null => _pickRangeButton,
+            FocusTarget.Ranges when _pane == Pane.Ranges => _rangesTab,
+            FocusTarget.Classification when rowVisible && _editItem?.Id == request.ItemId => _editClassification,
+            FocusTarget.EditButton when rowVisible && _textRangeId is null && _editItem?.Id != request.ItemId && row is not null => row.Edit,
+            FocusTarget.Gallery when _pane == Pane.Text && _galleryItem?.Id == request.ItemId => _galleryHeading,
+            FocusTarget.GalleryButton when rowVisible && _editItem?.Id != request.ItemId && row is not null => row.Gallery,
+            FocusTarget.EditButton or FocusTarget.GalleryButton or FocusTarget.Text when textVisible => _textHeading,
+            _ => default
+        };
+        if (destination.Id is not null)
+        {
+            try { await destination.FocusAsync(); }
+            catch (JSDisconnectedException) { }
+        }
+    }
+
+    private void FocusAfterRender(FocusTarget target, long itemId = 0) => _nextFocus = (target, itemId);
+
+    private void OpenFinishConfirmation()
+    {
+        if (ControlsDisabled) return;
+        _confirmFinish = true;
+        FocusAfterRender(FocusTarget.FinishImpact);
+    }
+
+    private void CloseFinishConfirmation()
+    {
+        _confirmFinish = false;
+        FocusAfterRender(FocusTarget.FinishButton);
+    }
+
+    private void HandleEscape(KeyboardEventArgs args, Action close)
+    {
+        if (args.Key == "Escape" && !ControlsDisabled) close();
     }
 
     private async Task PollAsync(CancellationToken cancellationToken)

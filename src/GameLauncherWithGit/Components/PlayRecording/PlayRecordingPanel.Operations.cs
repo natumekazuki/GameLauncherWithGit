@@ -111,6 +111,8 @@ public partial class PlayRecordingPanel
         ResetTextPages();
         _textRangeId = null;
         _textItems = null;
+        _rowButtons.Clear();
+        _nextFocus = null;
         _ranges = null;
         _labels = [];
         _rangeTags = _speakers = [];
@@ -142,6 +144,7 @@ public partial class PlayRecordingPanel
     {
         await UseActionAsync(target, gameId => Operations.StartRangeAsync(gameId, target.Recording));
         await RefreshStatusAsync(loadPane: false);
+        FocusAfterRender(FocusTarget.RangeStatus);
     });
 
     private Task EndRangeAsync(DisplayTarget target) => RunMutationAsync(target, async () =>
@@ -157,6 +160,7 @@ public partial class PlayRecordingPanel
         await UseActionAsync(target, gameId => Operations.CancelRangeAsync(gameId, target.Recording));
         _rangeDraft = null;
         await RefreshStatusAsync(loadPane: false);
+        FocusAfterRender(FocusTarget.RangeStart);
     });
 
     private Task CloseRangeEditorAsync(RangeDraft draft)
@@ -164,6 +168,7 @@ public partial class PlayRecordingPanel
         if (ControlsDisabled || !IsDisplayedTargetCurrent(draft.Target) || !ReferenceEquals(draft, _rangeDraft)) return Task.CompletedTask;
         if (draft.Shared) return CancelRangeAsync(draft.Target);
         _rangeDraft = null;
+        FocusAfterRender(FocusTarget.RangePicker);
         return Task.CompletedTask;
     }
 
@@ -186,7 +191,11 @@ public partial class PlayRecordingPanel
         _rangeDraft = null;
         _pane = Pane.Ranges;
         await RefreshStatusAsync(loadPane: true);
-        if (!_disposed && !_unauthorized) _notice = "区間を保存しました。";
+        if (!_disposed && !_unauthorized)
+        {
+            _notice = "区間を保存しました。";
+            FocusAfterRender(FocusTarget.Ranges);
+        }
     });
 
     private Task StartRecordingAsync(DisplayTarget target) =>
@@ -194,19 +203,20 @@ public partial class PlayRecordingPanel
             "記録を開始できませんでした。PCで対象ゲームと取得設定を確認してください。");
 
     private Task PauseRecordingAsync(DisplayTarget target) =>
-        ChangeRecordingAsync(target, gameId => Operations.PauseAsync(gameId, target.Recording));
+        ChangeRecordingAsync(target, gameId => Operations.PauseAsync(gameId, target.Recording), focus: FocusTarget.Resume);
 
     private Task ResumeRecordingAsync(DisplayTarget target) =>
-        ChangeRecordingAsync(target, gameId => Operations.ResumeAsync(gameId, target.Recording));
+        ChangeRecordingAsync(target, gameId => Operations.ResumeAsync(gameId, target.Recording), focus: FocusTarget.Pause);
 
     private Task FinishRecordingAsync(DisplayTarget target) =>
         ChangeRecordingAsync(target, gameId => Operations.FinishAsync(gameId, target.Recording));
 
-    private Task ChangeRecordingAsync(DisplayTarget target, Func<string, Task> operation, string? rejection = null) => RunMutationAsync(target, async () =>
+    private Task ChangeRecordingAsync(DisplayTarget target, Func<string, Task> operation, string? rejection = null, FocusTarget? focus = null) => RunMutationAsync(target, async () =>
     {
         await UseActionAsync(target, operation);
         _confirmFinish = false;
         await RefreshStatusAsync(loadPane: true);
+        if (focus is { } next) FocusAfterRender(next);
     }, rejection);
 
     private Task BreakLivePathAsync(DisplayTarget target) => RunMutationAsync(target, async () =>

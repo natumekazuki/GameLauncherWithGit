@@ -24,9 +24,9 @@
                 <select aria-label="撮影キー" @bind="_key" disabled="@_busy">
                     @foreach (var key in Keys) { <option value="@key.Value">@key.Name</option> }
                 </select>
-                <button type="submit" class="launch-button screenshot-icon" title="ショートカットを保存" aria-label="ショートカットを保存" disabled="@(_busy || !(_ctrl || _alt || _shift))"><CaptureIcon Name="Check" /></button>
+                <button type="submit" class="launch-button screenshot-icon" title="ショートカットを保存" aria-label="ショートカットを保存" disabled="@(_busy || !(_ctrl || _alt || _shift))"><CaptureIcon Name="Save" /></button>
             </div>
-            <p class="screenshot-feedback" role="status">@((_error != LastFailure?.Message ? _error : null) ?? _message ?? (!(_ctrl || _alt || _shift) ? "Ctrl・Alt・Shiftのいずれかを選択してください。" : ""))</p>
+            <p class="screenshot-feedback" role="@(_error is null ? "status" : "alert")">@((_error != LastFailure?.Message ? _error : null) ?? _message ?? (!(_ctrl || _alt || _shift) ? "Ctrl・Alt・Shiftのいずれかを選択してください。" : ""))</p>
         </form>
         <p class="screenshot-note">Ctrlで文章をスキップするゲームがあります。ゲーム操作と競合しない組み合わせを選んでください。</p>
     </section>

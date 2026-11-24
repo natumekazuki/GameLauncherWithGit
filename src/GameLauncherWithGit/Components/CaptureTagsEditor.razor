@@ -5,25 +5,25 @@
         <div class="capture-tag-list" aria-label="@($"{Label}の選択済みタグ")">
             @foreach (var tag in Tags)
             {
-                <button type="button" class="secondary-button capture-tag" aria-label="@($"{Label}から「{tag}」を外す")" @onclick="() => RemoveAsync(tag)">@tag <span aria-hidden="true">×</span></button>
+                <button type="button" @key="tag" class="secondary-button capture-tag" aria-label="@($"{Label}から「{tag}」を外す")" @onclick="() => RemoveAsync(tag)"><span>@tag</span><CaptureIcon Name="Close" /></button>
             }
         </div>
     }
     <div class="capture-tag-input">
         @if (AllowCreate)
         {
-            <input aria-label="@($"{Label}のタグ名")" placeholder="タグ名を入力・既存タグも選択可" list="@_listId" @bind="_draft" @bind:event="oninput" @onkeydown="OnKeyDownAsync" />
+            <input @ref="_tagInput" aria-label="@($"{Label}のタグ名")" placeholder="タグ名" list="@_listId" @bind="_draft" @bind:event="oninput" @onkeydown="OnKeyDownAsync" />
             <datalist id="@_listId">@foreach (var tag in Choices.Concat(Suggestions)) { <option value="@tag"></option> }</datalist>
         }
         else
         {
-            <select aria-label="@($"{Label}のタグを選択")" @bind="_draft">
+            <select @ref="_tagInput" aria-label="@($"{Label}のタグを選択")" @bind="_draft">
                 <option value="">タグを選択</option>
                 <optgroup label="作品タグ">@foreach (var tag in Choices) { <option value="@tag">@tag</option> }</optgroup>
                 @if (Suggestions.Any()) { <optgroup label="記録済み話者">@foreach (var tag in Suggestions) { <option value="@tag">@tag</option> }</optgroup> }
             </select>
         }
-        <button type="button" class="secondary-button" aria-label="@($"{Label}にタグを追加")" @onclick="AddAsync" disabled="@string.IsNullOrWhiteSpace(_draft)">追加</button>
+        <button type="button" class="secondary-button capture-tag-add" title="タグを追加" aria-label="@($"{Label}にタグを追加")" @onclick="AddAsync" disabled="@string.IsNullOrWhiteSpace(_draft)"><CaptureIcon Name="Plus" /></button>
     </div>
 </fieldset>
 
@@ -36,6 +36,7 @@
     [Parameter] public bool AllowCreate { get; set; } = true;
     [Parameter] public bool Disabled { get; set; }
     private string _draft = "";
+    private ElementReference _tagInput;
     private readonly string _listId = "capture-tags-" + Guid.NewGuid().ToString("N");
     private IEnumerable<string> Choices => AvailableTags.Where(x => !Tags.Contains(x, StringComparer.Ordinal));
     private IEnumerable<string> Suggestions => SuggestedTags.Except(AvailableTags, StringComparer.Ordinal).Except(Tags, StringComparer.Ordinal);
@@ -46,6 +47,18 @@
         if (Disabled || tag.Length == 0) return;
         if (!Tags.Contains(tag, StringComparer.Ordinal)) await TagsChanged.InvokeAsync([.. Tags, tag]);
         _draft = "";
+        await FocusInputAsync();
     }
-    private Task RemoveAsync(string tag) => TagsChanged.InvokeAsync(Tags.Where(x => x != tag).ToArray());
+    private async Task RemoveAsync(string tag)
+    {
+        await TagsChanged.InvokeAsync(Tags.Where(x => x != tag).ToArray());
+        await FocusInputAsync();
+    }
+
+    private async Task FocusInputAsync()
+    {
+        if (Disabled) return;
+        try { await _tagInput.FocusAsync(); }
+        catch (JSDisconnectedException) { }
+    }
 }

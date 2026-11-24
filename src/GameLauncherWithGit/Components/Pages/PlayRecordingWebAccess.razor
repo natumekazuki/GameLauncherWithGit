@@ -13,7 +13,7 @@
 
     @if (_error is not null)
     {
-        <p role="alert">@_error</p>
+        <p class="play-web-error" role="alert">@_error</p>
     }
     @if (_games is null)
     {
@@ -23,7 +23,7 @@
         }
         else
         {
-            <button type="button" class="secondary-button" @onclick="RefreshAsync">再読み込み</button>
+            <div class="play-web-actions"><button type="button" class="secondary-button" @onclick="RefreshAsync"><CaptureIcon Name="Refresh" />再読み込み</button></div>
         }
     }
     else
@@ -31,34 +31,36 @@
         @if (_games.Count == 0)
         {
             <p>シナリオ抽出の設定を確定した登録済みゲームがありません。</p>
-            <button type="button" class="secondary-button" @onclick="RefreshAsync" disabled="@_busy">再読み込み</button>
+            <div class="play-web-actions"><button type="button" class="secondary-button" @onclick="RefreshAsync" disabled="@_busy"><CaptureIcon Name="Refresh" />再読み込み</button></div>
         }
         else
         {
-            <label for="play-web-game">許可するゲーム</label>
-            <select id="play-web-game" @bind="_selectedGameId" disabled="@_busy">
-                <option value="">ゲームを選択</option>
-                @foreach (var game in _games)
-                {
-                    <option value="@game.Id">@game.Title</option>
-                }
-            </select>
+            <label class="play-web-field">許可するゲーム
+                <select @bind="_selectedGameId" disabled="@_busy">
+                    <option value="">ゲームを選択</option>
+                    @foreach (var game in _games)
+                    {
+                        <option value="@game.Id">@game.Title</option>
+                    }
+                </select>
+            </label>
         }
 
         @if (_origin is null)
         {
-            <label for="play-web-serve">Tailscale ServeのHTTPS URL</label>
-            <input id="play-web-serve" type="url" @bind="_serveUrl" @bind:event="oninput" disabled="@_busy" />
+            <label class="play-web-field">Tailscale ServeのHTTPS URL
+                <input @ref="_urlInput" type="url" @bind="_serveUrl" @bind:event="oninput" disabled="@_busy" />
+            </label>
             <div class="play-web-actions">
-                <button type="button" class="primary-button" @onclick="StartAsync" disabled="@(!CanIssue || string.IsNullOrWhiteSpace(_serveUrl))">Web接続を開始</button>
+                <button type="button" class="launch-button" @onclick="StartAsync" disabled="@(!CanIssue || string.IsNullOrWhiteSpace(_serveUrl))"><CaptureIcon Name="Play" />Web接続を開始</button>
             </div>
         }
     }
 
     @if (_origin is not null)
     {
-        <dl>
-            <dt>接続先</dt>
+        <dl class="play-web-details">
+            <dt tabindex="-1" @ref="_connectionStatus">接続先</dt>
             <dd><code>@_origin.AbsoluteUri</code></dd>
             <dt>許可中のゲーム</dt>
             <dd>@(_permission?.GameTitle ?? "許可なし")</dd>
@@ -69,11 +71,11 @@
             }
         </dl>
         <div class="play-web-actions">
-            <button type="button" class="primary-button" @onclick="IssueAsync" disabled="@(!CanIssue)">
-                @(_permission is null ? "接続コードを発行" : _permission.GameId == _selectedGameId ? "旧アクセスを失効してコードを再発行" : "旧アクセスを失効してゲームを変更")
+            <button type="button" class="launch-button" @onclick="IssueAsync" disabled="@(!CanIssue)">
+                <CaptureIcon Name="@(_permission is not null && _permission.GameId == _selectedGameId ? "Refresh" : "Link")" />@(_permission is null ? "接続コードを発行" : _permission.GameId == _selectedGameId ? "旧アクセスを失効してコードを再発行" : "旧アクセスを失効してゲームを変更")
             </button>
-            <button type="button" class="secondary-button" @onclick="RevokeAsync" disabled="@(_busy || _permission is null)">接続許可を失効</button>
-            <button type="button" class="secondary-button" @onclick="StopAsync" disabled="@_busy">Web接続を停止</button>
+            <button type="button" class="secondary-button" @onclick="RevokeAsync" disabled="@(_busy || _permission is null)"><CaptureIcon Name="Close" />接続許可を失効</button>
+            <button type="button" class="secondary-button" @onclick="StopAsync" disabled="@_busy"><CaptureIcon Name="Stop" />Web接続を停止</button>
         </div>
     }
 
@@ -93,6 +95,8 @@
     private string _selectedGameId = "";
     private string _serveUrl = "";
     private bool _busy;
+    private bool _focusAfterChange;
+    private ElementReference _urlInput, _connectionStatus;
 
     private bool CanIssue => !_busy && _games?.Any(game => game.Id == _selectedGameId) == true;
 
@@ -112,11 +116,20 @@
         if (!Uri.TryCreate(_serveUrl, UriKind.Absolute, out var origin))
             throw new ArgumentException("Tailscale ServeのHTTPS URLを指定してください。");
         await Host.StartAsync(_selectedGameId, origin);
+        _focusAfterChange = true;
     }, "記録Webの開始に失敗しました。");
 
     private Task IssueAsync() => RunAsync(async () => await Host.IssueAsync(_selectedGameId), "接続コードを発行できませんでした。");
-    private Task RevokeAsync() => RunAsync(Host.RevokeAsync, "接続許可を失効できませんでした。");
-    private Task StopAsync() => RunAsync(Host.StopAsync, "記録Webを停止できませんでした。");
+    private Task RevokeAsync() => RunAsync(async () => { await Host.RevokeAsync(); _focusAfterChange = true; }, "接続許可を失効できませんでした。");
+    private Task StopAsync() => RunAsync(async () => { await Host.StopAsync(); _focusAfterChange = true; }, "記録Webを停止できませんでした。");
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_focusAfterChange || _busy) return;
+        _focusAfterChange = false;
+        var destination = _origin is null ? _urlInput : _connectionStatus;
+        if (destination.Id is not null) await destination.FocusAsync();
+    }
 
     private async Task RunAsync(Func<Task> operation, string failure)
     {
@@ -124,6 +137,7 @@
         _busy = true;
         _error = null;
         try { await operation(); }
+        catch (ArgumentException ex) when (ex.ParamName == "origin") { _error = "Tailscale ServeのHTTPS URL（パスなし）を指定してください。"; }
         catch (ArgumentException ex) { _error = ex.Message; }
         catch (InvalidOperationException ex) when (ex.Message.StartsWith("登録済みで", StringComparison.Ordinal)) { _error = ex.Message; }
         catch (Exception) { _error = failure; }

@@ -6,7 +6,7 @@
     <CaptureTagsEditor Label="区間タグ" @bind-Tags="Tags" AvailableTags="AvailableTags" SuggestedTags="SuggestedTags" Disabled="Disabled" />
     <div class="range-editor-actions">
         <button type="button" disabled="@Disabled" @onclick="Cancel">取消</button>
-        <button type="button" class="primary" disabled="@(Disabled || string.IsNullOrWhiteSpace(Name))" @onclick="SaveAsync">区間を保存</button>
+        <button type="button" class="primary play-labeled-button" disabled="@(Disabled || string.IsNullOrWhiteSpace(Name))" @onclick="SaveAsync"><CaptureIcon Name="Save" />区間を保存</button>
     </div>
 </section>
 

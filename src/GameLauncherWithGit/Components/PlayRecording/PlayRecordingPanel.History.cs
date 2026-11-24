@@ -27,9 +27,9 @@ public partial class PlayRecordingPanel
     });
 
     private bool TextLabelChanged(CaptureTextItem? item) => item is not null && (item.LabelId ?? 0) != _editLabel;
-    private bool TextSpeakerChanged(CaptureTextItem? item) => item is not null && (EditingNarration
-        ? item.Speaker is not null
-        : _editSpeaker.Trim() != (item.Speaker ?? "") || item.Kind == CaptureKind.Narration);
+    // The read model hides the speaker of narration, even when a manual value is stored.
+    private bool TextSpeakerChanged(CaptureTextItem? item) => item is not null && !EditingNarration
+        && _editSpeaker.Trim() != (item.Speaker ?? "");
 
     private Task SaveTextAsync(DisplayTarget target, CaptureTextItem? item) => RunMutationAsync(target, async () =>
     {
@@ -37,7 +37,7 @@ public partial class PlayRecordingPanel
         await UseActionAsync(target, gameId => Operations.CorrectTextAsync(gameId, target.Recording, item,
             TextLabelChanged(item), _editLabel == 0 ? null : _editLabel,
             TextSpeakerChanged(item), EditingNarration ? null : Optional(_editSpeaker)));
-        CloseTextEditor();
+        CancelTextEdit();
         _notice = "訂正を保存しました。";
         await LoadTextAsync();
     });

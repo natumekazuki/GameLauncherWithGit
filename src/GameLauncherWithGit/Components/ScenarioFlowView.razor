@@ -15,7 +15,7 @@
     </div>
     @if (Graph.Occurrences.Count == 0)
     {
-        <p class="flow-empty">記録した本文は、タグや区間を付けなくてもここに表示されます。</p>
+        <p class="flow-empty">観測した経路はありません。</p>
     }
     else
     {
@@ -56,8 +56,8 @@
                     @if (selected.Speaker is not null) { <strong>@selected.Speaker</strong> }
                     <p>@selected.Text</p>
                     <div class="flow-occurrence-actions">
-                        <button class="secondary-button" @onclick="() => OpenOccurrence.InvokeAsync(selected)">この出現の本文・画像へ</button>
-                        <button class="secondary-button" @onclick="() => CutOccurrence.InvokeAsync(selected)" disabled="@selected.CutBefore">ここから別経路</button>
+                        <button type="button" class="secondary-button" @onclick="() => OpenOccurrence.InvokeAsync(selected)"><CaptureIcon Name="Image" />本文・画像へ</button>
+                        <button type="button" class="secondary-button" @onclick="() => CutOccurrence.InvokeAsync(selected)" disabled="@selected.CutBefore"><CaptureIcon Name="PathBreak" />ここから別経路</button>
                     </div>
                     <p class="flow-connections">@ConnectionSummary(selected)</p>
                 </div>

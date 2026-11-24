@@ -1,4 +1,4 @@
-<label>名前<input value="@Name" @onchange="ChangeNameAsync" disabled="@Disabled" /></label>
+<label>区間名<input value="@Name" @oninput="ChangeNameAsync" disabled="@Disabled" /></label>
 <CaptureTagsEditor Label="区間タグ" Tags="@Tags" TagsChanged="@TagsChanged" AvailableTags="@AvailableTags"
                    SuggestedTags="@SuggestedTags" Disabled="@Disabled" />
 
