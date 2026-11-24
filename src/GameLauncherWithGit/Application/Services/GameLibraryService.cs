@@ -31,11 +31,18 @@ public sealed class GameLibraryService : IGameLibraryService
 			Path.Combine(AppDataPaths.Directory, "thumbnails"));
 	}
 
-	public async Task<GameCardItem> CreateAsync(GameEditInput input, CancellationToken cancellationToken = default)
+	public Task<GameCardItem> CreateAsync(GameEditInput input, CancellationToken cancellationToken = default) =>
+		CreateWithSaveLinksAsync(input, [], cancellationToken);
+
+	public async Task<GameCardItem> CreateWithSaveLinksAsync(
+		GameEditInput input,
+		IReadOnlyList<GameSaveLinkEditInput> saveLinks,
+		CancellationToken cancellationToken = default)
 	{
 		var normalizedInput = NormalizeInput(input);
 		await EnsureRepositoryPathIsGitAsync(normalizedInput.RelatedRepositoryPath, cancellationToken);
 		var gameId = await BuildUniqueGameIdAsync(normalizedInput.Title, cancellationToken);
+		var normalizedSaveLinks = _saveLinkService.NormalizeForGame(gameId, saveLinks);
 		var thumbnailPath = await TryCreateThumbnailAsync(
 			sourceImagePath: normalizedInput.ThumbnailSourcePath,
 			fallbackPath: null,
@@ -51,7 +58,16 @@ public sealed class GameLibraryService : IGameLibraryService
 			Status: GameCardStatus.Unknown,
 			IsPinned: false);
 
-		await _store.UpsertAsync(game, cancellationToken);
+		try
+		{
+			await _store.InsertWithSaveLinksAsync(game, normalizedSaveLinks, cancellationToken);
+		}
+		catch
+		{
+			TryDeleteManagedThumbnail(thumbnailPath);
+			throw;
+		}
+
 		return game;
 	}
 
@@ -152,20 +168,35 @@ public sealed class GameLibraryService : IGameLibraryService
 
 		var normalizedSaveLinks = _saveLinkService.NormalizeForGame(gameId, saveLinks);
 		var unlinkedLinks = await _saveLinkService.UnlinkRemovedLinksAsync(gameId, normalizedSaveLinks, cancellationToken);
-		var updated = await BuildUpdatedGameAsync(
-			updateContext.Original,
-			updateContext.NormalizedInput,
-			cancellationToken);
-
+		GameCardItem? updated = null;
 		try
 		{
+			updated = await BuildUpdatedGameAsync(
+				updateContext.Original,
+				updateContext.NormalizedInput,
+				cancellationToken);
 			await _store.UpsertWithSaveLinksAsync(updated, normalizedSaveLinks, cancellationToken);
 		}
 		catch (Exception ex)
 		{
-			var rollbackError = await _saveLinkService.RollbackUnlinkedLinksAsync(gameId, unlinkedLinks, cancellationToken);
-			if (string.IsNullOrWhiteSpace(rollbackError))
+			if (updated is not null && updated.ThumbnailPath != updateContext.Original.ThumbnailPath)
 			{
+				TryDeleteManagedThumbnail(updated.ThumbnailPath);
+			}
+
+			if (unlinkedLinks.Count == 0)
+			{
+				throw;
+			}
+
+			var rollbackError = await _saveLinkService.RollbackUnlinkedLinksAsync(gameId, unlinkedLinks);
+			if (rollbackError is null)
+			{
+				if (ex is OperationCanceledException)
+				{
+					throw;
+				}
+
 				throw new InvalidOperationException(
 					$"ゲーム保存に失敗したため、リンク解除をロールバックしました。gameId={gameId}, reason={ex.Message}",
 					ex);
@@ -274,6 +305,10 @@ public sealed class GameLibraryService : IGameLibraryService
 		try
 		{
 			return await _thumbnailService.CreateThumbnailAsync(sourceImagePath, cancellationToken) ?? fallbackPath;
+		}
+		catch (OperationCanceledException)
+		{
+			throw;
 		}
 		catch (Exception ex)
 		{

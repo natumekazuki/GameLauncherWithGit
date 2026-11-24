@@ -48,31 +48,32 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 
 	public Task QueueRepositorySyncAsync(string repositoryId, CancellationToken cancellationToken = default)
 	{
-		return QueueRepositorySyncCoreAsync(repositoryId, runImmediately: false, cancellationToken);
+		TryQueueRepositorySync(repositoryId, runImmediately: false, resumePaused: false, cancellationToken);
+		return Task.CompletedTask;
 	}
+
+	public bool TryQueueRepositorySyncNow(string repositoryId) =>
+		TryQueueRepositorySync(repositoryId, runImmediately: true, resumePaused: false, CancellationToken.None);
 
 	public Task ResumeRepositorySyncAsync(string repositoryId, CancellationToken cancellationToken = default)
 	{
-		if (string.IsNullOrWhiteSpace(repositoryId))
-		{
-			return Task.CompletedTask;
-		}
-
-		SetRepositoryState(repositoryId.Trim(), RepositorySyncState.Idle);
-		return QueueRepositorySyncCoreAsync(repositoryId, runImmediately: true, cancellationToken);
+		TryQueueRepositorySync(repositoryId, runImmediately: true, resumePaused: true, cancellationToken);
+		return Task.CompletedTask;
 	}
 
-	private Task QueueRepositorySyncCoreAsync(
+	private bool TryQueueRepositorySync(
 		string repositoryId,
 		bool runImmediately,
+		bool resumePaused,
 		CancellationToken cancellationToken)
 	{
 		if (string.IsNullOrWhiteSpace(repositoryId))
 		{
-			return Task.CompletedTask;
+			return false;
 		}
 
 		ThrowIfDisposed();
+		cancellationToken.ThrowIfCancellationRequested();
 
 		var normalizedId = repositoryId.Trim();
 		var queue = _queues.GetOrAdd(normalizedId, static _ => new RepositorySyncQueue());
@@ -81,6 +82,12 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 
 		lock (queue.Gate)
 		{
+			var isPaused = _repositoryStateStore.GetStateOrDefault(normalizedId) == RepositorySyncState.ErrorPaused;
+			if (isPaused && !resumePaused)
+			{
+				return false;
+			}
+
 			queue.RetryCts?.Cancel();
 			queue.RetryCts?.Dispose();
 			queue.RetryCts = null;
@@ -92,22 +99,24 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 				{
 					queue.RerunImmediately = true;
 				}
+				queue.RerunResumesPaused |= isPaused && resumePaused;
 
 				_logger.LogDebug("Sync is running; rerun requested. repositoryId={RepositoryId}", normalizedId);
-				return Task.CompletedTask;
+				return true;
 			}
 
 			queue.DebounceCts?.Cancel();
 			queue.DebounceCts?.Dispose();
 			debounceCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 			queue.DebounceCts = debounceCts;
+			_repositoryStateStore.SetState(
+				normalizedId,
+				runImmediately ? RepositorySyncState.Syncing : RepositorySyncState.Debouncing);
 		}
 
-		SetRepositoryState(
-			normalizedId,
-			runImmediately ? RepositorySyncState.Syncing : RepositorySyncState.Debouncing);
+		_trayService.SetState(GetAggregateState());
 		_ = DebounceAndRunAsync(normalizedId, queue, debounceCts, runImmediately, debounceDuration);
-		return Task.CompletedTask;
+		return true;
 	}
 
 	public void Dispose()
@@ -186,9 +195,16 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 			SetRepositoryState(repositoryId, RepositorySyncState.Idle);
 			if (hadTransientFailure)
 			{
-				await _notificationService.NotifyAsync(
-					"同期が復旧しました",
-					$"一時的な同期エラーから復旧しました。repo={repositoryId}");
+				try
+				{
+					await _notificationService.NotifyAsync(
+						"同期が復旧しました",
+						$"一時的な同期エラーから復旧しました。repo={repositoryId}");
+				}
+				catch (Exception ex)
+				{
+					_logger.LogWarning(ex, "Failed to notify sync recovery. repositoryId={RepositoryId}", repositoryId);
+				}
 			}
 		}
 		catch (OperationCanceledException)
@@ -260,6 +276,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		{
 			var shouldRerun = false;
 			var rerunImmediately = false;
+			var rerunResumesPaused = false;
 			lock (queue.Gate)
 			{
 				queue.IsSyncRunning = false;
@@ -268,14 +285,16 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 					queue.RerunRequested = false;
 					rerunImmediately = queue.RerunImmediately;
 					queue.RerunImmediately = false;
+					rerunResumesPaused = queue.RerunResumesPaused;
+					queue.RerunResumesPaused = false;
 					shouldRerun = true;
 				}
 			}
 
 			debounceCts.Dispose();
-			if (shouldRerun)
+			if (shouldRerun && !_isDisposed)
 			{
-				_ = QueueRepositorySyncCoreAsync(repositoryId, rerunImmediately, CancellationToken.None);
+				TryQueueRepositorySync(repositoryId, rerunImmediately, rerunResumesPaused, CancellationToken.None);
 			}
 		}
 	}
@@ -693,7 +712,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 				"Retrying repository sync. repositoryId={RepositoryId}, failureCount={FailureCount}",
 				repositoryId,
 				retryPlan.FailureCount);
-			await QueueRepositorySyncCoreAsync(repositoryId, runImmediately: true, CancellationToken.None);
+			TryQueueRepositorySync(repositoryId, runImmediately: true, resumePaused: false, CancellationToken.None);
 		}
 		catch (ObjectDisposedException)
 		{
@@ -770,6 +789,8 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		public bool RerunRequested { get; set; }
 
 		public bool RerunImmediately { get; set; }
+
+		public bool RerunResumesPaused { get; set; }
 
 		public int ConsecutiveTransientFailures { get; set; }
 	}

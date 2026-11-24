@@ -42,6 +42,11 @@ public sealed class LauncherService : ILauncherService
 			return new LaunchResult(false, $"ゲームが見つかりません: {gameId}");
 		}
 
+		if (!File.Exists(game.ExecutablePath))
+		{
+			return new LaunchResult(false, $"実行ファイルが見つかりません: {game.ExecutablePath}");
+		}
+
 		try
 		{
 			await _gameLibraryService.SetStatusAsync(game.Id, GameCardStatus.Syncing, cancellationToken);
@@ -52,6 +57,7 @@ public sealed class LauncherService : ILauncherService
 				return await SetErrorStatusAndReturnAsync(game.Id, syncResult, cancellationToken);
 			}
 
+			cancellationToken.ThrowIfCancellationRequested();
 			var launchResult = StartGameProcess(game);
 			if (!launchResult.IsSuccess)
 			{
@@ -248,7 +254,7 @@ public sealed class LauncherService : ILauncherService
 				UseShellExecute = true
 			};
 
-			var process = Process.Start(startInfo);
+			using var process = Process.Start(startInfo);
 			if (process is null)
 			{
 				return new LaunchResult(false, "ゲームプロセスの起動に失敗しました。");

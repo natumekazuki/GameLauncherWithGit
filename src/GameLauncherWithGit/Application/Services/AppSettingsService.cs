@@ -52,20 +52,19 @@ public sealed class AppSettingsService : IAppSettingsService
 		try
 		{
 			await File.WriteAllTextAsync(temporary, payload, Encoding.UTF8, cancellationToken);
-			cancellationToken.ThrowIfCancellationRequested();
-			File.Move(temporary, path, overwrite: true);
+			lock (_gate)
+			{
+				cancellationToken.ThrowIfCancellationRequested();
+				File.Move(temporary, path, overwrite: true);
+				_current = normalized;
+				_isLoaded = true;
+			}
 		}
 		finally
 		{
 			try { File.Delete(temporary); }
 			catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
 			{ _logger.LogWarning(ex, "Failed to remove temporary settings file. path={SettingsTemporaryPath}", temporary); }
-		}
-
-		lock (_gate)
-		{
-			_current = normalized;
-			_isLoaded = true;
 		}
 	}
 

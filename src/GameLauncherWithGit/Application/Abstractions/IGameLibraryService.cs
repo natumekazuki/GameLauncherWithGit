@@ -10,6 +10,15 @@ public interface IGameLibraryService
 
 	Task<GameCardItem> CreateAsync(GameEditInput input, CancellationToken cancellationToken = default);
 
+	/// <summary>
+	/// Validates and saves a new game and its save-link definitions together; does not apply filesystem links.
+	/// Validation or database failure leaves no partial registration.
+	/// </summary>
+	Task<GameCardItem> CreateWithSaveLinksAsync(
+		GameEditInput input,
+		IReadOnlyList<GameSaveLinkEditInput> saveLinks,
+		CancellationToken cancellationToken = default);
+
 	Task<GameCardItem?> UpdateAsync(string gameId, GameEditInput input, CancellationToken cancellationToken = default);
 
 	Task<GameCardItem?> UpdateWithSaveLinksAsync(
