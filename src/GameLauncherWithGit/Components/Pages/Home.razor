@@ -21,18 +21,26 @@
 @{
     RenderFragment notificationContent = @<div class="notification-message @GetMessageClass()">
         <span>@_message</span>
-        <button type="button" class="notification-dismiss" @onclick="DismissNotification" aria-label="通知を閉じる">×</button>
+        <button type="button" class="notification-dismiss" @onclick="DismissNotification" aria-label="通知を閉じる"><CaptureIcon Name="Close" /></button>
     </div>;
 }
 
-@if (!_isStartupChecking)
-{
-    <section class="utility-bar">
-        <a class="secondary-button utility-icon-button" href="capture" title="シナリオ抽出" aria-label="シナリオ抽出"><CaptureIcon Name="History" /></a>
+<header class="home-header">
+    <h1 tabindex="-1" @ref="_libraryHeading">ゲーム一覧</h1>
+    <nav class="home-navigation" aria-label="ランチャー">
+        <a class="secondary-button home-labeled-action" href="capture"><CaptureIcon Name="History" /> シナリオ</a>
         @if (OperatingSystem.IsWindows())
         {
-            <a class="secondary-button utility-icon-button" href="play-recording-web" title="記録Webの接続許可" aria-label="記録Webの接続許可"><CaptureIcon Name="Link" /></a>
+            <a class="secondary-button home-labeled-action" href="play-recording-web" aria-label="記録Webの接続許可"><CaptureIcon Name="Link" /> 記録Web</a>
         }
+        <button type="button" class="secondary-button utility-icon-button" title="設定" aria-label="設定" @onclick="OpenSettingsAsync" disabled="@(_isStartupChecking || _isCardSizeSaving)"><CaptureIcon Name="Settings" /></button>
+        <button type="button" class="secondary-button utility-icon-button" title="ヘルプ" aria-label="ヘルプ" @onclick="OpenHelp"><span aria-hidden="true" class="home-help-icon">?</span></button>
+    </nav>
+</header>
+
+@if (!_isStartupChecking && _isGitReady)
+{
+    <section class="utility-bar" aria-label="ゲーム一覧の操作">
         <div class="search-control">
             <input type="search"
                    class="search-input"
@@ -41,64 +49,69 @@
                    placeholder="ゲームを検索"
                    aria-label="ゲーム検索" />
         </div>
-        <div class="card-size-control">
+        <div class="card-size-control" role="group" aria-label="カードサイズ">
             <button type="button"
                     class="secondary-button utility-icon-button"
                     title="カードサイズを小さくする"
+                    aria-label="カードサイズを小さくする"
                     @onclick="DecreaseGameCardSizeAsync"
-                    disabled="@(!_isGitReady || _isCardSizeSaving || _gameCardSizePercent <= AppSettings.GameCardSizePercentMin)">
-                -
+                    disabled="@(_isCardSizeSaving || _gameCardSizePercent <= AppSettings.GameCardSizePercentMin)">
+                <span aria-hidden="true">−</span>
             </button>
-            <span class="card-size-label">@_gameCardSizePercent%</span>
+            <output class="card-size-label">@_gameCardSizePercent%</output>
             <button type="button"
                     class="secondary-button utility-icon-button"
                     title="カードサイズを大きくする"
+                    aria-label="カードサイズを大きくする"
                     @onclick="IncreaseGameCardSizeAsync"
-                    disabled="@(!_isGitReady || _isCardSizeSaving || _gameCardSizePercent >= AppSettings.GameCardSizePercentMax)">
-                +
+                    disabled="@(_isCardSizeSaving || _gameCardSizePercent >= AppSettings.GameCardSizePercentMax)">
+                <CaptureIcon Name="Plus" />
             </button>
         </div>
         <button type="button"
-                class="secondary-button utility-button"
+                class="launch-button home-labeled-action"
                 @onclick="OpenCreateEditor"
-                disabled="@(!_isGitReady)">
-            + 新規追加
+                disabled="@(_games is null || _libraryLoadError is not null)">
+            <CaptureIcon Name="Plus" /> ゲーム追加
         </button>
         <button type="button"
-                class="secondary-button utility-button"
+                class="secondary-button home-labeled-action"
                 @onclick="RefreshGitStatusesManuallyAsync"
-                disabled="@(!_isGitReady || _isGitStatusRefreshing || _games is null)">
-            @(_isGitStatusRefreshing ? "更新中..." : "Gitステータス更新")
+                disabled="@(_isGitStatusRefreshing || _games is null || _libraryLoadError is not null)">
+            <CaptureIcon Name="Refresh" /> @(_isGitStatusRefreshing ? "更新中…" : "Git状態を更新")
         </button>
-        <button type="button"
-                class="secondary-button utility-button"
-                @onclick="OpenSettingsAsync"
-                disabled="@_isCardSizeSaving">
-            環境設定
-        </button>
-        <button type="button"
-                class="secondary-button utility-button"
-                @onclick="OpenHelp">
-            Help
-        </button>
+        @if (_libraryLoadError is null && _saveLinkLoadFailedGameIds.Count > 0)
+        {
+            <button type="button" class="secondary-button home-labeled-action" @onclick="RetryLibraryAsync"><CaptureIcon Name="Refresh" /> ゲーム一覧を再読込</button>
+        }
     </section>
 }
 
 @if (_isStartupChecking)
 {
-    <section class="library-page startup-check-panel">
-        <p>起動要件を確認しています...</p>
+    <section class="library-page startup-check-panel" role="status">
+        <p>Gitを確認中…</p>
     </section>
 }
 else if (!_isGitReady)
 {
     <section class="startup-error-panel">
-        <h1>Git が利用できません</h1>
-        <p>下記の内容を確認してから、アプリを再起動してください。</p>
-        @if (!string.IsNullOrWhiteSpace(_startupError))
-        {
+        <div role="alert">
+            <h2>Git が利用できません</h2>
             <p class="startup-error-detail">@_startupError</p>
-        }
+            <p>Gitの設定を確認して、再試行してください。</p>
+        </div>
+        <button type="button" class="secondary-button home-labeled-action" @onclick="RetryStartupAsync"><CaptureIcon Name="Refresh" /> 再試行</button>
+    </section>
+}
+else if (_libraryLoadError is not null)
+{
+    <section class="startup-error-panel">
+        <div role="alert">
+            <h2>ゲーム一覧を読み込めません</h2>
+            <p class="startup-error-detail">@_libraryLoadError</p>
+        </div>
+        <button type="button" class="secondary-button home-labeled-action" @onclick="RetryLibraryAsync"><CaptureIcon Name="Refresh" /> 再試行</button>
     </section>
 }
 else
@@ -107,16 +120,14 @@ else
         <div class="game-grid" style="@GetGameGridStyle()">
             @if (_games is null)
             {
-                <div class="game-card loading-card">読み込み中...</div>
+                <p role="status">読み込み中…</p>
             }
             else
             {
                 var filteredGames = GetFilteredGames();
                 if (filteredGames.Count == 0)
                 {
-                    <div class="game-card loading-card">
-                        @(_games.Count == 0 ? "まだゲームがありません。『新規追加』から登録できます。" : "検索条件に一致するゲームがありません。")
-                    </div>
+                    <p role="status">@(_games.Count == 0 ? "ゲーム未登録" : "一致するゲームなし")</p>
                 }
                 else
                 {
@@ -125,149 +136,128 @@ else
                         var effectiveStatus = GetEffectiveStatus(game);
                         var gitVisualState = GetGitVisualState(game);
                         var syncHistory = GetSyncHistoryTimeline(game);
+                        var hasRepository = gitVisualState != GitRepositoryVisualState.NotConfigured;
+                        var canResumeSync = CanResumeRepositorySync(game);
                         var hasThumbnail = HasThumbnail(game);
-                        var thumbnailDataUri = hasThumbnail ? GetThumbnailDataUri(game) : null;
-                        var showCardTitle = _showCardTitle;
-                        var showCardSyncStatus = _showCardSyncStatus;
-                        var hasCardHeader = showCardTitle || showCardSyncStatus;
-                        <article class="@GetGameCardClass(hasThumbnail, gitVisualState)" aria-label="@($"{game.Title}、Git状態: {GetGitVisualStateLabel(gitVisualState)}")" title="@($"Git状態: {GetGitVisualStateLabel(gitVisualState)}")">
-                            @if (hasThumbnail)
+                        var thumbnail = hasThumbnail ? GetThumbnailSource(game) : null;
+                        var hasDisplayImage = thumbnail is { DecodeFailed: false };
+                        var showCardTitle = _showCardTitle || !hasDisplayImage;
+                        <article @key="game.Id" class="@GetGameCardClass(gitVisualState)" aria-label="@game.Title">
+                            @if (thumbnail is { DecodeFailed: false })
                             {
                                 <div class="game-thumbnail-panel @(IsLaunchDisabled(game) ? string.Empty : "game-thumbnail-launchable")" @ondblclick="() => LaunchFromThumbnailAsync(game)" title="@(IsLaunchDisabled(game) ? GetLaunchButtonTitle(game) : "ダブルクリックで起動")">
-                                    @if (string.IsNullOrWhiteSpace(thumbnailDataUri))
-                                    {
-                                        <div class="game-thumbnail-missing" title="@game.Title"></div>
-                                    }
-                                    else
-                                    {
-                                        <img class="game-thumbnail-image"
-                                             src="@thumbnailDataUri"
-                                             alt="@($"{game.Title} サムネイル")" />
-                                    }
-                                </div>
-
-                                @if (hasCardHeader)
-                                {
-                                    <div class="thumbnail-card-meta">
-                                        @if (showCardTitle)
-                                        {
-                                            <h2 class="thumbnail-card-title">@game.Title</h2>
-                                        }
-                                        @if (showCardSyncStatus)
-                                        {
-                                            <span class="status-badge @GetStatusClass(effectiveStatus)">@GetStatusLabel(effectiveStatus)</span>
-                                        }
-                                    </div>
-                                }
-                            }
-                            else
-                            {
-                                @if (hasCardHeader)
-                                {
-                                    <div class="game-card-header @(!showCardTitle && showCardSyncStatus ? "game-card-header-status-only" : string.Empty)">
-                                        @if (showCardTitle)
-                                        {
-                                            <h2>@game.Title</h2>
-                                        }
-                                        @if (showCardSyncStatus)
-                                        {
-                                            <span class="status-badge @GetStatusClass(effectiveStatus)">@GetStatusLabel(effectiveStatus)</span>
-                                        }
-                                    </div>
-                                }
-
-                                <div class="game-card-body @(hasCardHeader ? string.Empty : "game-card-body-no-header")">
-                                    <p class="meta-label">実行ファイル</p>
-                                    @if (string.IsNullOrWhiteSpace(game.ExecutablePath))
-                                    {
-                                        <p class="meta-value">未設定</p>
-                                    }
-                                    else
-                                    {
-                                        <p class="meta-value">@game.ExecutablePath</p>
-                                    }
-                                    <p class="meta-label">関連リポジトリ</p>
-                                    @if (string.IsNullOrWhiteSpace(game.RelatedRepositoryPath))
-                                    {
-                                        <p class="meta-value">未設定</p>
-                                    }
-                                    else
-                                    {
-                                        <p class="meta-value">@game.RelatedRepositoryPath</p>
-                                    }
-                                    <p class="meta-label">セーブリンク</p>
-                                    <p class="meta-value">@GetSaveLinkSummary(game)</p>
-                                    <p class="meta-label">最終プレイ</p>
-                                    <p class="meta-value">@FormatLastPlayed(game.LastPlayedAt)</p>
-
+                                    <img @key="thumbnail" class="game-thumbnail-image" src="@thumbnail.DataUri"
+                                         alt="@(showCardTitle ? string.Empty : game.Title)"
+                                         @onerror="() => MarkThumbnailDecodeFailed(game.Id, thumbnail)" />
                                 </div>
                             }
-
-                            <details class="game-sync-history" open="@(!hasThumbnail)">
-                                <summary class="meta-label">同期履歴</summary>
-                                @if (syncHistory.Count == 0)
+                            <div class="home-card-content">
+                                @if (showCardTitle)
                                 {
-                                    <p class="meta-value">履歴なし</p>
+                                    <h2>@game.Title</h2>
                                 }
-                                else
-                                {
-                                    <ul class="sync-timeline-list">
-                                        @foreach (var history in syncHistory)
-                                        {
-                                            <li class="sync-timeline-item @GetSyncHistoryStatusClass(history.Status)">
-                                                <div class="sync-timeline-head">
-                                                    <span>@GetSyncHistoryStatusLabel(history.Status)</span>
-                                                    <span>@FormatSyncHistoryTimestamp(history.FinishedAt)</span>
-                                                </div>
-                                                <p class="sync-timeline-meta">所要時間: @FormatSyncHistoryDuration(history.DurationMs)</p>
-                                                @if (!string.IsNullOrWhiteSpace(history.Command))
-                                                {
-                                                    <p class="sync-timeline-meta">command: @history.Command</p>
-                                                }
-                                                @if (!string.IsNullOrWhiteSpace(history.Reason))
-                                                {
-                                                    <p class="sync-timeline-reason">@history.Reason</p>
-                                                }
-                                            </li>
-                                        }
-                                    </ul>
-                                }
-                            </details>
+                                <div class="home-card-states">
+                                    <span class="home-git-state">@GetGitCardLabel(gitVisualState)</span>
+                                    @if (hasRepository && (_showCardSyncStatus || effectiveStatus == GameCardStatus.Error))
+                                    {
+                                        <span class="status-badge @GetStatusClass(effectiveStatus)">@(canResumeSync ? "同期停止" : GetStatusLabel(effectiveStatus))</span>
+                                    }
+                                    @if (hasThumbnail && !hasDisplayImage)
+                                    {
+                                        <span class="home-media-error">画像を読み込めません</span>
+                                    }
+                                </div>
+                            </div>
 
-                            <div class="game-card-actions">
+                            <div class="game-card-actions" role="group" aria-label="@($"{game.Title}の操作")">
                                 <button type="button"
                                         class="launch-button action-icon-button"
                                         @onclick="() => LaunchAsync(game.Id)"
                                         title="@GetLaunchButtonTitle(game)"
-                                        aria-label="@GetLaunchButtonTitle(game)"
+                                        aria-label="@($"{game.Title}：{GetLaunchButtonTitle(game)}")"
                                         disabled="@IsLaunchDisabled(game)">
-                                    <span class="launch-icon" aria-hidden="true"></span>
+                                    <CaptureIcon Name="Play" />
                                 </button>
                                 <button type="button"
                                         class="secondary-button action-icon-button"
                                         @onclick="() => OpenEditEditorAsync(game)"
-                                        title="設定"
-                                        aria-label="設定">
-                                    <span class="settings-icon" aria-hidden="true"></span>
+                                        title="ゲーム編集"
+                                        aria-label="@($"{game.Title}を編集")">
+                                    <CaptureIcon Name="Edit" />
                                 </button>
                                 <button type="button"
                                         class="secondary-button pin-toggle-button @(game.IsPinned ? "pin-toggle-active" : string.Empty)"
                                         @onclick="() => TogglePinnedAsync(game)"
                                         title="@(game.IsPinned ? "ピン留めを解除" : "ピン留め")"
-                                        aria-label="@(game.IsPinned ? "ピン留めを解除" : "ピン留め")"
+                                        aria-label="@($"{game.Title}のピン留め")"
+                                        aria-pressed="@(game.IsPinned ? "true" : "false")"
                                         disabled="@IsPinToggleBusy(game)">
                                     <span class="pin-toggle-icon" aria-hidden="true"></span>
                                 </button>
-                                @if (CanResumeRepositorySync(game))
+                                @if (canResumeSync)
                                 {
                                     <button type="button"
-                                            class="secondary-button"
+                                            class="secondary-button home-labeled-action"
                                             @onclick="() => ResumeRepositorySyncAsync(game)"
                                             disabled="@IsRepositoryBusy(game)">
-                                        再開
+                                        同期を再開
                                     </button>
                                 }
                             </div>
+
+                            <details class="home-card-details">
+                                <summary>詳細</summary>
+                                <dl>
+                                    @if (!showCardTitle)
+                                    {
+                                        <dt>タイトル</dt><dd>@game.Title</dd>
+                                    }
+                                    <dt>実行ファイル</dt><dd>@GetEditorSaveLinkPathLabel(game.ExecutablePath)</dd>
+                                    <dt>関連リポジトリ</dt><dd>@GetEditorSaveLinkPathLabel(game.RelatedRepositoryPath)</dd>
+                                    <dt>セーブリンク</dt><dd>@GetSaveLinkSummary(game)</dd>
+                                    <dt>最終プレイ</dt><dd>@FormatLastPlayed(game.LastPlayedAt)</dd>
+                                </dl>
+                            </details>
+                            @if (hasRepository)
+                            {
+                                <details class="game-sync-history">
+                                    <summary>同期履歴</summary>
+                                    @if (_syncHistoryLoadFailed)
+                                    {
+                                        <div class="home-history-error">
+                                            <p>同期履歴を読み込めません</p>
+                                            <button type="button" class="secondary-button" @onclick="() => RefreshRepositorySyncHistoriesAsync()">再試行</button>
+                                        </div>
+                                    }
+                                    else if (syncHistory.Count == 0)
+                                    {
+                                        <p class="meta-value">履歴なし</p>
+                                    }
+                                    else
+                                    {
+                                        <ul class="sync-timeline-list">
+                                            @foreach (var history in syncHistory)
+                                            {
+                                                <li class="sync-timeline-item @GetSyncHistoryStatusClass(history.Status)">
+                                                    <div class="sync-timeline-head">
+                                                        <span>@GetSyncHistoryStatusLabel(history.Status)</span>
+                                                        <span>@FormatSyncHistoryTimestamp(history.FinishedAt)</span>
+                                                    </div>
+                                                    <p class="sync-timeline-meta">所要時間: @FormatSyncHistoryDuration(history.DurationMs)</p>
+                                                    @if (!string.IsNullOrWhiteSpace(history.Command))
+                                                    {
+                                                        <p class="sync-timeline-meta">コマンド: @history.Command</p>
+                                                    }
+                                                    @if (!string.IsNullOrWhiteSpace(history.Reason))
+                                                    {
+                                                        <p class="sync-timeline-reason">@history.Reason</p>
+                                                    }
+                                                </li>
+                                            }
+                                        </ul>
+                                    }
+                                </details>
+                            }
                         </article>
                     }
                 }
@@ -277,7 +267,7 @@ else
 }
 
 <div class="notification-dock" aria-live="polite" aria-atomic="true">
-    @if (!string.IsNullOrWhiteSpace(_message) && !_isHelpOpen && !_isSettingsOpen && !_isDeleteConfirmOpen && !_isEditorOpen)
+    @if (!string.IsNullOrWhiteSpace(_message) && !_isHelpOpen && !_isSettingsOpen && !_isDeleteConfirmOpen && !_isEditorOpen && _discardChanges is null)
     {
         @notificationContent
     }
@@ -297,7 +287,7 @@ else
 {
     <div class="editor-overlay help-overlay" @onclick="CloseHelp">
         <section class="help-modal" role="dialog" aria-modal="true" aria-labelledby="help-title" tabindex="-1" @onclick:stopPropagation="true">
-            <h2 id="help-title">Help / 使い方ガイド</h2>
+            <h2 id="help-title" tabindex="-1" data-dialog-initial>ヘルプ</h2>
             <div class="dialog-notification" aria-live="polite" aria-atomic="true">
                 @if (!string.IsNullOrWhiteSpace(_message) && !_isSettingsOpen && !_isEditorOpen && !_isDeleteConfirmOpen)
                 {
@@ -308,19 +298,17 @@ else
             <div class="help-section">
                 <h3>基本操作</h3>
                 <ul>
-                    <li>`+ 新規追加`: ゲームを登録します。</li>
-                    <li>`▶`: 起動前に同期チェックしてからゲームを起動します。</li>
-                    <li>`Gitステータス更新`: カード枠色の元になる Git 状態を再取得します。</li>
-                    <li>`環境設定`: 同期設定・通知・ログ・カード表示設定を変更します。</li>
+                    <li><strong>ゲーム追加</strong>：タイトルだけでも登録できます。</li>
+                    <li><strong>起動</strong>：起動前に同期を確認します。</li>
+                    <li><strong>Git状態を更新</strong>：リポジトリの状態を再取得します。同期は実行しません。</li>
                 </ul>
             </div>
 
             <div class="help-section">
                 <h3>カードの見方</h3>
                 <ul>
-                    <li>カード枠色: リポジトリの Git 状態（clean/dirty/ahead など）</li>
-                    <li>同期ステータス: `同期中 / 同期OK / エラー / 未同期`</li>
-                    <li>同期履歴: 直近3件の結果・時刻・所要時間（必要に応じて command/reason）</li>
+                    <li><strong>Git状態</strong>：リポジトリの変更や先行・遅れを表示します。</li>
+                    <li><strong>同期履歴</strong>：直近3件の結果と時刻を確認できます。</li>
                 </ul>
             </div>
 
@@ -330,59 +318,41 @@ else
                     <thead>
                         <tr>
                             <th>状態</th>
-                            <th>枠色</th>
-                            <th>意味</th>
-                            <th>推奨アクション</th>
+                            <th>確認・対応</th>
                         </tr>
                     </thead>
                     <tbody>
                         <tr>
-                            <td>Clean</td>
-                            <td><span class="help-git-swatch help-git-swatch-clean" aria-label="Cleanの枠色"></span></td>
-                            <td>作業ツリーに変更なし</td>
+                            <td>@GetGitCardLabel(GitRepositoryVisualState.Clean)</td>
                             <td>そのまま利用</td>
                         </tr>
                         <tr>
-                            <td>Dirty</td>
-                            <td><span class="help-git-swatch help-git-swatch-dirty" aria-label="Dirtyの枠色"></span></td>
-                            <td>未コミット変更あり</td>
+                            <td>@GetGitCardLabel(GitRepositoryVisualState.Dirty)</td>
                             <td>差分を確認してコミット方針を決める</td>
                         </tr>
                         <tr>
-                            <td>Ahead</td>
-                            <td><span class="help-git-swatch help-git-swatch-ahead" aria-label="Aheadの枠色"></span></td>
-                            <td>ローカルがリモートより先行</td>
+                            <td>@GetGitCardLabel(GitRepositoryVisualState.Ahead)</td>
                             <td>必要なら push</td>
                         </tr>
                         <tr>
-                            <td>Behind</td>
-                            <td><span class="help-git-swatch help-git-swatch-behind" aria-label="Behindの枠色"></span></td>
-                            <td>リモートが先行</td>
+                            <td>@GetGitCardLabel(GitRepositoryVisualState.Behind)</td>
                             <td>pull して追従</td>
                         </tr>
                         <tr>
-                            <td>Diverged</td>
-                            <td><span class="help-git-swatch help-git-swatch-diverged" aria-label="Divergedの枠色"></span></td>
-                            <td>ローカルとリモートが分岐</td>
+                            <td>@GetGitCardLabel(GitRepositoryVisualState.Diverged)</td>
                             <td>履歴を確認して統合方針を決める</td>
                         </tr>
                         <tr>
-                            <td>Error</td>
-                            <td><span class="help-git-swatch help-git-swatch-error" aria-label="Errorの枠色"></span></td>
-                            <td>状態判定でエラー</td>
-                            <td>ログビューアで詳細確認</td>
+                            <td>@GetGitCardLabel(GitRepositoryVisualState.Error)</td>
+                            <td>設定のログで詳細を確認</td>
                         </tr>
                         <tr>
-                            <td>NotConfigured</td>
-                            <td><span class="help-git-swatch help-git-swatch-not-configured" aria-label="NotConfiguredの枠色"></span></td>
-                            <td>関連リポジトリ未設定</td>
+                            <td>@GetGitCardLabel(GitRepositoryVisualState.NotConfigured)</td>
                             <td>ゲーム編集で設定</td>
                         </tr>
                         <tr>
-                            <td>Unknown</td>
-                            <td><span class="help-git-swatch help-git-swatch-unknown" aria-label="Unknownの枠色"></span></td>
-                            <td>判定前/判定不可</td>
-                            <td>Gitステータス更新を実行</td>
+                            <td>@GetGitCardLabel(GitRepositoryVisualState.Unknown)</td>
+                            <td>「Git状態を更新」で再取得</td>
                         </tr>
                     </tbody>
                 </table>
@@ -392,8 +362,7 @@ else
                 <h3>トラブル時の導線</h3>
                 <ul>
                     <li>画面上の通知で直近メッセージを確認</li>
-                    <li>環境設定 → ログビューア でエラー詳細を確認</li>
-                    <li>必要なら `最新エラーログを開く` / `ログフォルダを開く` を利用</li>
+                    <li>エラーの詳細は <strong>設定 → ログ</strong> で確認</li>
                 </ul>
             </div>
 
@@ -410,20 +379,20 @@ else
 
 @if (_isSettingsOpen)
 {
-    <div class="editor-overlay settings-overlay" @onclick="RequestCloseSettingsAsync">
+    <div class="editor-overlay settings-overlay" @onclick="RequestCloseSettings">
         <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabindex="-1" @onclick:stopPropagation="true">
-            <h2 id="settings-title" class="dialog-heading">環境設定</h2>
+            <h2 id="settings-title" class="dialog-heading" tabindex="-1" data-dialog-initial>設定</h2>
             <div class="dialog-notification" aria-live="polite" aria-atomic="true">
                 @if (!string.IsNullOrWhiteSpace(_message) && !_isEditorOpen && !_isDeleteConfirmOpen)
                 {
                     @notificationContent
                 }
             </div>
+            <nav class="settings-quick-links" aria-label="設定内の移動">
+                <button type="button" class="secondary-button" @onclick="FocusNotificationHeadingAsync">通知</button>
+                <button type="button" class="secondary-button" @onclick="FocusLogHeadingAsync">ログ</button>
+            </nav>
             <div class="dialog-body">
-                <nav class="settings-quick-links" aria-label="設定内の移動">
-                    <a href="#notification-center">通知</a>
-                    <a href="#log-viewer">ログ</a>
-                </nav>
 
                 <div class="settings-section">
                     <label class="settings-toggle-row">
@@ -440,10 +409,10 @@ else
                 </div>
 
                 <div class="settings-section settings-sync-section">
-                    <h3>同期・通知設定</h3>
+                    <h3>同期・通知</h3>
                     <div class="settings-sync-grid">
                         <label class="settings-value-row">
-                            <span class="settings-value-label">変更検知デバウンス秒</span>
+                            <span class="settings-value-label">変更検知の待機（秒）</span>
                             <input type="number"
                                    min="1"
                                    max="300"
@@ -451,7 +420,7 @@ else
                                    disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
                         </label>
                         <label class="settings-value-row">
-                            <span class="settings-value-label">再試行 初期待機秒</span>
+                            <span class="settings-value-label">再試行の初期待機（秒）</span>
                             <input type="number"
                                    min="1"
                                    max="600"
@@ -459,7 +428,7 @@ else
                                    disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
                         </label>
                         <label class="settings-value-row">
-                            <span class="settings-value-label">再試行 最大待機秒</span>
+                            <span class="settings-value-label">再試行の最大待機（秒）</span>
                             <input type="number"
                                    min="1"
                                    max="3600"
@@ -475,7 +444,7 @@ else
                                    disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
                         </label>
                         <label class="settings-value-row">
-                            <span class="settings-value-label">ログ保持日数</span>
+                            <span class="settings-value-label">ログ保持（日）</span>
                             <input type="number"
                                    min="1"
                                    max="365"
@@ -483,7 +452,7 @@ else
                                    disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
                         </label>
                         <label class="settings-value-row">
-                            <span class="settings-value-label">ログ最大サイズMB</span>
+                            <span class="settings-value-label">ログ上限（MB）</span>
                             <input type="number"
                                    min="1"
                                    max="1024"
@@ -494,39 +463,23 @@ else
                 </div>
 
                 <div class="settings-section">
-                    <h3>カード表示設定</h3>
+                    <h3>カード表示</h3>
                     <label class="settings-toggle-row">
-                        <span>タイトルを表示</span>
+                        <span>画像付きカードのタイトル</span>
                         <input type="checkbox"
                                @bind="_showCardTitle"
                                disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
                     </label>
                     <label class="settings-toggle-row">
-                        <span>同期ステータスを表示</span>
+                        <span>通常時の同期状態</span>
                         <input type="checkbox"
                                @bind="_showCardSyncStatus"
                                disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
                     </label>
-                    <p class="settings-note">表示項目に応じてサムネイルカードの高さを自動調整します。</p>
                 </div>
 
-                <div class="settings-section settings-actions-row">
-                    <button type="button"
-                            class="secondary-button"
-                            @onclick="OpenLatestErrorLogAsync"
-                            disabled="@_isSettingsLoading">
-                        最新エラーログを開く
-                    </button>
-                    <button type="button"
-                            class="secondary-button"
-                            @onclick="OpenLogDirectoryAsync"
-                            disabled="@_isSettingsLoading">
-                        ログフォルダを開く
-                    </button>
-                </div>
-
-                <div class="settings-section" id="notification-center">
-                    <h3>通知センター</h3>
+                <section class="settings-section" id="notification-center">
+                    <h3 tabindex="-1" @ref="_notificationHeading">通知</h3>
                     <div class="editor-actions">
                         <button type="button"
                                 class="launch-button"
@@ -538,7 +491,7 @@ else
                                 class="secondary-button"
                                 @onclick="ClearNotificationHistory"
                                 disabled="@(_isSettingsLoading || _notificationHistoryEntries.Count == 0)">
-                            履歴クリア
+                            履歴を消去
                         </button>
                     </div>
                     <div class="notification-center-filters">
@@ -583,10 +536,16 @@ else
                             }
                         }
                     </div>
-                </div>
+                </section>
 
-                <div class="settings-section" id="log-viewer">
-                    <h3>ログビューア</h3>
+                <section class="settings-section" id="log-viewer">
+                    <div class="home-section-heading">
+                        <h3 tabindex="-1" @ref="_logHeading">ログ</h3>
+                        <div class="settings-actions-row">
+                            <button type="button" class="secondary-button" aria-label="最新エラーログを開く" @onclick="OpenLatestErrorLogAsync" disabled="@_isSettingsLoading">最新エラー</button>
+                            <button type="button" class="secondary-button" aria-label="ログフォルダを開く" @onclick="OpenLogDirectoryAsync" disabled="@_isSettingsLoading">フォルダ</button>
+                        </div>
+                    </div>
                     <div class="settings-log-controls">
                         <label class="settings-log-control">
                             <span>表示件数</span>
@@ -623,7 +582,7 @@ else
                                 class="launch-button"
                                 @onclick="LoadLogEntriesAsync"
                                 disabled="@(_isSettingsLoading || _isLogLoading)">
-                            @(_isLogLoading ? "読み込み中..." : "更新")
+                            @(_isLogLoading ? "読込中…" : _logViewerError is null ? "更新" : "再試行")
                         </button>
                         <button type="button"
                                 class="secondary-button"
@@ -634,14 +593,14 @@ else
                     </div>
                     @if (!string.IsNullOrWhiteSpace(_logViewerError))
                     {
-                        <p class="settings-log-error">@_logViewerError</p>
+                        <p class="settings-log-error" role="alert">@_logViewerError</p>
                     }
                     <div class="settings-log-list" role="log">
-                        @if (_isLogLoading && _logViewerEntries.Count == 0)
+                        @if (_isLogLoading)
                         {
-                            <p class="settings-log-empty">ログを読み込み中です...</p>
+                            <p class="settings-log-empty">ログを読込中…</p>
                         }
-                        else if (_logViewerEntries.Count == 0)
+                        else if (_logViewerError is null && _logViewerEntries.Count == 0)
                         {
                             <p class="settings-log-empty">表示できるログがありません。</p>
                         }
@@ -708,7 +667,7 @@ else
                             }
                         }
                     </div>
-                </div>
+                </section>
 
             </div>
             <div class="editor-actions dialog-footer">
@@ -716,11 +675,11 @@ else
                         class="launch-button"
                         @onclick="SaveAppSettingsAsync"
                         disabled="@(_isSettingsLoading || _isAppSettingsSaving)">
-                    @(_isAppSettingsSaving ? "保存中..." : "設定を保存")
+                    @(_isAppSettingsSaving ? "保存中…" : "保存")
                 </button>
                 <button type="button"
                         class="secondary-button"
-                        @onclick="RequestCloseSettingsAsync" data-dialog-dismiss
+                        @onclick="RequestCloseSettings" data-dialog-dismiss
                         disabled="@(_isSettingsLoading || _isAutoStartSaving || _isAppSettingsSaving || _isCardSizeSaving)">
                     閉じる
                 </button>
@@ -732,22 +691,29 @@ else
 @if (_isDeleteConfirmOpen)
 {
     <div class="editor-overlay delete-confirm-overlay" @onclick="() => CloseDeleteConfirm()">
-        <section class="delete-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title" tabindex="-1" @onclick:stopPropagation="true">
-            <h2 id="delete-title">ゲームを削除しますか？</h2>
+        <section class="delete-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title delete-game-name" aria-describedby="delete-impact" tabindex="-1" @onclick:stopPropagation="true">
+            <h2 id="delete-title">ゲーム登録を削除</h2>
             <div class="dialog-notification" aria-live="polite" aria-atomic="true">
                 @if (!string.IsNullOrWhiteSpace(_message))
                 {
                     @notificationContent
                 }
             </div>
-            <p class="delete-confirm-title">@_deleteTargetGameTitle</p>
-            <p class="delete-confirm-note">この操作は取り消せません。ゲーム設定と関連サムネイルを削除します。</p>
+            <p class="delete-confirm-title" id="delete-game-name">@_deleteTargetGameTitle</p>
+            <div id="delete-impact" class="delete-confirm-note">
+                <p>登録設定・セーブリンク設定・サムネイルを削除します。取り消せません。</p>
+                <p>ゲーム本体・セーブデータ・リポジトリ・シナリオ履歴は残ります。</p>
+                @if (HasEditorChanges())
+                {
+                    <p>保存していない編集内容も失われます。</p>
+                }
+            </div>
             <div class="editor-actions">
                 <button type="button"
                         class="danger-button"
                         @onclick="DeleteGameAsync"
                         disabled="@_isDeleting">
-                    @(_isDeleting ? "削除中..." : "削除する")
+                    @(_isDeleting ? "削除中…" : "登録を削除")
                 </button>
                 <button type="button"
                         class="secondary-button"
@@ -760,11 +726,25 @@ else
     </div>
 }
 
+@if (_discardChanges is { } discard)
+{
+    <div class="editor-overlay delete-confirm-overlay" @onclick="CancelDiscardChanges">
+        <section class="delete-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="discard-title" aria-describedby="discard-impact" tabindex="-1" @onclick:stopPropagation="true">
+            <h2 id="discard-title">@(discard == DraftKind.Game ? "編集を破棄" : "設定を破棄")</h2>
+            <p id="discard-impact" class="delete-confirm-note">まだ保存していない変更が失われます。</p>
+            <div class="editor-actions">
+                <button type="button" class="danger-button" @onclick="ConfirmDiscardChanges">破棄して閉じる</button>
+                <button type="button" class="secondary-button" @onclick="CancelDiscardChanges" data-dialog-dismiss data-dialog-initial>変更を続ける</button>
+            </div>
+        </section>
+    </div>
+}
+
 @if (_isGitReady && _isEditorOpen)
 {
-    <div class="editor-overlay" @onclick="RequestCloseEditorAsync">
+    <div class="editor-overlay" @onclick="RequestCloseEditor">
         <section class="editor-modal" role="dialog" aria-modal="true" aria-labelledby="editor-title-heading" tabindex="-1" @onclick:stopPropagation="true">
-            <h2 id="editor-title-heading" class="dialog-heading">@(_isEditMode ? "ゲーム編集" : "ゲーム追加")</h2>
+            <h2 id="editor-title-heading" class="dialog-heading" tabindex="-1" data-dialog-initial>@(_isEditMode ? $"ゲーム編集：{_editorSavedTitle}" : "ゲーム追加")</h2>
             <div class="dialog-notification" aria-live="polite" aria-atomic="true">
                 @if (!string.IsNullOrWhiteSpace(_message) && !_isDeleteConfirmOpen)
                 {
@@ -786,29 +766,31 @@ else
                 }
 
                 <div class="editor-field">
-                    <label for="editor-executable-path">実行ファイルパス</label>
+                    <label for="editor-executable-path">実行ファイル</label>
                     <div class="editor-inline-input">
                         <input id="editor-executable-path" @bind="_editorExecutablePath" @bind:event="oninput" />
-                        <button type="button" class="secondary-button picker-button" @onclick="PickExecutablePathAsync" disabled="@_isSaving">
-                            参照
+                        <button type="button" class="secondary-button picker-button" aria-label="実行ファイルを選択" @onclick="PickExecutablePathAsync" disabled="@_isSaving">
+                            選択
                         </button>
                     </div>
                 </div>
 
                 <div class="editor-field">
-                    <label>サムネイル画像</label>
+                    <h3>サムネイル</h3>
                     <div class="single-repo-picker">
                         <p class="single-repo-value">@GetThumbnailEditorLabel()</p>
                         <div class="single-repo-actions">
                             <button type="button"
                                     class="secondary-button picker-button"
                                     @onclick="PickThumbnailPathAsync"
+                                    aria-label="サムネイルを選択"
                                     disabled="@_isSaving">
-                                参照
+                                選択
                             </button>
                             <button type="button"
                                     class="secondary-button picker-button"
                                     @onclick="ClearThumbnailSelection"
+                                    aria-label="サムネイルを解除"
                                     disabled="@(!CanClearThumbnailSelection() || _isSaving)">
                                 解除
                             </button>
@@ -817,7 +799,7 @@ else
                 </div>
 
                 <div class="editor-field">
-                    <label>関連リポジトリ（1件のみ）</label>
+                    <h3>関連リポジトリ</h3>
                     <div class="single-repo-picker">
                         <p class="single-repo-value">
                             @(string.IsNullOrWhiteSpace(_editorRepositoryPath) ? "未設定" : _editorRepositoryPath)
@@ -826,12 +808,14 @@ else
                             <button type="button"
                                     class="secondary-button picker-button"
                                     @onclick="PickRepositoryDirectoryPathAsync"
+                                    aria-label="関連リポジトリを選択"
                                     disabled="@_isSaving">
-                                フォルダ選択
+                                選択
                             </button>
                             <button type="button"
                                     class="secondary-button picker-button"
                                     @onclick="ClearRepositoryPath"
+                                    aria-label="関連リポジトリを解除"
                                     disabled="@(_isSaving || string.IsNullOrWhiteSpace(_editorRepositoryPath))">
                                 解除
                             </button>
@@ -840,12 +824,12 @@ else
                 </div>
 
                 <div class="editor-field">
-                    <label>ブランチ操作</label>
+                    <h3>ブランチ</h3>
                     <div class="branch-picker">
                         <p class="settings-note">操作はこのリポジトリに即時反映され、編集をキャンセルしても戻りません。</p>
                         <p class="branch-current-value">現在: @GetEditorCurrentBranchLabel()</p>
                         <div class="branch-switch-row">
-                            <select @bind="_editorSelectedBranch"
+                            <select aria-label="切り替え先のブランチ" @bind="_editorSelectedBranch"
                                     @bind:event="oninput"
                                     disabled="@IsBranchSelectionDisabled()">
                                 @if (_editorBranches.Count == 0)
@@ -874,7 +858,7 @@ else
                             </button>
                         </div>
                         <div class="branch-create-row">
-                            <input placeholder="新規ブランチ名"
+                            <input aria-label="新規ブランチ名" placeholder="新規ブランチ名"
                                    @bind="_editorNewBranchName"
                                    @bind:event="oninput"
                                    disabled="@IsBranchCreateInputDisabled()" />
@@ -890,7 +874,7 @@ else
                 </div>
 
                 <div class="editor-field">
-                    <label>セーブリンク（ジャンクション・複数）</label>
+                    <h3>セーブリンク</h3>
                     <p class="settings-note">リンクを削除して保存すると、同期先データをローカル通常フォルダへ復元してリンク解除します。</p>
                     <div class="save-link-editor">
                         @if (_editorSaveLinks.Count == 0)
@@ -905,9 +889,9 @@ else
                                 var entry = _editorSaveLinks[index];
                                 <div class="save-link-item">
                                     <p class="save-link-item-title">リンク @(currentIndex + 1)</p>
-                                    <p class="save-link-item-label">ローカルセーブフォルダ</p>
+                                    <p class="save-link-item-label">ローカルフォルダ</p>
                                     <p class="save-link-item-value">@GetEditorSaveLinkPathLabel(entry.LocalPath)</p>
-                                    <p class="save-link-item-label">同期先フォルダ（OneDrive など）</p>
+                                    <p class="save-link-item-label">同期先フォルダ</p>
                                     <p class="save-link-item-value">@GetEditorSaveLinkPathLabel(entry.TargetPath)</p>
                                     <label class="save-link-item-checkbox">
                                         <input type="checkbox"
@@ -932,12 +916,14 @@ else
                                         <button type="button"
                                                 class="secondary-button picker-button"
                                                 @onclick="() => MoveEditorSaveLink(currentIndex, -1)"
+                                                aria-label="@($"リンク {currentIndex + 1} を上へ移動")"
                                                 disabled="@(_isSaving || currentIndex == 0)">
                                             ↑
                                         </button>
                                         <button type="button"
                                                 class="secondary-button picker-button"
                                                 @onclick="() => MoveEditorSaveLink(currentIndex, 1)"
+                                                aria-label="@($"リンク {currentIndex + 1} を下へ移動")"
                                                 disabled="@(_isSaving || currentIndex >= _editorSaveLinks.Count - 1)">
                                             ↓
                                         </button>
@@ -965,16 +951,16 @@ else
             </div>
             <div class="editor-actions dialog-footer">
                 <button type="button" class="launch-button" @onclick="SaveEditorAsync" disabled="@_isSaving">
-                    @(_isSaving ? "保存中..." : "保存")
+                    @(_isSaving ? "保存中…" : "保存")
                 </button>
-                <button type="button" class="secondary-button" @onclick="RequestCloseEditorAsync" disabled="@_isSaving" data-dialog-dismiss>キャンセル</button>
+                <button type="button" class="secondary-button" @onclick="RequestCloseEditor" disabled="@_isSaving" data-dialog-dismiss>キャンセル</button>
                 @if (_isEditMode && !string.IsNullOrWhiteSpace(_editingGameId))
                 {
                     <button type="button"
-                            class="danger-button"
+                            class="danger-button home-delete-action home-labeled-action"
                             @onclick="OpenDeleteConfirmForEditingGame"
                             disabled="@(_isSaving || _isDeleting)">
-                        このゲームを削除
+                        <CaptureIcon Name="Trash" /> 登録を削除
                     </button>
                 }
             </div>
@@ -1000,6 +986,7 @@ else
     private string? _deleteTargetGameId;
     private string _deleteTargetGameTitle = string.Empty;
     private string _editorTitle = string.Empty;
+    private string _editorSavedTitle = string.Empty;
     private string _editorExecutablePath = string.Empty;
     private string? _editorRepositoryPath;
     private string? _editorCurrentBranch;
@@ -1045,9 +1032,16 @@ else
     private bool _isStartupChecking = true;
     private bool _isGitReady = true;
     private string? _startupError;
+    private string? _libraryLoadError;
+    private bool _syncHistoryLoadFailed;
+    private DraftKind? _discardChanges;
+    private ElementReference _libraryHeading;
+    private ElementReference _notificationHeading;
+    private ElementReference _logHeading;
+    private bool _focusLibraryHeading;
     private readonly HashSet<string> _registeredWatcherRepositoryIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _pinningGameIds = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, string> _thumbnailDataUriCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ThumbnailSource> _thumbnailCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, IReadOnlyList<GameSaveLinkItem>> _saveLinksByGame = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _saveLinkLoadFailedGameIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, IReadOnlyList<RepositorySyncHistoryItem>> _syncHistoryByRepository = new(StringComparer.OrdinalIgnoreCase);
@@ -1065,7 +1059,18 @@ else
         SettingsPanelService.OpenRequested += OnSettingsOpenRequested;
     }
 
-    protected override async Task OnInitializedAsync()
+    protected override Task OnInitializedAsync() => InitializeLibraryAsync();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focusLibraryHeading)
+        {
+            _focusLibraryHeading = false;
+            await _libraryHeading.FocusAsync();
+        }
+    }
+
+    private async Task InitializeLibraryAsync()
     {
         _isStartupChecking = true;
         _isGitReady = true;
@@ -1073,11 +1078,19 @@ else
 
         try
         {
-            var gitCheckResult = await GitService.CheckAvailabilityAsync();
-            if (!gitCheckResult.IsSuccess)
+            try
+            {
+                var gitCheckResult = await GitService.CheckAvailabilityAsync();
+                _startupError = gitCheckResult.IsSuccess ? null : BuildGitStartupError(gitCheckResult);
+            }
+            catch (Exception ex)
+            {
+                _startupError = ex.Message;
+            }
+
+            if (_startupError is not null)
             {
                 _isGitReady = false;
-                _startupError = BuildGitStartupError(gitCheckResult);
                 UnregisterAllWatchers();
                 return;
             }
@@ -1085,14 +1098,23 @@ else
             ApplyAppSettings(AppSettingsService.Get());
             await RunStartupLogMaintenanceAsync();
             _ = SyncOrchestrator;
-            await ReloadGamesAsync();
-            await RefreshRepositoryWatchersAsync();
+            if (await ReloadGamesAsync())
+            {
+                RefreshRepositoryWatchers();
+            }
             StartStateRefreshLoop();
         }
         finally
         {
             _isStartupChecking = false;
         }
+    }
+
+    private async Task RetryStartupAsync()
+    {
+        if (_isStartupChecking) return;
+        await InitializeLibraryAsync();
+        _focusLibraryHeading = true;
     }
 
     private async Task LaunchAsync(string gameId)
@@ -1103,8 +1125,8 @@ else
             {
                 SetNotification("起動前同期を実行中です...", null);
                 var result = await LauncherService.LaunchAsync(gameId);
-                await ReloadGamesAsync();
-                SetNotification(result.Message, result.IsSuccess);
+                var loaded = await ReloadGamesAsync();
+                SetNotification(loaded ? result.Message : $"{result.Message} 一覧の再読込に失敗しました。", result.IsSuccess && loaded);
                 if (result.ShowCapture) Navigation.NavigateTo("capture");
             });
     }
@@ -1121,13 +1143,19 @@ else
             return;
         }
 
+        DismissNotification();
         _settingsSnapshot = GetSettingsDraft();
         _isSettingsOpen = true;
         await RunWithUserOperationLoadingAsync("設定を読み込んでいます...", LoadSettingsAsync);
     }
 
+    private Task FocusNotificationHeadingAsync() => JS.InvokeVoidAsync("gameLauncherDialogFocusSection", _notificationHeading).AsTask();
+
+    private Task FocusLogHeadingAsync() => JS.InvokeVoidAsync("gameLauncherDialogFocusSection", _logHeading).AsTask();
+
     private void OpenHelp()
     {
+        DismissNotification();
         _isHelpOpen = true;
     }
 
@@ -1136,20 +1164,40 @@ else
         _isHelpOpen = false;
     }
 
-    private async Task RequestCloseSettingsAsync()
+    private void RequestCloseSettings()
     {
         if (_isSettingsLoading || _isAutoStartSaving || _isAppSettingsSaving || _isCardSizeSaving)
         {
             return;
         }
 
-        if (_settingsSnapshot != GetSettingsDraft()
-            && !await JS.InvokeAsync<bool>("confirm", "保存していない設定を破棄して閉じますか？"))
+        if (_settingsSnapshot != GetSettingsDraft())
         {
+            _discardChanges = DraftKind.Settings;
             return;
         }
 
         _isSettingsOpen = false;
+    }
+
+    private void CancelDiscardChanges() => _discardChanges = null;
+
+    private void ConfirmDiscardChanges()
+    {
+        if (_discardChanges == DraftKind.Game)
+        {
+            CloseEditor();
+        }
+        else if (_discardChanges == DraftKind.Settings)
+        {
+            if (_settingsSnapshot is not null)
+            {
+                ApplyAppSettings(_settingsSnapshot with { GameCardSizePercent = _gameCardSizePercent });
+            }
+            _isSettingsOpen = false;
+        }
+
+        _discardChanges = null;
     }
 
     private async Task RunWithUserOperationLoadingAsync(string message, Func<Task> action)
@@ -1324,6 +1372,8 @@ else
 
     private async Task RefreshGitStatusesManuallyAsync()
     {
+        if (_isGitStatusRefreshing) return;
+
         await RunWithUserOperationLoadingAsync(
             "Gitステータスを更新しています...",
             async () =>
@@ -1333,8 +1383,8 @@ else
                     var isSuccess = await RefreshGitStatusesAsync();
                     SetNotification(
                         isSuccess
-                            ? "Gitステータスを更新しました。"
-                            : "一部のGitステータス更新に失敗しました。ログを確認してください。",
+                            ? "Git状態を更新しました。"
+                            : "Git状態を取得できないゲームがあります。関連リポジトリとログを確認し、再試行してください。",
                         isSuccess);
                 }
                 catch (OperationCanceledException)
@@ -1393,29 +1443,7 @@ else
     {
         var scale = _gameCardSizePercent / 100d;
         var scaleText = scale.ToString("0.00", global::System.Globalization.CultureInfo.InvariantCulture);
-        var thumbnailExtraHeight = GetThumbnailCardExtraHeightPx();
-        return $"--game-card-scale:{scaleText};--thumbnail-extra-height:{thumbnailExtraHeight}px;";
-    }
-
-    private int GetThumbnailCardExtraHeightPx()
-    {
-        var visibleCount = 0;
-        if (_showCardTitle)
-        {
-            visibleCount++;
-        }
-
-        if (_showCardSyncStatus)
-        {
-            visibleCount++;
-        }
-
-        return visibleCount switch
-        {
-            2 => 64,
-            1 => 38,
-            _ => 0
-        };
+        return $"--game-card-scale:{scaleText};";
     }
 
     private async Task OpenLatestErrorLogAsync()
@@ -1479,6 +1507,7 @@ else
         }
 
         _isLogLoading = true;
+        var previousError = _logViewerError;
         _logViewerError = null;
 
         try
@@ -1488,6 +1517,10 @@ else
                 _logViewerLimit,
                 severity,
                 _logViewerKeyword);
+            if (previousError is not null && _message == previousError)
+            {
+                DismissNotification();
+            }
         }
         catch (Exception ex)
         {
@@ -1583,9 +1616,11 @@ else
 
     private void OpenCreateEditor()
     {
+        DismissNotification();
         _isEditMode = false;
         _editingGameId = null;
         _editorTitle = string.Empty;
+        _editorSavedTitle = string.Empty;
         _editorExecutablePath = string.Empty;
         _editorRepositoryPath = null;
         ResetEditorBranchState(clearNewBranchName: true);
@@ -1599,6 +1634,7 @@ else
 
     private void OpenDeleteConfirm(string gameId, string gameTitle)
     {
+        DismissNotification();
         _deleteTargetGameId = gameId;
         _deleteTargetGameTitle = gameTitle;
         _isDeleteConfirmOpen = true;
@@ -1612,7 +1648,7 @@ else
             return;
         }
 
-        OpenDeleteConfirm(_editingGameId, _editorTitle);
+        OpenDeleteConfirm(_editingGameId, _editorSavedTitle);
     }
 
     private void CloseDeleteConfirm(bool force = false)
@@ -1632,14 +1668,16 @@ else
         if (_saveLinkLoadFailedGameIds.Contains(game.Id))
         {
             SetNotification(
-                "セーブリンクの取得に失敗しているため編集を開始できません。再読み込みしてから再試行してください。",
+                $"「{game.Title}」のセーブリンクを読み込めません。ゲーム一覧を再読込してから編集してください。",
                 false);
             return;
         }
 
+        DismissNotification();
         _isEditMode = true;
         _editingGameId = game.Id;
         _editorTitle = game.Title;
+        _editorSavedTitle = game.Title;
         _editorExecutablePath = game.ExecutablePath;
         _editorRepositoryPath = game.RelatedRepositoryPath;
         ResetEditorBranchState(clearNewBranchName: true);
@@ -1685,6 +1723,7 @@ else
                 _isDeleting = true;
                 var targetGameId = _deleteTargetGameId;
                 var targetTitle = _deleteTargetGameTitle;
+                var registrationDeleted = false;
                 try
                 {
                     var deleted = await GameLibraryService.DeleteAsync(targetGameId);
@@ -1693,6 +1732,7 @@ else
                         SetNotification("削除対象のゲームが見つかりません。", false);
                         return;
                     }
+                    registrationDeleted = true;
 
                     if (_isEditorOpen
                         && !string.IsNullOrWhiteSpace(_editingGameId)
@@ -1701,14 +1741,26 @@ else
                         CloseEditor(force: true);
                     }
 
-                    await ReloadGamesAsync();
-                    await RefreshRepositoryWatchersAsync();
-                    SetNotification($"ゲームを削除しました: {targetTitle}", true);
                     CloseDeleteConfirm(force: true);
+                    _focusLibraryHeading = true;
+                    if (_games is not null)
+                    {
+                        _games = _games.Where(game => !string.Equals(game.Id, targetGameId, StringComparison.OrdinalIgnoreCase)).ToArray();
+                    }
+
+                    var removalError = TryRefreshRepositoryWatchers(removeOnly: true);
+                    var reloadError = await ReloadGamesAsync()
+                        ? TryRefreshRepositoryWatchers()
+                        : AppendError("一覧の再読込に失敗しました。", removalError);
+                    SetNotification(reloadError is null
+                        ? $"ゲーム登録を削除しました: {targetTitle}"
+                        : $"「{targetTitle}」の登録は削除しました。{reloadError}", reloadError is null);
                 }
                 catch (Exception ex)
                 {
-                    SetNotification($"ゲーム削除に失敗しました: {ex.Message}", false);
+                    SetNotification(registrationDeleted
+                        ? $"「{targetTitle}」の登録は削除しました。削除後の更新に失敗しました: {ex.Message}"
+                        : $"ゲーム削除に失敗しました: {ex.Message}", false);
                 }
                 finally
                 {
@@ -1736,16 +1788,18 @@ else
         });
     }
 
-    private async Task RequestCloseEditorAsync()
+    private bool HasEditorChanges() => _editorSnapshot != GetEditorDraft() || (_isEditMode && _capturePreference?.HasChanges is true);
+
+    private void RequestCloseEditor()
     {
         if (_isSaving)
         {
             return;
         }
 
-        if ((_editorSnapshot != GetEditorDraft() || (_isEditMode && _capturePreference?.HasChanges is true))
-            && !await JS.InvokeAsync<bool>("confirm", "保存していない編集内容を破棄して閉じますか？"))
+        if (HasEditorChanges())
         {
+            _discardChanges = DraftKind.Game;
             return;
         }
 
@@ -1761,6 +1815,8 @@ else
 
         _isEditorOpen = false;
     }
+
+    private enum DraftKind { Game, Settings }
 
     private async Task SaveEditorAsync()
     {
@@ -1784,6 +1840,7 @@ else
             async () =>
             {
                 _isSaving = true;
+                string? savedTitle = null;
                 try
                 {
                     var saveLinkInputs = BuildEditorSaveLinkInputs();
@@ -1798,7 +1855,7 @@ else
                         if (_saveLinkLoadFailedGameIds.Contains(_editingGameId))
                         {
                             SetNotification(
-                                "セーブリンク取得に失敗しているため保存できません。再読み込みしてから再試行してください。",
+                                "セーブリンクを読み込めないため保存できません。ゲーム一覧を再読込してから編集してください。",
                                 false);
                             return;
                         }
@@ -1810,24 +1867,55 @@ else
                             return;
                         }
 
-                        if (_capturePreference is not null) await _capturePreference.SaveAsync();
-
-                        SetNotification($"ゲーム設定を更新しました: {updated.Title}", true);
+                        savedTitle = updated.Title;
+                        _editorSavedTitle = updated.Title;
+                        _editorTitle = updated.Title;
+                        _editorHasThumbnail = HasThumbnail(updated);
+                        _editorThumbnailSourcePath = null;
+                        _editorClearThumbnail = false;
+                        _editorSnapshot = GetEditorDraft();
+                        if (_capturePreference is not null)
+                        {
+                            try
+                            {
+                                await _capturePreference.SaveAsync();
+                            }
+                            catch (Exception ex)
+                            {
+                                var refreshError = await ReloadGamesAsync()
+                                    ? TryRefreshRepositoryWatchers()
+                                    : "一覧の再読込に失敗しました。";
+                                SetNotification(AppendError(
+                                    $"ゲーム設定は保存しました。シナリオ抽出設定は保存できませんでした。開き直して確認してください: {ex.Message}",
+                                    refreshError), false);
+                                return;
+                            }
+                        }
                     }
                     else
                     {
                         var created = await GameLibraryService.CreateAsync(input);
                         await SaveLinksForCreatedGameAsync(created.Id, saveLinkInputs);
-                        SetNotification($"ゲームを登録しました: {created.Title}", true);
+                        savedTitle = created.Title;
                     }
 
-                    await ReloadGamesAsync();
-                    await RefreshRepositoryWatchersAsync();
                     shouldCloseEditor = true;
+                    if (await ReloadGamesAsync())
+                    {
+                        RefreshRepositoryWatchers();
+                        SetNotification($"{(_isEditMode ? "ゲーム設定を更新しました" : "ゲームを登録しました")}: {savedTitle}", true);
+                    }
+                    else
+                    {
+                        _focusLibraryHeading = true;
+                        SetNotification($"「{savedTitle}」は保存しました。一覧の再読込に失敗しました。", false);
+                    }
                 }
                 catch (Exception ex)
                 {
-                    SetNotification($"保存に失敗しました: {ex.Message}", false);
+                    SetNotification(savedTitle is null
+                        ? $"保存に失敗しました: {ex.Message}"
+                        : $"「{savedTitle}」は保存しました。監視の更新に失敗しました: {ex.Message}", false);
                 }
                 finally
                 {
@@ -2726,13 +2814,40 @@ else
         return result;
     }
 
-    private async Task ReloadGamesAsync()
+    private async Task RetryLibraryAsync()
     {
-        _games = await GameLibraryService.GetGamesAsync();
+        await RunWithUserOperationLoadingAsync("ゲーム一覧を読込中…", async () =>
+        {
+            if (await ReloadGamesAsync())
+            {
+                var watcherError = TryRefreshRepositoryWatchers();
+                SetNotification(watcherError ?? (_saveLinkLoadFailedGameIds.Count == 0
+                    ? "ゲーム一覧を読み込みました。"
+                    : "読み込めないセーブリンクがあります。対象ゲームの編集はできません。"),
+                    watcherError is null && _saveLinkLoadFailedGameIds.Count == 0);
+            }
+            _focusLibraryHeading = true;
+        });
+    }
+
+    private async Task<bool> ReloadGamesAsync()
+    {
+        try
+        {
+            _games = await GameLibraryService.GetGamesAsync();
+            _libraryLoadError = null;
+        }
+        catch (Exception ex)
+        {
+            _libraryLoadError = ex.Message;
+            return false;
+        }
+
         await RefreshSaveLinksAsync();
         SyncThumbnailCache();
         await RefreshRepositorySyncHistoriesAsync();
         await RefreshGitStatusesAsync();
+        return true;
     }
 
     private async Task RefreshSaveLinksAsync()
@@ -2804,11 +2919,26 @@ else
             .ToArray();
     }
 
-    private Task RefreshRepositoryWatchersAsync()
+    private static string AppendError(string message, string? error) => error is null ? message : $"{message} {error}";
+
+    private string? TryRefreshRepositoryWatchers(bool removeOnly = false)
+    {
+        try
+        {
+            RefreshRepositoryWatchers(removeOnly);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return $"監視の更新に失敗しました: {ex.Message}";
+        }
+    }
+
+    private void RefreshRepositoryWatchers(bool removeOnly = false)
     {
         if (_games is null)
         {
-            return Task.CompletedTask;
+            return;
         }
 
         var activeRepositoryIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -2825,7 +2955,6 @@ else
                 continue;
             }
 
-            RepositoryWatcherService.Register(repositoryKey, repositoryKey);
             activeRepositoryIds.Add(repositoryKey);
         }
 
@@ -2835,15 +2964,19 @@ else
         foreach (var repositoryId in staleRepositoryIds)
         {
             RepositoryWatcherService.Unregister(repositoryId);
+            _registeredWatcherRepositoryIds.Remove(repositoryId);
         }
 
-        _registeredWatcherRepositoryIds.Clear();
+        if (removeOnly)
+        {
+            return;
+        }
+
         foreach (var repositoryId in activeRepositoryIds)
         {
+            RepositoryWatcherService.Register(repositoryId, repositoryId);
             _registeredWatcherRepositoryIds.Add(repositoryId);
         }
-
-        return Task.CompletedTask;
     }
 
     private void UnregisterAllWatchers()
@@ -2888,12 +3021,12 @@ else
                 try
                 {
                     await GameLibraryService.SetPinnedAsync(game.Id, nextPinned);
-                    await ReloadGamesAsync();
+                    var loaded = await ReloadGamesAsync();
                     SetNotification(
-                        nextPinned
+                        !loaded ? $"「{game.Title}」のピン留め設定は保存しました。一覧の再読込に失敗しました。" : nextPinned
                             ? $"ピン留めしました: {game.Title}"
                             : $"ピン留めを解除しました: {game.Title}",
-                        true);
+                        loaded);
                 }
                 catch (Exception ex)
                 {
@@ -2950,7 +3083,7 @@ else
         _stateRefreshCts.Dispose();
         UnregisterAllWatchers();
         _pinningGameIds.Clear();
-        _thumbnailDataUriCache.Clear();
+        _thumbnailCache.Clear();
         _editorSaveLinks.Clear();
         _saveLinksByGame.Clear();
         _syncHistoryByRepository.Clear();
@@ -3005,10 +3138,10 @@ else
 
     private async Task RefreshRepositorySyncHistoriesAsync(CancellationToken cancellationToken = default)
     {
-        _syncHistoryByRepository.Clear();
-
         if (_games is null || _games.Count == 0)
         {
+            _syncHistoryByRepository.Clear();
+            _syncHistoryLoadFailed = false;
             return;
         }
 
@@ -3020,6 +3153,8 @@ else
             .ToArray();
         if (repositoryIds.Length == 0)
         {
+            _syncHistoryByRepository.Clear();
+            _syncHistoryLoadFailed = false;
             return;
         }
 
@@ -3029,10 +3164,12 @@ else
                 repositoryIds,
                 SyncHistoryTimelineLimit,
                 cancellationToken);
+            _syncHistoryByRepository.Clear();
             foreach (var pair in histories)
             {
                 _syncHistoryByRepository[pair.Key] = pair.Value;
             }
+            _syncHistoryLoadFailed = false;
         }
         catch (OperationCanceledException)
         {
@@ -3040,7 +3177,7 @@ else
         }
         catch
         {
-            // 履歴取得失敗時はカード描画を継続する。
+            _syncHistoryLoadFailed = true;
         }
     }
 
@@ -3103,13 +3240,14 @@ else
         try
         {
             var nextStates = new Dictionary<string, GitRepositoryVisualState>(StringComparer.OrdinalIgnoreCase);
-            var repositoryPaths = _games?
-                .Select(game => NormalizeRepositoryPath(game.RelatedRepositoryPath))
-                .Where(static path => !string.IsNullOrWhiteSpace(path))
-                .Select(static path => path!)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray()
-                ?? [];
+            var repositoryPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var game in _games ?? [])
+            {
+                if (string.IsNullOrWhiteSpace(game.RelatedRepositoryPath)) continue;
+                var path = NormalizeRepositoryPath(game.RelatedRepositoryPath);
+                if (path is null) isSuccess = false;
+                else repositoryPaths.Add(path);
+            }
 
             foreach (var repositoryPath in repositoryPaths)
             {
@@ -3256,7 +3394,7 @@ else
         return _gitVisualStateByRepository.GetValueOrDefault(repositoryPath, GitRepositoryVisualState.Unknown);
     }
 
-    private static string GetGameCardClass(bool hasThumbnail, GitRepositoryVisualState gitVisualState)
+    private static string GetGameCardClass(GitRepositoryVisualState gitVisualState)
     {
         var gitStateClass = gitVisualState switch
         {
@@ -3270,9 +3408,7 @@ else
             _ => "git-state-unknown"
         };
 
-        return hasThumbnail
-            ? $"game-card thumbnail-mode-card {gitStateClass}"
-            : $"game-card {gitStateClass}";
+        return $"game-card {gitStateClass}";
     }
 
     private static bool HasThumbnail(GameCardItem game)
@@ -3280,7 +3416,7 @@ else
         return !string.IsNullOrWhiteSpace(game.ThumbnailPath);
     }
 
-    private string? GetThumbnailDataUri(GameCardItem game)
+    private ThumbnailSource? GetThumbnailSource(GameCardItem game)
     {
         var path = NormalizeThumbnailPath(game.ThumbnailPath);
         if (path is null)
@@ -3288,7 +3424,7 @@ else
             return null;
         }
 
-        if (_thumbnailDataUriCache.TryGetValue(path, out var cached))
+        if (_thumbnailCache.TryGetValue(path, out var cached))
         {
             return cached;
         }
@@ -3306,9 +3442,9 @@ else
                 return null;
             }
 
-            var dataUri = $"data:image/png;base64,{Convert.ToBase64String(bytes)}";
-            _thumbnailDataUriCache[path] = dataUri;
-            return dataUri;
+            var source = new ThumbnailSource($"data:image/png;base64,{Convert.ToBase64String(bytes)}");
+            _thumbnailCache[path] = source;
+            return source;
         }
         catch
         {
@@ -3316,11 +3452,27 @@ else
         }
     }
 
+    private void MarkThumbnailDecodeFailed(string gameId, ThumbnailSource source)
+    {
+        var game = _games?.FirstOrDefault(game => game.Id == gameId);
+        var path = NormalizeThumbnailPath(game?.ThumbnailPath);
+        if (path is not null && _thumbnailCache.TryGetValue(path, out var current) && ReferenceEquals(current, source))
+        {
+            source.DecodeFailed = true;
+        }
+    }
+
+    private sealed class ThumbnailSource(string dataUri)
+    {
+        public string DataUri { get; } = dataUri;
+        public bool DecodeFailed { get; set; }
+    }
+
     private void SyncThumbnailCache()
     {
         if (_games is null)
         {
-            _thumbnailDataUriCache.Clear();
+            _thumbnailCache.Clear();
             return;
         }
 
@@ -3330,13 +3482,13 @@ else
             .Select(static path => path!)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        var stalePaths = _thumbnailDataUriCache.Keys
+        var stalePaths = _thumbnailCache.Keys
             .Where(path => !activePaths.Contains(path))
             .ToArray();
 
         foreach (var stalePath in stalePaths)
         {
-            _thumbnailDataUriCache.Remove(stalePath);
+            _thumbnailCache.Remove(stalePath);
         }
     }
 
@@ -3429,7 +3581,7 @@ else
         {
             GameCardStatus.Syncing => "同期中",
             GameCardStatus.Synced => "同期OK",
-            GameCardStatus.Error => "エラー",
+            GameCardStatus.Error => "同期エラー",
             _ => "未同期"
         };
     }
@@ -3669,18 +3821,18 @@ else
         Error = 7
     }
 
-    private static string GetGitVisualStateLabel(GitRepositoryVisualState state)
+    private static string GetGitCardLabel(GitRepositoryVisualState state)
     {
         return state switch
         {
-            GitRepositoryVisualState.NotConfigured => "リポジトリ未設定",
-            GitRepositoryVisualState.Clean => "変更なし",
-            GitRepositoryVisualState.Dirty => "未コミットの変更あり",
-            GitRepositoryVisualState.Ahead => "ローカルが先行",
-            GitRepositoryVisualState.Behind => "リモートが先行",
-            GitRepositoryVisualState.Diverged => "ローカルとリモートが分岐",
-            GitRepositoryVisualState.Error => "状態取得エラー",
-            _ => "未確認"
+            GitRepositoryVisualState.NotConfigured => "同期先なし",
+            GitRepositoryVisualState.Clean => "Git：変更なし",
+            GitRepositoryVisualState.Dirty => "Git：未コミット",
+            GitRepositoryVisualState.Ahead => "Git：ローカル先行",
+            GitRepositoryVisualState.Behind => "Git：リモート先行",
+            GitRepositoryVisualState.Diverged => "Git：分岐",
+            GitRepositoryVisualState.Error => "Git：取得失敗",
+            _ => "Git：未確認"
         };
     }
 
