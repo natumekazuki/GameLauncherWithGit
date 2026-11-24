@@ -45,7 +45,10 @@ body { margin: 0; }
     line-height: 1.25;
 }
 
-.play-web-entry input { background: var(--play-web-input); }
+.play-web-entry input {
+    background: var(--play-web-input);
+    border-color: #596d8a;
+}
 .play-web-entry input[aria-invalid="true"] { border-color: var(--play-web-error); }
 .play-web-error { color: var(--play-web-error); }
 
@@ -62,6 +65,17 @@ body { margin: 0; }
     color: var(--play-web-background);
     background: var(--play-web-accent);
     font-weight: 650;
+}
+
+#play-web-reconnect-status {
+    position: absolute;
+    inset-block-start: 0;
+    inset-inline-start: 0;
+    inline-size: 1px;
+    block-size: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
 }
 
 #components-reconnect-modal.components-reconnect-hide { display: none; }

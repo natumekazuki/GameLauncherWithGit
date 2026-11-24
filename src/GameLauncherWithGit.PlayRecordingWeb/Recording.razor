@@ -5,6 +5,7 @@
 <main id="play-recording-content">
     <PlayRecordingMount @rendermode="new InteractiveServerRenderMode(prerender: false)" />
 </main>
+<div id="play-web-reconnect-status" role="status" aria-atomic="true"></div>
 <link rel="stylesheet" href="/assets/capture-tags.css" />
 <link rel="stylesheet" href="/assets/scenario-flow.css" />
 @if (View.HasPanelStyle)
@@ -13,7 +14,7 @@
 }
 <section id="components-reconnect-modal" class="play-web-entry components-reconnect-hide" aria-labelledby="play-web-reconnect-title">
     <h1 id="play-web-reconnect-title">プレイ中の記録</h1>
-    <div role="status">
+    <div aria-hidden="true">
         <p class="play-web-reconnecting">再接続中…</p>
         <p class="play-web-reconnect-error play-web-error">接続できませんでした。</p>
     </div>
