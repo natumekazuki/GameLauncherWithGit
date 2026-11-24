@@ -45,6 +45,51 @@ public sealed class ScenarioScreenshotServiceTests : IAsyncDisposable
 
     // @test-value v2
     // kind = "invariant"
+    // claim = "PCとWebは取得回の先頭で区間を開始できるが、一時停止からの再開後は新しい非空本文の受付まで開始できない"
+    // oracle = { type = "contract", ref = "WithMate Session Graph app-wide-design-and-implementation / app-wide-range-start-availability; docs/design/scenario-extraction.md#ゲーム単位の本文と任意区間" }
+    // fault = "再開直後や名前・空白本文だけで開始を有効にする、取得回の先頭での開始を禁止する、または新着本文の後も開始を拒否する"
+    // observable = "PCのCaptureSnapshotとWebのPlayRecordingStateの区間開始可否、再開直後の拒否文言、許可後の開始位置"
+    // observation_boundary = "public-boundary"
+    // scope = "live range start availability before the first body, during pause, and after resume"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task DesktopAndWebRangeStartWaitForNewBodyAfterResume()
+    {
+        await BeginPreviewAsync(); await _capture.ConfirmProcessAsync();
+        var play = Play;
+
+        async Task<PlayRecordingState> ExpectStartAvailabilityAsync(bool expected)
+        {
+            Assert.Equal(expected, _capture.Snapshot.RangeCanStart);
+            var state = await play.GetStateAsync("game");
+            Assert.Equal(expected, state.CanStartRange);
+            return state;
+        }
+
+        await ExpectStartAvailabilityAsync(true);
+        _host.Emit(Body, "停止前の本文");
+        _capture.PauseRecording();
+        await ExpectStartAvailabilityAsync(false);
+        _capture.ResumeRecording();
+        var resumed = await ExpectStartAvailabilityAsync(false);
+        var rejected = await Assert.ThrowsAsync<InvalidOperationException>(() => play.StartRangeAsync("game", resumed.Target));
+        Assert.Equal("取得中のゲームで区間を開始してください。", rejected.Message);
+
+        _host.Emit(Name, "灯里");
+        _host.Emit(Body, " \t");
+        await ExpectStartAvailabilityAsync(false);
+
+        const string newBody = "再開後の本文";
+        _host.Emit(Body, newBody);
+        var ready = await ExpectStartAvailabilityAsync(true);
+        await play.StartDesktopRangeAsync(ready.Target);
+        var started = await ExpectStartAvailabilityAsync(false);
+        Assert.Equal(new CapturePosition(ready.Target.SessionId!.Value, 4, newBody.Length), started.RangeStart);
+    }
+
+    // @test-value v2
+    // kind = "invariant"
     // claim = "PCで始めWebで終了した同じ区間の同時保存は、固定された本文の境界で一度だけ成功する"
     // oracle = { type = "contract", ref = "WithMate Session Graph play-recording-web / play-recording-web-sharing-proposal; README.md: シナリオ抽出" }
     // fault = "端末ごとに区間状態を分ける、保存時の最新本文で終了位置を置き換える、または同じ確定区間を二重作成する"

@@ -93,5 +93,6 @@ public sealed record CaptureSnapshot
     public CaptureCandidate[] Candidates { get; init; } = [];
     public CaptureTextItem[] PreviewItems { get; init; } = [];
     public CapturePosition? RangeStart { get; init; }
+    internal bool RangeCanStart { get; init; }
     internal bool RangeCanEnd { get; init; }
 }

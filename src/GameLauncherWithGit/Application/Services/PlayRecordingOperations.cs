@@ -92,7 +92,7 @@ public sealed partial class PlayRecordingOperations(ScenarioCaptureService captu
             !live.Active && profile.HasConfirmedRecordingSetup, ours && live.Formal,
             ours ? live.RangeStart : null, pending)
         {
-            CanStartRange = recording && live.LastBody is not null && live.RangeStart is null && pending is null,
+            CanStartRange = ours && live.RangeCanStart && pending is null,
             CanEndRange = recording && live.RangeStart is { } start && live.LastBody?.CompareTo(start) > 0,
             CanTakeScreenshot = recording && live.LastBody is { Sequence: > 0 },
             BlockedByOtherGame = live.Active && !ours
