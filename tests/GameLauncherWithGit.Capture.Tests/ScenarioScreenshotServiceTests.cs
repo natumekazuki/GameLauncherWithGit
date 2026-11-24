@@ -195,7 +195,7 @@ public sealed class ScenarioScreenshotServiceTests : IAsyncDisposable
     // @test-value v2
     // kind = "invariant"
     // claim = "Webのゲーム窓描画が非対応なら失敗として通知し、PCの共有状態も保存中から失敗へ移り、画像やデスクトップ描画への代替を残さず終了できる"
-    // oracle = { type = "contract", ref = "README.md: プレイ中の記録をスマホ・タブレットで操作する（Windows）; WithMate Session Graph play-recording-web / play-web-product-coordination" }
+    // oracle = { type = "contract", ref = "README.md: プレイ中の記録をスマホ・タブレットで操作する（Windows）; WithMate Session Graph play-recording-web / play-web-product-coordination; WithMate Session Graph app-wide-design-and-implementation / app-wide-recording-backend-failure-boundaries" }
     // fault = "窓描画拒否後も共有状態を保存中と表示する、PC撮影へ切り替える、失敗画像を保存する、または終了時に処理済みの撮影失敗を再送出する"
     // observable = "Web失敗と共有の状態文言、保存中フラグと保存件数、専用窓描画のみ一回、関連画像なし、サービス終了は成功"
     // observation_boundary = "public-boundary"
@@ -497,10 +497,10 @@ public sealed class ScenarioScreenshotServiceTests : IAsyncDisposable
 
     // @test-value v2
     // kind = "invariant"
-    // claim = "撮影処理中に関連先原文がなくなった場合は画像も成功件数も残さない"
-    // oracle = { type = "contract", ref = "https://github.com/natumekazuki/GameLauncherWithGit/issues/22" }
-    // fault = "原文の存在を確認せず画像を保存する、または保存例外を成功として通知する"
-    // observable = "サービス保存件数と失敗状態、削除済み原文の添付読取拒否、PNGファイルの件数"
+    // claim = "撮影中に関連先原文が削除された場合は画像と成功件数を増やさず、失敗理由と再撮影の案内を示す。削除済み原文の添付読取は拒否する"
+    // oracle = { type = "contract", ref = "https://github.com/natumekazuki/GameLauncherWithGit/issues/22; README.md: シナリオ抽出（履歴一覧の画像ボタンと件数取得失敗）" }
+    // fault = "削除済み原文に画像を保存する、失敗表示を空や保存中のままにする、再撮影の案内を落とす、または削除済み原文の添付を0件として返す"
+    // observable = "保存件数と保存中フラグ、SnapshotのStatusとLastFailureにある本文未保存の理由と再撮影案内、削除済み原文の添付読取拒否、PNGファイルの不在"
     // observation_boundary = "public-boundary"
     // scope = "screenshot service propagation of missing persistent body failure"
     // lifecycle = "permanent"
@@ -519,9 +519,14 @@ public sealed class ScenarioScreenshotServiceTests : IAsyncDisposable
         await _store.DeleteCaptureEventsAsync(target.CaptureGameId, [target.Event]);
         frame.SetResult(FakePlatform.Frame);
         await pending.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(0, _screenshots.Snapshot.SavedCount);
-        Assert.False(_screenshots.Snapshot.Busy);
-        Assert.NotEqual("スクリーンショットを保存しました", _screenshots.Snapshot.Status);
+        var snapshot = _screenshots.Snapshot;
+        Assert.Equal(0, snapshot.SavedCount);
+        Assert.False(snapshot.Busy);
+        Assert.StartsWith("撮影を保存できませんでした。", snapshot.Status);
+        Assert.Contains("撮影対象の本文が保存されていません。", snapshot.Status);
+        Assert.Contains("ゲームの前面表示と撮影設定を確認して、もう一度撮影してください。", snapshot.Status);
+        Assert.NotNull(snapshot.LastFailure);
+        Assert.Equal(snapshot.Status, snapshot.LastFailure.Message);
         await Assert.ThrowsAsync<ArgumentException>(() => _store.GetEventScreenshotsAsync(target.CaptureGameId, target.Event));
         Assert.Empty(Directory.GetFiles(_directory, "*.png", SearchOption.AllDirectories));
     }
