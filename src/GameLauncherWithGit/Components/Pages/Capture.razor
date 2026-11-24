@@ -60,7 +60,7 @@
                     {
                         <button class="launch-button capture-icon-button" title="区間を保存" aria-label="固定した区間を保存" @onclick="() => OpenRangeDraft(displayedPending, displayedLive)" disabled="@_busy"><CaptureIcon Name="Save" /></button>
                     }
-                    <button class="secondary-button capture-icon-button" title="区間指定を取消" aria-label="区間指定を取消" @onclick="() => CancelLiveRangeAsync(displayedLive)" disabled="@(_busy || (_snapshot.RangeStart is null && displayedPending is null))"><CaptureIcon Name="Close" /></button>
+                    <button class="secondary-button capture-icon-button" title="区間指定を取消" aria-label="区間指定を取消" @onclick="() => CancelLiveRangeAsync(displayedLive, displayedPending)" disabled="@(_busy || (_snapshot.RangeStart is null && displayedPending is null))"><CaptureIcon Name="Close" /></button>
                 </div>
                 <div class="capture-live-details">
                     <span class="capture-connection" role="status" title="@_snapshot.Status">@_snapshot.Status</span>
@@ -929,8 +929,13 @@
         _snapshot = CaptureService.Snapshot;
         OpenRangeDraft(_pendingLiveRange, _pendingLiveRange.Target);
     });
-    private Task CancelLiveRangeAsync(PlayRecordingTarget expected) => RunAsync(async () =>
-    { await RecordingOperations.CancelDesktopRangeAsync(expected); _pendingLiveRange = null; _snapshot = CaptureService.Snapshot; });
+    private Task CancelLiveRangeAsync(PlayRecordingTarget expected, PlayRecordingRangeSelection? pending) => RunAsync(async () =>
+    {
+        if (pending is null) await RecordingOperations.CancelDesktopRangeAsync(expected);
+        else await RecordingOperations.CancelDesktopRangeAsync(expected, pending);
+        _pendingLiveRange = null;
+        _snapshot = CaptureService.Snapshot;
+    });
     private Task ToggleTextRange() => RunAsync(async () =>
     {
         _pickingRange = !_pickingRange; _selected.Clear(); _following = false;
@@ -965,10 +970,10 @@
         CloseEditors();
         if (draft.Live)
         {
+            _pendingLiveRange = null;
             try
             {
                 await RecordingOperations.CancelDesktopRangeAsync(expected, draft);
-                _pendingLiveRange = null;
             }
             finally { _snapshot = CaptureService.Snapshot; }
         }
