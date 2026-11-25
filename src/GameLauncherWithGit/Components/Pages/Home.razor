@@ -197,7 +197,8 @@ else
 @if (GetSelectedGame() is { } selected)
 {
     var gitStatus = GetGitVisualState(selected);
-    var repositoryPath = NormalizeRepositoryPath(selected.RelatedRepositoryPath);
+    var repositoryPath = GetConfiguredGitPath(selected);
+    var repositoryRoot = GetRegisteredGitIdentity(selected)?.Root;
     var syncStatus = GetEffectiveStatus(selected);
     var paused = CanResumeRepositorySync(selected);
     <div class="editor-overlay home-selected-overlay" @onclick="CloseGameDetails">
@@ -237,7 +238,7 @@ else
                 {
                     <button type="button" class="secondary-button home-labeled-action"
                             @onclick="() => RefreshSelectedGitStatusAsync(selected.Id, repositoryPath)"
-                            aria-disabled="@(IsTargetedGitStatusReadPending(repositoryPath) ? "true" : null)">Git状態を更新</button>
+                            aria-disabled="@(repositoryRoot is not null && IsTargetedGitStatusReadPending(repositoryRoot) ? "true" : null)">Git状態を更新</button>
                 }
                 @if (_saveLinkLoadFailedGameIds.Contains(selected.Id))
                 {
@@ -1045,6 +1046,7 @@ else
     private readonly Dictionary<string, IReadOnlyList<GameSaveLinkItem>> _saveLinksByGame = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _saveLinkLoadFailedGameIds = new(StringComparer.OrdinalIgnoreCase);
     private int _saveLinkLoadVersion;
+    private Dictionary<string, GitRepositoryIdentity> _gitIdentitiesByConfiguredPath = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, GitRepositoryVisualState> _gitVisualStateByRepository = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, GitStatusRead> _gitStatusReads = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<NotificationHistoryEntry> _notificationHistoryEntries = [];
@@ -1420,8 +1422,16 @@ else
     private async Task RefreshSelectedGitStatusAsync(string gameId, string repositoryPath)
     {
         if (GetSelectedGame() is not { } game || game.Id != gameId
-            || !string.Equals(NormalizeRepositoryPath(game.RelatedRepositoryPath), repositoryPath, StringComparison.OrdinalIgnoreCase)
-            || IsTargetedGitStatusReadPending(repositoryPath)) return;
+            || !string.Equals(GetConfiguredGitPath(game), repositoryPath, StringComparison.OrdinalIgnoreCase)) return;
+
+        var identity = ResolveGitRepositoryIdentity(repositoryPath);
+        _gitIdentitiesByConfiguredPath[repositoryPath] = identity;
+        if (identity.Root is not { } repositoryRoot)
+        {
+            ReportSelectedGitStatus(game.Title, repositoryPath, null, new(GitRepositoryVisualState.Error, identity.Error));
+            return;
+        }
+        if (IsTargetedGitStatusReadPending(repositoryRoot)) return;
 
         await RunWithUserOperationLoadingAsync(
             "Git状態を更新しています…",
@@ -1429,10 +1439,10 @@ else
             {
                 try
                 {
-                    var result = await RefreshRepositoryGitStatusAsync(repositoryPath, targeted: true, _stateRefreshCts.Token);
+                    var result = await RefreshRepositoryGitStatusAsync(repositoryRoot, targeted: true, _stateRefreshCts.Token);
                     if (result is not null)
                     {
-                        ReportSelectedGitStatus(game.Title, repositoryPath, result);
+                        ReportSelectedGitStatus(game.Title, repositoryPath, repositoryRoot, result);
                     }
                 }
                 catch (OperationCanceledException)
@@ -2103,11 +2113,7 @@ else
             {
                 if (await LoadEditorBranchesAsync(showNotificationOnFailure: true, preserveSelection: true, fetchRemote: true))
                 {
-                    var result = await RefreshRepositoryGitStatusAsync(repositoryPath, targeted: true, _stateRefreshCts.Token);
-                    if (result is { State: GitRepositoryVisualState.Error })
-                    {
-                        ReportSelectedGitStatus(gameTitle, repositoryPath, result);
-                    }
+                    await RefreshEditorGitStatusAsync(repositoryPath, gameTitle);
                 }
             });
     }
@@ -2200,7 +2206,7 @@ else
                         }
                     }
 
-                    await RefreshRepositoryGitStatusAsync(repositoryPath, targeted: true, _stateRefreshCts.Token);
+                    await RefreshEditorGitStatusAsync(repositoryPath);
                     ReportResult(
                         switchedFromRemote
                             ? $"リモート追跡ブランチを作成して切り替えました: {switchTargetLabel}"
@@ -2272,7 +2278,7 @@ else
 
                     _editorNewBranchName = string.Empty;
                     await LoadEditorBranchesAsync(showNotificationOnFailure: false, preserveSelection: false);
-                    await RefreshRepositoryGitStatusAsync(repositoryPath, targeted: true, _stateRefreshCts.Token);
+                    await RefreshEditorGitStatusAsync(repositoryPath);
                     ReportResult($"ブランチを作成して切り替えました: {newBranchName}", true);
                 }
                 catch (Exception ex)
@@ -2870,6 +2876,7 @@ else
         try
         {
             _games = await GameLibraryService.GetGamesAsync();
+            RebuildRegisteredGitIdentities();
             _libraryLoadError = null;
         }
         catch (Exception ex)
@@ -3125,6 +3132,7 @@ else
         _thumbnailCache.Clear();
         _editorSaveLinks.Clear();
         _saveLinksByGame.Clear();
+        _gitIdentitiesByConfiguredPath.Clear();
         _gitVisualStateByRepository.Clear();
     }
 
@@ -3149,7 +3157,11 @@ else
                     if (gitStatusElapsedSeconds >= gitStatusRefreshIntervalSeconds)
                     {
                         gitStatusElapsedSeconds = 0;
-                        await InvokeAsync(async () => await RefreshGitStatusesAsync(_stateRefreshCts.Token));
+                        await InvokeAsync(async () =>
+                        {
+                            RebuildRegisteredGitIdentities();
+                            await RefreshGitStatusesAsync(_stateRefreshCts.Token);
+                        });
                     }
 
                     await InvokeAsync(StateHasChanged);
@@ -3197,6 +3209,34 @@ else
     private bool IsResumePending(GameCardItem game) =>
         NormalizeRepositoryKey(game.RelatedRepositoryPath) is { } key && _resumingRepositoryIds.Contains(key);
 
+    private static string? GetConfiguredGitPath(GameCardItem game) =>
+        string.IsNullOrWhiteSpace(game.RelatedRepositoryPath) ? null : game.RelatedRepositoryPath.Trim();
+
+    private GitRepositoryIdentity? GetRegisteredGitIdentity(GameCardItem game) =>
+        GetConfiguredGitPath(game) is { } path ? _gitIdentitiesByConfiguredPath.GetValueOrDefault(path) : null;
+
+    private void RebuildRegisteredGitIdentities()
+    {
+        _gitIdentitiesByConfiguredPath = (_games ?? [])
+            .Select(GetConfiguredGitPath)
+            .OfType<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(path => path, ResolveGitRepositoryIdentity, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static GitRepositoryIdentity ResolveGitRepositoryIdentity(string path)
+    {
+        try
+        {
+            // Match GitService's worktree directory resolution, not the location of its Git metadata.
+            return new(GameLauncherWithGit.Infrastructure.Services.GitService.ResolveDirectoryPath(path), null);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return new(null, ex.Message);
+        }
+    }
+
     private async Task RefreshGitStatusesAsync(CancellationToken cancellationToken = default)
     {
         if (_isGitStatusSweepRunning)
@@ -3207,19 +3247,22 @@ else
         _isGitStatusSweepRunning = true;
         try
         {
-            var repositoryPaths = (_games ?? [])
-                .Select(game => NormalizeRepositoryPath(game.RelatedRepositoryPath))
+            var repositoryRoots = _gitIdentitiesByConfiguredPath.Values
+                .Select(identity => identity.Root)
                 .OfType<string>()
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            foreach (var stalePath in _gitVisualStateByRepository.Keys.Where(path => !repositoryPaths.Contains(path)).ToArray())
+            foreach (var staleRoot in _gitVisualStateByRepository.Keys.Where(root => !repositoryRoots.Contains(root)).ToArray())
             {
-                _gitVisualStateByRepository.Remove(stalePath);
+                _gitVisualStateByRepository.Remove(staleRoot);
             }
 
-            foreach (var repositoryPath in repositoryPaths)
+            foreach (var repositoryRoot in repositoryRoots)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                await RefreshRepositoryGitStatusAsync(repositoryPath, targeted: false, cancellationToken);
+                if (IsRegisteredGitRepositoryRoot(repositoryRoot))
+                {
+                    await RefreshRepositoryGitStatusAsync(repositoryRoot, targeted: false, cancellationToken);
+                }
             }
         }
         finally
@@ -3228,25 +3271,29 @@ else
         }
     }
 
-    private bool IsTargetedGitStatusReadPending(string repositoryPath) =>
-        _gitStatusReads.TryGetValue(repositoryPath, out var read) && read.Targeted;
+    private bool IsTargetedGitStatusReadPending(string repositoryRoot) =>
+        _gitStatusReads.TryGetValue(repositoryRoot, out var read) && read.Targeted;
+
+    private bool IsRegisteredGitRepositoryRoot(string repositoryRoot) =>
+        _gitIdentitiesByConfiguredPath.Values.Any(identity =>
+            string.Equals(identity.Root, repositoryRoot, StringComparison.OrdinalIgnoreCase));
 
     private async Task<GitStatusResult?> RefreshRepositoryGitStatusAsync(
-        string repositoryPath, bool targeted, CancellationToken cancellationToken)
+        string repositoryRoot, bool targeted, CancellationToken cancellationToken)
     {
-        if (!targeted && IsTargetedGitStatusReadPending(repositoryPath)) return null;
+        if (!targeted && IsTargetedGitStatusReadPending(repositoryRoot)) return null;
 
         // An explicit read can supersede an older sweep read for the same repository.
         var read = new GitStatusRead(targeted);
-        _gitStatusReads[repositoryPath] = read;
-        bool IsLatestRead() => _gitStatusReads.TryGetValue(repositoryPath, out var latest) && ReferenceEquals(read, latest);
+        _gitStatusReads[repositoryRoot] = read;
+        bool IsLatestRead() => _gitStatusReads.TryGetValue(repositoryRoot, out var latest) && ReferenceEquals(read, latest);
 
         try
         {
             GitStatusResult status;
             try
             {
-                var result = await GitService.RunAsync(repositoryPath, ["status", "--porcelain", "--branch"], cancellationToken);
+                var result = await GitService.RunAsync(repositoryRoot, ["status", "--porcelain", "--branch"], cancellationToken);
                 status = result.IsSuccess
                     ? new(ParseGitVisualState(result.StandardOutput), null)
                     : new(GitRepositoryVisualState.Error, BuildGitFailureReason(result));
@@ -3258,30 +3305,52 @@ else
 
             cancellationToken.ThrowIfCancellationRequested();
             if (!IsLatestRead()) return null;
-            if (_games?.Any(game => string.Equals(NormalizeRepositoryPath(game.RelatedRepositoryPath), repositoryPath,
-                StringComparison.OrdinalIgnoreCase)) == true)
+            if (IsRegisteredGitRepositoryRoot(repositoryRoot))
             {
-                _gitVisualStateByRepository[repositoryPath] = status.State;
+                _gitVisualStateByRepository[repositoryRoot] = status.State;
             }
             return status;
         }
         finally
         {
-            if (IsLatestRead()) _gitStatusReads.Remove(repositoryPath);
+            if (IsLatestRead()) _gitStatusReads.Remove(repositoryRoot);
         }
     }
 
-    private void ReportSelectedGitStatus(string gameTitle, string repositoryPath, GitStatusResult result)
+    private async Task RefreshEditorGitStatusAsync(string repositoryPath, string? reportFailureForGame = null)
     {
+        var identity = ResolveGitRepositoryIdentity(repositoryPath);
+        if (_gitIdentitiesByConfiguredPath.ContainsKey(repositoryPath))
+        {
+            _gitIdentitiesByConfiguredPath[repositoryPath] = identity;
+        }
+        var result = identity.Root is { } repositoryRoot
+            ? await RefreshRepositoryGitStatusAsync(repositoryRoot, targeted: true, _stateRefreshCts.Token)
+            : new GitStatusResult(GitRepositoryVisualState.Error, identity.Error);
+        if (reportFailureForGame is not null && result is { State: GitRepositoryVisualState.Error })
+        {
+            ReportSelectedGitStatus(reportFailureForGame, repositoryPath, identity.Root, result);
+        }
+    }
+
+    private void ReportSelectedGitStatus(string gameTitle, string repositoryPath, string? repositoryRoot, GitStatusResult result)
+    {
+        const string operation = nameof(RefreshSelectedGitStatusAsync);
         var isSuccess = result.State != GitRepositoryVisualState.Error;
+        if (isSuccess)
+        {
+            // A failed directory resolution has only the configured path as its key.
+            ClearRecoveredNotification(operation, repositoryPath: repositoryPath);
+        }
         SetNotification(
             isSuccess
                 ? $"「{gameTitle}」のGit状態を更新しました。"
                 : $"「{gameTitle}」のGit状態を取得できません。関連リポジトリとログを確認し、再試行してください。\n関連リポジトリ: {repositoryPath}\n{result.Error}",
             isSuccess, summary: isSuccess ? "Git状態を更新" : "Git状態エラー",
-            repositoryPath: repositoryPath, operation: nameof(RefreshSelectedGitStatusAsync));
+            repositoryPath: repositoryRoot ?? repositoryPath, operation: operation);
     }
 
+    private sealed record GitRepositoryIdentity(string? Root, string? Error);
     private sealed record GitStatusRead(bool Targeted);
     private sealed record GitStatusResult(GitRepositoryVisualState State, string? Error);
 
@@ -3370,13 +3439,12 @@ else
             return GitRepositoryVisualState.NotConfigured;
         }
 
-        var repositoryPath = NormalizeRepositoryPath(game.RelatedRepositoryPath);
-        if (repositoryPath is null)
+        if (GetRegisteredGitIdentity(game)?.Root is not { } repositoryRoot)
         {
             return GitRepositoryVisualState.Error;
         }
 
-        return _gitVisualStateByRepository.GetValueOrDefault(repositoryPath, GitRepositoryVisualState.Unknown);
+        return _gitVisualStateByRepository.GetValueOrDefault(repositoryRoot, GitRepositoryVisualState.Unknown);
     }
 
     private static bool HasThumbnail(GameCardItem game)
@@ -3644,10 +3712,9 @@ else
         if (_notificationFailure is null) _notification = null;
     }
 
-    private void ClearRecoveredNotification(string operation, string? targetId = null)
+    private void ClearRecoveredNotification(string operation, string? targetId = null, string? repositoryPath = null)
     {
-        if (_notificationFailure is { } failure
-            && failure.Operation == operation && failure.Target == targetId && failure.Repository is null)
+        if (_notificationFailure == (operation, targetId, repositoryPath?.ToUpperInvariant()))
         {
             if (_operationAnnouncement == _notification?.Summary)
             {
