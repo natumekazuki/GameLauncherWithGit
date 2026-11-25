@@ -201,6 +201,7 @@ else
     var repositoryRoot = GetRegisteredGitIdentity(selected)?.Root;
     var syncStatus = GetEffectiveStatus(selected);
     var paused = CanResumeRepositorySync(selected);
+    var showSyncProgressInGitRow = _usesSavedSyncCadence && _showCardSyncStatus && repositoryPath is not null;
     <div class="editor-overlay home-selected-overlay" @onclick="CloseGameDetails">
         <section class="editor-modal" role="dialog" aria-modal="true" aria-labelledby="home-game-title" tabindex="-1" @onclick:stopPropagation="true">
             <div class="dialog-heading home-dialog-heading">
@@ -212,7 +213,14 @@ else
             </div>
             <div class="dialog-body home-game-details">
                 <dl>
-                    <dt>Git状態</dt><dd>@GetGitCardLabel(gitStatus)</dd>
+                    <dt>Git状態</dt>
+                    <dd class="@(showSyncProgressInGitRow ? "home-git-with-sync" : null)">
+                        <span>@GetGitCardLabel(gitStatus)</span>
+                        @if (showSyncProgressInGitRow)
+                        {
+                            <span role="status" aria-atomic="true">@(GetRepositorySyncState(selected) is RepositorySyncState.Syncing or RepositorySyncState.Debouncing ? "同期中" : null)</span>
+                        }
+                    </dd>
                     @if (paused)
                     {
                         <dt>同期状態</dt><dd>同期停止</dd>
@@ -221,7 +229,7 @@ else
                     {
                         <dt>状態</dt><dd>要確認</dd>
                     }
-                    else if (gitStatus != GitRepositoryVisualState.NotConfigured && _showCardSyncStatus)
+                    else if (gitStatus != GitRepositoryVisualState.NotConfigured && _showCardSyncStatus && !_usesSavedSyncCadence)
                     {
                         <dt>同期状態</dt><dd>@GetStatusLabel(syncStatus)</dd>
                     }
@@ -326,7 +334,7 @@ else
                         </tr>
                         <tr>
                             <td>@GetGitCardLabel(GitRepositoryVisualState.Ahead)</td>
-                            <td>必要なら push</td>
+                            <td>手元で保持している追跡ブランチとの差分を確認</td>
                         </tr>
                         <tr>
                             <td>@GetGitCardLabel(GitRepositoryVisualState.Behind)</td>
@@ -405,6 +413,22 @@ else
                 <div class="settings-section settings-sync-section">
                     <h3>同期・通知</h3>
                     <div class="settings-sync-grid">
+                        <label class="settings-value-row">
+                            <span class="settings-value-label">自動コミット間隔（分）</span>
+                            <input type="number"
+                                   min="0"
+                                   max="@AppSettings.AutoSyncIntervalMinutesMax"
+                                   @bind="_autoCommitIntervalMinutes"
+                                   disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                        </label>
+                        <label class="settings-value-row">
+                            <span class="settings-value-label">自動プッシュ間隔（分）</span>
+                            <input type="number"
+                                   min="0"
+                                   max="@AppSettings.AutoSyncIntervalMinutesMax"
+                                   @bind="_autoPushIntervalMinutes"
+                                   disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                        </label>
                         <label class="settings-value-row">
                             <span class="settings-value-label">変更検知の待機（秒）</span>
                             <input type="number"
@@ -1012,6 +1036,9 @@ else
     private bool _isAppSettingsSaving;
     private bool _isCardSizeSaving;
     private bool _autoStartEnabled;
+    private int _autoCommitIntervalMinutes;
+    private int _autoPushIntervalMinutes;
+    private bool _usesSavedSyncCadence;
     private int _syncDebounceSeconds = AppSettings.Default.SyncDebounceSeconds;
     private int _syncRetryInitialSeconds = AppSettings.Default.SyncRetryInitialSeconds;
     private int _syncRetryMaxSeconds = AppSettings.Default.SyncRetryMaxSeconds;
@@ -1375,6 +1402,9 @@ else
     private void ApplyAppSettings(AppSettings settings)
     {
         var normalized = (settings ?? AppSettings.Default).Normalize();
+        _autoCommitIntervalMinutes = normalized.AutoCommitIntervalMinutes;
+        _autoPushIntervalMinutes = normalized.AutoPushIntervalMinutes;
+        _usesSavedSyncCadence = _autoCommitIntervalMinutes > 0 || _autoPushIntervalMinutes > 0;
         _syncDebounceSeconds = normalized.SyncDebounceSeconds;
         _syncRetryInitialSeconds = normalized.SyncRetryInitialSeconds;
         _syncRetryMaxSeconds = normalized.SyncRetryMaxSeconds;
@@ -1396,13 +1426,19 @@ else
             _logRetentionDays,
             _logMaxFileSizeMb,
             ShowCardTitle: _showCardTitle,
-            ShowCardSyncStatus: _showCardSyncStatus);
+            ShowCardSyncStatus: _showCardSyncStatus)
+        {
+            AutoCommitIntervalMinutes = _autoCommitIntervalMinutes,
+            AutoPushIntervalMinutes = _autoPushIntervalMinutes
+        };
     }
 
     private async Task SaveCurrentAppSettingsAsync()
     {
         var requested = AppSettingsService.Get().Normalize() with
         {
+            AutoCommitIntervalMinutes = _autoCommitIntervalMinutes,
+            AutoPushIntervalMinutes = _autoPushIntervalMinutes,
             SyncDebounceSeconds = _syncDebounceSeconds,
             SyncRetryInitialSeconds = _syncRetryInitialSeconds,
             SyncRetryMaxSeconds = _syncRetryMaxSeconds,
@@ -2196,8 +2232,9 @@ else
                 _isBranchSwitching = true;
                 try
                 {
+                    var syncRoot = GetBranchChangeSyncRoot(repositoryPath);
                     var result = await GitService.RunAsync(
-                        repositoryPath,
+                        syncRoot ?? repositoryPath,
                         switchCommand);
                     if (!result.IsSuccess)
                     {
@@ -2205,6 +2242,7 @@ else
                         return;
                     }
 
+                    await NotifyBranchChangedForSyncAsync(repositoryPath, syncRoot);
                     await LoadEditorBranchesAsync(showNotificationOnFailure: false, preserveSelection: false);
                     var currentBranchResult = await GitService.RunAsync(repositoryPath, ["branch", "--show-current"]);
                     if (currentBranchResult.IsSuccess)
@@ -2278,8 +2316,9 @@ else
                         return;
                     }
 
+                    var syncRoot = GetBranchChangeSyncRoot(repositoryPath);
                     var createResult = await GitService.RunAsync(
-                        repositoryPath,
+                        syncRoot ?? repositoryPath,
                         ["checkout", "-b", newBranchName]);
                     if (!createResult.IsSuccess)
                     {
@@ -2287,6 +2326,7 @@ else
                         return;
                     }
 
+                    await NotifyBranchChangedForSyncAsync(repositoryPath, syncRoot);
                     _editorNewBranchName = string.Empty;
                     await LoadEditorBranchesAsync(showNotificationOnFailure: false, preserveSelection: false);
                     await RefreshEditorGitStatusAsync(repositoryPath);
@@ -2301,6 +2341,29 @@ else
                     _isBranchCreating = false;
                 }
             });
+    }
+
+    private string? GetBranchChangeSyncRoot(string repositoryPath) =>
+        _usesSavedSyncCadence ? ResolveGitRepositoryIdentity(repositoryPath).Root : null;
+
+    private async Task NotifyBranchChangedForSyncAsync(string repositoryPath, string? originalRoot)
+    {
+        if (originalRoot is null || !HasSameGitRoot(originalRoot, GetBranchChangeSyncRoot(repositoryPath))) return;
+
+        try
+        {
+            await SyncOrchestrator.NotifyRepositoryBranchChangedAsync(originalRoot, _stateRefreshCts.Token);
+            ClearRecoveredNotification(nameof(NotifyBranchChangedForSyncAsync), originalRoot);
+        }
+        catch (OperationCanceledException) when (_stateRefreshCts.IsCancellationRequested)
+        {
+        }
+        catch (Exception)
+        {
+            SetNotification("ブランチは切り替わりましたが、自動同期の再確認を予約できませんでした。",
+                false, summary: "同期の再確認エラー", targetId: originalRoot,
+                operation: nameof(NotifyBranchChangedForSyncAsync));
+        }
     }
 
     private async Task<bool> LoadEditorBranchesAsync(bool showNotificationOnFailure, bool preserveSelection, bool fetchRemote = false)
@@ -3195,7 +3258,7 @@ else
 
     private RepositorySyncState GetRepositorySyncState(GameCardItem game)
     {
-        var repositoryKey = NormalizeRepositoryKey(game.RelatedRepositoryPath);
+        var repositoryKey = GetSyncRepositoryKey(game);
         if (repositoryKey is null)
         {
             return RepositorySyncState.Idle;
@@ -3222,7 +3285,10 @@ else
     }
 
     private bool IsResumePending(GameCardItem game) =>
-        NormalizeRepositoryKey(game.RelatedRepositoryPath) is { } key && _resumingRepositoryIds.Contains(key);
+        GetSyncRepositoryKey(game) is { } key && _resumingRepositoryIds.Contains(key);
+
+    private string? GetSyncRepositoryKey(GameCardItem game) =>
+        GetRegisteredGitIdentity(game)?.Root ?? NormalizeRepositoryKey(game.RelatedRepositoryPath);
 
     private static string? GetConfiguredGitPath(GameCardItem game) =>
         string.IsNullOrWhiteSpace(game.RelatedRepositoryPath) ? null : game.RelatedRepositoryPath.Trim();
@@ -3607,14 +3673,21 @@ else
 
     private async Task ResumeRepositorySyncAsync(GameCardItem game)
     {
-        var repositoryKey = NormalizeRepositoryKey(game.RelatedRepositoryPath);
+        var originalKey = GetSyncRepositoryKey(game);
+        if (_games?.FirstOrDefault(current => current.Id == game.Id) is not { } registered
+            || GetConfiguredGitPath(registered) is not { } configuredPath
+            || !HasSameGitRoot(configuredPath, GetConfiguredGitPath(game))) return;
+
+        SetRegisteredGitIdentity(configuredPath, ResolveGitRepositoryIdentity(configuredPath));
+        var repositoryKey = GetSyncRepositoryKey(registered);
+        if (!HasSameGitRoot(originalKey, repositoryKey)) return;
         if (repositoryKey is null)
         {
             SetNotification("関連リポジトリのパスが無効です。", false, summary: "同期再開エラー");
             return;
         }
 
-        if (!CanResumeRepositorySync(game) || !_resumingRepositoryIds.Add(repositoryKey)) return;
+        if (!CanResumeRepositorySync(registered) || !_resumingRepositoryIds.Add(repositoryKey)) return;
         await RunWithUserOperationLoadingAsync(
             "同期を再開しています...",
             async () =>
@@ -3622,7 +3695,7 @@ else
                 try
                 {
                     await SyncOrchestrator.ResumeRepositorySyncAsync(repositoryKey);
-                    SetNotification($"同期再開を受け付けました: {game.Title}", null, summary: "同期再開受付", targetId: repositoryKey);
+                    SetNotification($"同期再開を受け付けました: {registered.Title}", null, summary: "同期再開受付", targetId: repositoryKey);
                 }
                 catch (Exception ex)
                 {

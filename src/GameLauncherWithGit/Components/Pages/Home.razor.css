@@ -188,6 +188,12 @@
 
 .home-game-details dt { color: #aabbd0; }
 .home-game-details dd { margin: 0; }
+.home-git-with-sync {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 3em;
+    gap: .5em;
+}
+.home-git-with-sync [role="status"] { color: #aabbd0; }
 .home-game-details > button { margin-bottom: .5rem; }
 
 .editor-modal .editor-field h3 {
