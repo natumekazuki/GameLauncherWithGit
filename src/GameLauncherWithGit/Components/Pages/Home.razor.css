@@ -176,7 +176,7 @@
 .game-card-actions > button { flex: 0 0 auto; }
 .game-card-actions > .home-card-problem,
 .game-card-actions > .home-card-resume { width: auto; padding-inline: .5rem; font-size: .85rem; }
-.home-card-resume { margin-inline-start: auto; }
+.home-card-resume { margin-inline-start: auto; white-space: nowrap; }
 
 .home-game-details dl {
     display: grid;
