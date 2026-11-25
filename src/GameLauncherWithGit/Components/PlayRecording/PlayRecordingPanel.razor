@@ -128,22 +128,22 @@
                             {
                                 <button type="button" class="play-labeled-button" popovertarget="play-recording-tools" popovertargetaction="hide" disabled="@ControlsDisabled" @onclick="() => BreakLivePathAsync(target)"><CaptureIcon Name="PathBreak" />次の本文から別経路</button>
                             }
-                            @if (state.CanFinish && !_confirmFinish)
+                            @if (state.CanFinish && _finishConfirmation is null)
                             {
-                                <button type="button" class="play-labeled-button" popovertarget="play-recording-tools" popovertargetaction="hide" disabled="@ControlsDisabled" @onclick="OpenFinishConfirmation"><CaptureIcon Name="Stop" />記録を終了…</button>
+                                <button type="button" class="play-labeled-button" popovertarget="play-recording-tools" popovertargetaction="hide" disabled="@ControlsDisabled" @onclick="() => OpenFinishConfirmation(target, state)"><CaptureIcon Name="Stop" />記録を終了…</button>
                             }
                             <button type="button" popovertarget="play-recording-tools" popovertargetaction="hide">閉じる</button>
                         </div>
                     </section>
                 }
             </div>
-            @if (_confirmFinish && state.CanFinish)
+            @if (_finishConfirmation is { } confirmation && state.CanFinish)
             {
                 <div class="play-stack play-selection" role="group" aria-label="記録終了の確認" @onkeydown="e => HandleEscape(e, CloseFinishConfirmation)">
-                    <p @ref="_finishImpact" tabindex="-1">「@_gameTitle」の記録を終了します。@(state.RangeStart is not null || state.PendingRange is not null ? "保存していないプレイ中の区間は残りません。" : "")</p>
+                    <p class="play-finish-impact" @ref="_finishImpact" tabindex="-1">「@confirmation.Title」の記録を終了します。@(confirmation.HasUnsavedRange ? "保存していないプレイ中の区間は残りません。" : "")</p>
                     <div class="play-actions">
                         <button type="button" disabled="@ControlsDisabled" @onclick="CloseFinishConfirmation">取消</button>
-                        <button type="button" class="play-labeled-button" disabled="@ControlsDisabled" @onclick="() => FinishRecordingAsync(target)"><CaptureIcon Name="Stop" />記録を終了</button>
+                        <button type="button" class="play-labeled-button" disabled="@ControlsDisabled" @onclick="() => FinishRecordingAsync(target, confirmation)"><CaptureIcon Name="Stop" />記録を終了</button>
                     </div>
                 </div>
             }

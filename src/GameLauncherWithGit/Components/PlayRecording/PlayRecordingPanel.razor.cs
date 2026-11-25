@@ -54,8 +54,8 @@ public partial class PlayRecordingPanel
         var row = _rowButtons.GetValueOrDefault(request.ItemId);
         var destination = request.Target switch
         {
-            FocusTarget.FinishImpact when _confirmFinish && _state?.CanFinish == true => _finishImpact,
-            FocusTarget.FinishButton when !_confirmFinish && _state?.CanFinish == true => _finishButton,
+            FocusTarget.FinishImpact when _finishConfirmation is not null && _state?.CanFinish == true => _finishImpact,
+            FocusTarget.FinishButton when _finishConfirmation is null && _state?.CanFinish == true => _finishButton,
             FocusTarget.Pause when _state is { Paused: false, Recording: true } => _pauseButton,
             FocusTarget.Resume when _state?.Paused == true => _resumeButton,
             FocusTarget.Screenshot when _state?.CanTakeScreenshot == true => _screenshotButton,
@@ -72,23 +72,28 @@ public partial class PlayRecordingPanel
         };
         if (destination.Id is not null)
         {
-            try { await destination.FocusAsync(preventScroll: request.Target is FocusTarget.Screenshot or FocusTarget.PathRow); }
+            try { await destination.FocusAsync(preventScroll: request.Target is FocusTarget.Screenshot or FocusTarget.PathRow or FocusTarget.FinishButton); }
             catch (JSDisconnectedException) { }
         }
     }
 
-    private void FocusAfterRender(FocusTarget target, long itemId = 0) => _nextFocus = (target, itemId);
-
-    private void OpenFinishConfirmation()
+    private void FocusAfterRender(FocusTarget target, long itemId = 0)
     {
-        if (ControlsDisabled) return;
-        _confirmFinish = true;
+        // A status refresh during another action can also close the finish confirmation.
+        if (_nextFocus?.Target == FocusTarget.FinishButton && target != FocusTarget.FinishImpact) return;
+        _nextFocus = (target, itemId);
+    }
+
+    private void OpenFinishConfirmation(DisplayTarget target, PlayRecordingState displayed)
+    {
+        if (ControlsDisabled || _finishConfirmation is not null || !displayed.CanFinish || !IsDisplayedTargetCurrent(target)) return;
+        _finishConfirmation = new(target, displayed.Title, displayed.RangeStart, displayed.PendingRange);
         FocusAfterRender(FocusTarget.FinishImpact);
     }
 
     private void CloseFinishConfirmation()
     {
-        _confirmFinish = false;
+        _finishConfirmation = null;
         FocusAfterRender(FocusTarget.FinishButton);
     }
 
@@ -130,14 +135,17 @@ public partial class PlayRecordingPanel
     private Task ReadForDisplayedTargetAsync(DisplayTarget target, Func<Task> operation) =>
         RunForegroundAsync(() => IsDisplayedTargetCurrent(target) ? operation() : Task.CompletedTask);
 
-    private Task RunMutationAsync(DisplayTarget target, Func<Task> operation, string failureLabel, string? rejection = null)
+    private Task RunMutationAsync(DisplayTarget target, Func<Task> operation, string failureLabel, string? rejection = null,
+        Func<bool>? isStillRelevant = null)
     {
         return RunForegroundAsync(async () =>
         {
+            if (isStillRelevant?.Invoke() == false) return;
             if (!IsDisplayedTargetCurrent(target))
             {
                 await RefreshStatusAsync(loadPane: true);
-                if (!_disposed && !_unauthorized && WebSession.IsConnectionCurrent(target.ConnectionVersion))
+                if (!_disposed && !_unauthorized && WebSession.IsConnectionCurrent(target.ConnectionVersion) &&
+                    isStillRelevant?.Invoke() != false)
                     _actionError = new(failureLabel, "接続またはPCの記録状態が変わりました。現在の対象を確認してください。");
                 return;
             }
@@ -146,7 +154,8 @@ public partial class PlayRecordingPanel
             {
                 Logger.LogWarning("Play recording Web operation rejected ({ExceptionType}).", ex.GetType().Name);
                 await RefreshStatusAsync(loadPane: false);
-                if (!_disposed && !_unauthorized && WebSession.IsConnectionCurrent(target.ConnectionVersion))
+                if (!_disposed && !_unauthorized && WebSession.IsConnectionCurrent(target.ConnectionVersion) &&
+                    isStillRelevant?.Invoke() != false)
                     _actionError = new(failureLabel, rejection ?? "操作を続けられませんでした。現在の記録状態を確認してください。");
             }
         }, failureLabel: failureLabel);

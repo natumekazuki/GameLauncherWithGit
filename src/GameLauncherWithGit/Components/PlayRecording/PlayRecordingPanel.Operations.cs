@@ -13,7 +13,7 @@ public partial class PlayRecordingPanel
 
     private PlayRecordingState? _state;
     private RangeDraft? _rangeDraft;
-    private bool _confirmFinish;
+    private FinishConfirmation? _finishConfirmation;
     private bool _focusNextSharedRange;
     private bool HasUsableTarget => _state is { BlockedByOtherGame: false };
     // The command version can change without changing which recording the user is reading.
@@ -31,6 +31,18 @@ public partial class PlayRecordingPanel
 
     private sealed record RangeDraft(PlayRecordingRangeSelection Selection, bool Shared = false, bool AutoFocus = false,
         CaptureTextItem? First = null, CaptureTextItem? Last = null);
+
+    private sealed record FinishConfirmation(DisplayTarget Target, string Title, CapturePosition? RangeStart,
+        PlayRecordingRangeSelection? PendingRange)
+    {
+        public bool HasUnsavedRange => RangeStart is not null || PendingRange is not null;
+
+        // A new command version alone (for example, after a screenshot) does not change the impact.
+        public bool Matches(PlayRecordingState state, long connectionVersion) =>
+            state.CanFinish && !state.BlockedByOtherGame && Target.ConnectionVersion == connectionVersion &&
+            Target.Recording.ProfileId == state.Target.ProfileId && Target.Recording.SessionId == state.Target.SessionId &&
+            Title == state.Title && Equals(RangeStart, state.RangeStart) && ReferenceEquals(PendingRange, state.PendingRange);
+    }
 
     private Task<T> UseAsync<T>(Func<string, Task<T>> operation) => WebSession.UseAsync(operation);
 
@@ -86,11 +98,13 @@ public partial class PlayRecordingPanel
         var targetChanged = _state?.Target.ProfileId != state.Target.ProfileId ||
             _state?.Target.SessionId != state.Target.SessionId || _state?.BlockedByOtherGame != state.BlockedByOtherGame
             || _displayedConnectionVersion != connectionVersion;
+        var closeFinish = _finishConfirmation is { } confirmation && !confirmation.Matches(state, connectionVersion);
         if (targetChanged) ClearTargetData();
         _displayedConnectionVersion = connectionVersion;
         _state = state;
         _gameTitle = state.Title;
         _statusError = false;
+        if (closeFinish) CloseFinishConfirmation();
         if (!HasUsableTarget) return;
 
         if (state.PendingRange is { } pending)
@@ -118,7 +132,7 @@ public partial class PlayRecordingPanel
         _state = null;
         _actionError = null;
         _rangeDraft = null;
-        _confirmFinish = false;
+        _finishConfirmation = null;
         _latest = true;
         ResetTextPages();
         _textRangeId = null;
@@ -221,13 +235,27 @@ public partial class PlayRecordingPanel
     private Task ResumeRecordingAsync(DisplayTarget target) =>
         ChangeRecordingAsync(target, gameId => Operations.ResumeAsync(gameId, target.Recording), "記録再開失敗", focus: FocusTarget.Pause);
 
-    private Task FinishRecordingAsync(DisplayTarget target) =>
-        ChangeRecordingAsync(target, gameId => Operations.FinishAsync(gameId, target.Recording), "記録終了失敗");
+    private Task FinishRecordingAsync(DisplayTarget target, FinishConfirmation confirmation)
+    {
+        if (!ReferenceEquals(_finishConfirmation, confirmation)) return Task.CompletedTask;
+        return RunMutationAsync(target, async () =>
+        {
+            if (_state is not { } state || !confirmation.Matches(state, target.ConnectionVersion))
+            {
+                CloseFinishConfirmation();
+                return;
+            }
+            // The backend checks the rendered command version under the same gate as range changes.
+            // Never substitute a newer version for this click.
+            await UseActionAsync(target, gameId => Operations.FinishAsync(gameId, target.Recording));
+            _finishConfirmation = null;
+            await RefreshStatusAsync(loadPane: true);
+        }, "記録終了失敗", isStillRelevant: () => ReferenceEquals(_finishConfirmation, confirmation));
+    }
 
     private Task ChangeRecordingAsync(DisplayTarget target, Func<string, Task> operation, string failureLabel, string? rejection = null, FocusTarget? focus = null) => RunMutationAsync(target, async () =>
     {
         await UseActionAsync(target, operation);
-        _confirmFinish = false;
         await RefreshStatusAsync(loadPane: true);
         if (focus is { } next) FocusAfterRender(next);
     }, failureLabel, rejection);

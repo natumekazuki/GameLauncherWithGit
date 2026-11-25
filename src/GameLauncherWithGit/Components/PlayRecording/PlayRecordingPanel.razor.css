@@ -90,6 +90,7 @@
 .play-row-actions button { width:auto; }
 .play-selection { border-block: 1px solid var(--play-line); padding-block: .75rem; }
 .play-selection > p { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.play-selection > .play-finish-impact { white-space:normal; overflow:visible; }
 .play-range-selection-actions { position:relative; flex-wrap:nowrap; }
 .play-range-selection-failure { position:absolute; inset-inline-end:0; }
 .play-related { border: 0; min-width: 0; margin: 0; padding: 0; }
