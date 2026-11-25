@@ -1153,16 +1153,16 @@ else
                     }
 
                     var message = $"「{game.Title}」: {result.Message}";
-                    if (!result.IsSuccess)
-                        SetNotification(message, false, summary: "起動エラー", launchGameId: game.Id);
-                    else if (result.HasWarnings)
-                        SetNotification(message, null, summary: "起動済み・警告", launchGameId: game.Id, retainWarning: true);
-                    else
-                        SetNotification(result.Message, true, summary: "起動済み", launchGameId: game.Id);
                     try
                     {
                         if (await ReloadGamesAsync())
                         {
+                            if (!result.IsSuccess)
+                                SetNotification(message, false, summary: "起動エラー", launchGameId: game.Id);
+                            else if (result.HasWarnings)
+                                SetNotification(message, null, summary: "起動済み・警告", launchGameId: game.Id, retainWarning: true);
+                            else
+                                SetNotification(result.Message, true, summary: "起動済み", launchGameId: game.Id);
                             return;
                         }
                     }
@@ -1171,7 +1171,7 @@ else
                         _libraryLoadError = ex.Message;
                     }
 
-                    SetNotification($"{message} 一覧の再読込に失敗しました。", false, addToHistory: false,
+                    SetNotification($"{message} 一覧の再読込に失敗しました。", false,
                         summary: result.IsSuccess ? "起動済み・一覧エラー" : "起動・一覧エラー",
                         launchGameId: game.Id);
                 });
