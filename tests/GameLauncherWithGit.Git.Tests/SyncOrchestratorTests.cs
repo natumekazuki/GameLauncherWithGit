@@ -164,6 +164,7 @@ public sealed class SyncOrchestratorTests
         public int HistoryCount => Volatile.Read(ref _historyCount);
         public Action<RepositorySyncState>? OnTrayState { get; set; }
         public event EventHandler<RepositoryChangedEventArgs>? RepositoryChanged;
+        public event EventHandler<RepositoryChangedEventArgs>? RepositoryRegistered { add { } remove { } }
 
         public void WatcherChanged(string repository) =>
             RepositoryChanged?.Invoke(this, new RepositoryChangedEventArgs(repository));

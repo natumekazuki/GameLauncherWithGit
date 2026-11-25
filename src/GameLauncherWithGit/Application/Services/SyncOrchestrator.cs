@@ -3,12 +3,13 @@ using GameLauncherWithGit.Application.Models;
 using GameLauncherWithGit.Domain.Models;
 using GameLauncherWithGit.Infrastructure.Abstractions;
 using GameLauncherWithGit.Infrastructure.Models;
+using GameLauncherWithGit.Infrastructure.Services;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 
 namespace GameLauncherWithGit.Application.Services;
 
-public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
+public sealed partial class SyncOrchestrator : ISyncOrchestrator, IDisposable
 {
 	private readonly IRepositoryStateStore _repositoryStateStore;
 	private readonly IRepositoryWatcherService _repositoryWatcherService;
@@ -20,6 +21,9 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 	private readonly IRepositorySyncHistoryStore _repositorySyncHistoryStore;
 	private readonly ILogger<SyncOrchestrator> _logger;
 	private readonly Func<TimeSpan, CancellationToken, Task> _delay;
+	private readonly TimeProvider _clock;
+	private readonly IGameLibraryStore? _gameLibraryStore;
+	private readonly Func<string, string>? _resolveDirectoryPath;
 	private readonly ConcurrentDictionary<string, RepositorySyncQueue> _queues = new(StringComparer.OrdinalIgnoreCase);
 	private volatile bool _isDisposed;
 
@@ -32,9 +36,11 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		ITrayService trayService,
 		ILogAccessService logAccessService,
 		IRepositorySyncHistoryStore repositorySyncHistoryStore,
+		IGameLibraryStore gameLibraryStore,
 		ILogger<SyncOrchestrator> logger)
 		: this(repositoryStateStore, repositoryWatcherService, gitService, appSettingsService, notificationService,
-			trayService, logAccessService, repositorySyncHistoryStore, logger, Task.Delay)
+			trayService, logAccessService, repositorySyncHistoryStore, logger, Task.Delay,
+			gameLibraryStore: gameLibraryStore, resolveDirectoryPath: GitService.ResolveDirectoryPath)
 	{
 	}
 
@@ -48,7 +54,10 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		ILogAccessService logAccessService,
 		IRepositorySyncHistoryStore repositorySyncHistoryStore,
 		ILogger<SyncOrchestrator> logger,
-		Func<TimeSpan, CancellationToken, Task> delay)
+		Func<TimeSpan, CancellationToken, Task> delay,
+		TimeProvider? clock = null,
+		IGameLibraryStore? gameLibraryStore = null,
+		Func<string, string>? resolveDirectoryPath = null)
 	{
 		_repositoryStateStore = repositoryStateStore;
 		_repositoryWatcherService = repositoryWatcherService;
@@ -60,29 +69,32 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		_repositorySyncHistoryStore = repositorySyncHistoryStore;
 		_logger = logger;
 		_delay = delay;
+		_clock = clock ?? TimeProvider.System;
+		_gameLibraryStore = gameLibraryStore;
+		_resolveDirectoryPath = resolveDirectoryPath;
 		_repositoryWatcherService.RepositoryChanged += OnRepositoryChanged;
+		_repositoryWatcherService.RepositoryRegistered += OnRepositoryRegistered;
 		_trayService.SetState(RepositorySyncState.Idle);
 	}
 
 	public Task QueueRepositorySyncAsync(string repositoryId, CancellationToken cancellationToken = default)
 	{
-		TryQueueRepositorySync(repositoryId, runImmediately: false, resumePaused: false, cancellationToken);
+		TryQueueRepositorySync(repositoryId, SyncRequest.Changed, cancellationToken);
 		return Task.CompletedTask;
 	}
 
 	public bool TryQueueRepositorySyncNow(string repositoryId) =>
-		TryQueueRepositorySync(repositoryId, runImmediately: true, resumePaused: false, CancellationToken.None);
+		TryQueueRepositorySync(repositoryId, SyncRequest.Manual, CancellationToken.None);
 
 	public Task ResumeRepositorySyncAsync(string repositoryId, CancellationToken cancellationToken = default)
 	{
-		TryQueueRepositorySync(repositoryId, runImmediately: true, resumePaused: true, cancellationToken);
+		TryQueueRepositorySync(repositoryId, SyncRequest.Resume, cancellationToken);
 		return Task.CompletedTask;
 	}
 
 	private bool TryQueueRepositorySync(
 		string repositoryId,
-		bool runImmediately,
-		bool resumePaused,
+		SyncRequest request,
 		CancellationToken cancellationToken)
 	{
 		if (string.IsNullOrWhiteSpace(repositoryId))
@@ -93,12 +105,12 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		ThrowIfDisposed();
 		cancellationToken.ThrowIfCancellationRequested();
 
-		var normalizedId = repositoryId.Trim();
+		var normalizedId = NormalizeRepositoryKey(repositoryId, _resolveDirectoryPath);
 		var queue = _queues.GetOrAdd(normalizedId, static _ => new RepositorySyncQueue());
 		SyncReservation? reservation;
 		lock (queue.Gate)
 		{
-			if (!TryReserveLocked(normalizedId, queue, runImmediately, resumePaused, cancellationToken, out reservation))
+			if (!TryReserveLocked(normalizedId, queue, request, cancellationToken, out reservation))
 			{
 				return false;
 			}
@@ -111,8 +123,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 	private bool TryReserveLocked(
 		string repositoryId,
 		RepositorySyncQueue queue,
-		bool runImmediately,
-		bool resumePaused,
+		SyncRequest request,
 		CancellationToken cancellationToken,
 		out SyncReservation? reservation)
 	{
@@ -121,32 +132,62 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 			? canceled.StateOnCancel
 			: _repositoryStateStore.GetStateOrDefault(repositoryId);
 		var isPaused = currentState == RepositorySyncState.ErrorPaused;
-		if (_isDisposed || cancellationToken.IsCancellationRequested || (isPaused && !resumePaused))
+		if (_isDisposed || cancellationToken.IsCancellationRequested || (isPaused && request != SyncRequest.Resume))
 		{
 			return false;
+		}
+
+		var settings = _appSettingsService.Get();
+		var useCadence = queue.UsesCadence || IsCadenceEnabled(settings);
+		if (request == SyncRequest.Registered && !useCadence)
+		{
+			return false;
+		}
+
+		var now = _clock.GetUtcNow();
+		if (request == SyncRequest.Changed && useCadence)
+		{
+			queue.FirstChangeAt ??= now;
+		}
+
+		var forced = request is SyncRequest.Manual or SyncRequest.Resume;
+		if (!forced && useCadence && queue.RetryCts is not null)
+		{
+			// A watcher or cadence deadline cannot preempt retry backoff for the incoming/commit steps.
+			return true;
 		}
 
 		CancelRetryLocked(queue);
 		if (queue.IsSyncRunning)
 		{
-			queue.RerunRequested = true;
-			queue.RerunImmediately |= runImmediately;
-			queue.RerunResumesPaused |= isPaused && resumePaused;
+			// Registering the same repository again during a run does not request another copy of that run.
+			if (request != SyncRequest.Registered && (queue.Rerun is null || request > queue.Rerun))
+			{
+				queue.Rerun = request;
+			}
 			return true;
 		}
 
 		var previous = queue.Pending;
-		if (!runImmediately && previous is { RunImmediately: true } && !previous.Token.IsCancellationRequested)
+		if (previous is not null && !previous.Token.IsCancellationRequested
+			&& (request < previous.Request || (request == SyncRequest.Registered)))
 		{
 			// This run has not started yet; it already covers a new request for the same repository.
 			return true;
 		}
 
-		reservation = new SyncReservation(runImmediately, runImmediately ? TimeSpan.Zero : GetDebounceDuration(),
+		var wait = request == SyncRequest.Changed ? GetDebounceDuration() : TimeSpan.Zero;
+		if (request == SyncRequest.Changed && settings.AutoCommitIntervalMinutes > 0 && queue.FirstChangeAt is { } firstChange)
+		{
+			var commitDeadline = firstChange.AddMinutes(settings.AutoCommitIntervalMinutes) - now;
+			wait = commitDeadline <= TimeSpan.Zero ? TimeSpan.Zero : commitDeadline < wait ? commitDeadline : wait;
+		}
+
+		reservation = new SyncReservation(request, wait,
 			previous?.StateOnCancel ?? currentState, cancellationToken);
 		queue.Pending = reservation;
 		_repositoryStateStore.SetState(repositoryId,
-			runImmediately ? RepositorySyncState.Syncing : RepositorySyncState.Debouncing);
+			wait == TimeSpan.Zero ? RepositorySyncState.Syncing : RepositorySyncState.Debouncing);
 		previous?.Cancellation.Cancel();
 		return true;
 	}
@@ -171,6 +212,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 
 		_isDisposed = true;
 		_repositoryWatcherService.RepositoryChanged -= OnRepositoryChanged;
+		_repositoryWatcherService.RepositoryRegistered -= OnRepositoryRegistered;
 		foreach (var queue in _queues.Values)
 		{
 			lock (queue.Gate)
@@ -178,7 +220,9 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 				var pending = queue.Pending;
 				queue.Pending = null;
 				pending?.Cancellation.Cancel();
+				queue.Active?.Cancellation.Cancel();
 				CancelRetryLocked(queue);
+				CancelCadenceWakeLocked(queue);
 			}
 		}
 
@@ -189,7 +233,15 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 	{
 		if (!_isDisposed)
 		{
-			TryQueueRepositorySync(args.RepositoryId, runImmediately: false, resumePaused: false, CancellationToken.None);
+			TryQueueRepositorySync(args.RepositoryId, SyncRequest.Changed, CancellationToken.None);
+		}
+	}
+
+	private void OnRepositoryRegistered(object? sender, RepositoryChangedEventArgs args)
+	{
+		if (!_isDisposed)
+		{
+			TryQueueRepositorySync(args.RepositoryId, SyncRequest.Registered, CancellationToken.None);
 		}
 	}
 
@@ -200,11 +252,12 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 	{
 		try
 		{
-			if (!reservation.RunImmediately)
+			if (reservation.DebounceDuration > TimeSpan.Zero)
 			{
 				await _delay(reservation.DebounceDuration, reservation.Token);
 			}
 
+			DateTimeOffset? firstChangeAt;
 			lock (queue.Gate)
 			{
 				if (_isDisposed || !ReferenceEquals(queue.Pending, reservation) || reservation.Token.IsCancellationRequested)
@@ -213,10 +266,14 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 				}
 
 				queue.Pending = null;
+				queue.Active = reservation;
 				queue.IsSyncRunning = true;
+				firstChangeAt = queue.FirstChangeAt;
+				queue.FirstChangeAt = null;
+				CancelCadenceWakeLocked(queue);
 			}
 
-			await RunSyncAsync(repositoryId, queue, reservation.Token);
+			await RunSyncAsync(repositoryId, queue, reservation.Request, firstChangeAt, reservation.Token);
 		}
 		catch (OperationCanceledException) when (reservation.Token.IsCancellationRequested)
 		{
@@ -227,6 +284,11 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 			var stateChanged = false;
 			lock (queue.Gate)
 			{
+				if (ReferenceEquals(queue.Active, reservation))
+				{
+					queue.Active = null;
+				}
+
 				if (ReferenceEquals(queue.Pending, reservation))
 				{
 					queue.Pending = null;
@@ -244,13 +306,39 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		}
 	}
 
-	private async Task RunSyncAsync(string repositoryId, RepositorySyncQueue queue, CancellationToken cancellationToken)
+	private async Task RunSyncAsync(string repositoryId, RepositorySyncQueue queue, SyncRequest request,
+		DateTimeOffset? firstChangeAt, CancellationToken cancellationToken)
 	{
 		var syncStartedAt = DateTimeOffset.Now;
+		var settings = _appSettingsService.Get().Normalize();
+		var useCadence = queue.UsesCadence || IsCadenceEnabled(settings);
+		lock (queue.Gate)
+		{
+			queue.UsesCadence = useCadence;
+		}
+
 		try
 		{
 			SetRepositoryState(repositoryId, RepositorySyncState.Syncing);
-			await ExecuteSyncCoreAsync(repositoryId, syncStartedAt, cancellationToken);
+			if (useCadence)
+			{
+				var force = request is SyncRequest.Manual or SyncRequest.Resume;
+				if (!await CheckRegisteredAsync(repositoryId, syncStartedAt, cancellationToken))
+				{
+					queue.Cadence = new();
+					ResetTransientFailureState(queue);
+					return;
+				}
+
+				if (!await ExecuteCadenceAsync(repositoryId, queue.Cadence, settings, force, firstChangeAt, syncStartedAt, cancellationToken))
+				{
+					return;
+				}
+			}
+			else
+			{
+				await ExecuteSyncCoreAsync(repositoryId, syncStartedAt, cancellationToken);
+			}
 			await AppendSyncHistorySafeAsync(
 				repositoryId,
 				RepositorySyncHistoryStatus.Succeeded,
@@ -319,7 +407,18 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 					await AppendErrorAsync($"再試行継続中: {message}");
 				}
 
-				ScheduleRetry(repositoryId, queue, retryPlan);
+				if (useCadence && ex.IsPushStep)
+				{
+					queue.Cadence.PushRetryAt = _clock.GetUtcNow() + retryPlan.Delay;
+				}
+				else
+				{
+					if (useCadence && firstChangeAt is not null && queue.Cadence.CommitSince is null)
+					{
+						queue.Cadence.CommitSince = firstChangeAt;
+					}
+					ScheduleRetry(repositoryId, queue, retryPlan);
+				}
 			}
 		}
 		catch (Exception ex)
@@ -342,20 +441,32 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		finally
 		{
 			SyncReservation? reservation = null;
+			var stateChanged = false;
 			lock (queue.Gate)
 			{
 				queue.IsSyncRunning = false;
-				if (queue.RerunRequested)
+				if (_repositoryStateStore.GetStateOrDefault(repositoryId) == RepositorySyncState.Syncing)
 				{
-					TryReserveLocked(repositoryId, queue, queue.RerunImmediately, queue.RerunResumesPaused,
-						CancellationToken.None, out reservation);
-					queue.RerunRequested = false;
-					queue.RerunImmediately = false;
-					queue.RerunResumesPaused = false;
+					_repositoryStateStore.SetState(repositoryId, RepositorySyncState.Idle);
+					stateChanged = true;
+				}
+
+				if (queue.Rerun is { } rerun)
+				{
+					queue.Rerun = null;
+					TryReserveLocked(repositoryId, queue, rerun, CancellationToken.None, out reservation);
 				}
 			}
 
+			if (stateChanged && reservation is null && !_isDisposed)
+			{
+				_trayService.SetState(GetAggregateState());
+			}
 			StartReservation(repositoryId, queue, reservation);
+			if (useCadence && !cancellationToken.IsCancellationRequested)
+			{
+				ScheduleCadenceWake(repositoryId, queue, settings);
+			}
 		}
 	}
 
@@ -375,13 +486,28 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 				shouldPauseRepository: false);
 		}
 
+		var hasTracking = await PrepareIncomingAsync(repositoryPath, startedAt, cancellationToken);
+		await CommitChangesAsync(repositoryPath, startedAt, cancellationToken);
+		if (!hasTracking)
+		{
+			_logger.LogInformation(
+				"Pull tracking is not configured. Continue push with git default destination. repositoryPath={RepositoryPath}",
+				repositoryPath);
+		}
+
+		await EnsureCommandSuccessAsync(repositoryPath, ["push"], startedAt, shouldPauseRepository: false, cancellationToken);
+		_logger.LogInformation("Repository sync completed. repositoryId={RepositoryId}", repositoryId);
+	}
+
+	private async Task<bool> PrepareIncomingAsync(string repositoryPath, DateTimeOffset startedAt, CancellationToken cancellationToken)
+	{
 		await EnsureCommandSuccessAsync(repositoryPath, ["fetch"], startedAt, shouldPauseRepository: false, cancellationToken);
 
 		var tracking = await TryGetTrackingInfoAsync(repositoryPath, startedAt, cancellationToken);
 		if (tracking is not null)
 		{
 			string[] pullCommand = ["pull", "--rebase", "--autostash", tracking.RemoteName, tracking.MergeTarget];
-			var pullResult = await _gitService.RunAsync(repositoryPath, pullCommand, cancellationToken);
+			var pullResult = await RunGitAsync(repositoryPath, pullCommand, cancellationToken);
 			if (!pullResult.IsSuccess)
 			{
 				throw new SyncCommandException(
@@ -399,8 +525,13 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 				repositoryPath);
 		}
 
+		return tracking is not null;
+	}
+
+	private async Task CommitChangesAsync(string repositoryPath, DateTimeOffset startedAt, CancellationToken cancellationToken)
+	{
 		await EnsureCommandSuccessAsync(repositoryPath, ["add", "-A"], startedAt, shouldPauseRepository: false, cancellationToken);
-		var statusResult = await _gitService.RunAsync(repositoryPath, ["status", "--porcelain"], cancellationToken);
+		var statusResult = await RunGitAsync(repositoryPath, ["status", "--porcelain"], cancellationToken);
 		if (!statusResult.IsSuccess)
 		{
 			throw new SyncCommandException(
@@ -414,7 +545,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		if (!string.IsNullOrWhiteSpace(statusResult.StandardOutput))
 		{
 			var timestamp = DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss");
-			var commitResult = await _gitService.RunAsync(
+			var commitResult = await RunGitAsync(
 				repositoryPath,
 				["commit", "-m", $"auto: save sync {timestamp}"],
 				cancellationToken);
@@ -428,16 +559,15 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 					shouldPauseRepository: false);
 			}
 		}
+	}
 
-		if (tracking is null)
-		{
-			_logger.LogInformation(
-				"Pull tracking is not configured. Continue push with git default destination. repositoryPath={RepositoryPath}",
-				repositoryPath);
-		}
-
-		await EnsureCommandSuccessAsync(repositoryPath, ["push"], startedAt, shouldPauseRepository: false, cancellationToken);
-		_logger.LogInformation("Repository sync completed. repositoryId={RepositoryId}", repositoryId);
+	private async Task<GitCommandResult> RunGitAsync(
+		string repositoryPath, IReadOnlyList<string> command, CancellationToken cancellationToken)
+	{
+		cancellationToken.ThrowIfCancellationRequested();
+		var result = await _gitService.RunAsync(repositoryPath, command, cancellationToken);
+		cancellationToken.ThrowIfCancellationRequested();
+		return result;
 	}
 
 	private async Task EnsureCommandSuccessAsync(
@@ -447,7 +577,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		bool shouldPauseRepository,
 		CancellationToken cancellationToken)
 	{
-		var result = await _gitService.RunAsync(repositoryPath, command, cancellationToken);
+		var result = await RunGitAsync(repositoryPath, command, cancellationToken);
 		if (result.IsSuccess)
 		{
 			return;
@@ -528,7 +658,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		DateTimeOffset startedAt,
 		CancellationToken cancellationToken)
 	{
-		var branchResult = await _gitService.RunAsync(repositoryPath, ["branch", "--show-current"], cancellationToken);
+		var branchResult = await RunGitAsync(repositoryPath, ["branch", "--show-current"], cancellationToken);
 		if (!branchResult.IsSuccess)
 		{
 			throw new SyncCommandException(
@@ -551,7 +681,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		}
 
 		var remoteConfigKey = BuildBranchConfigKey(branchName, "remote");
-		var remoteResult = await _gitService.RunAsync(
+		var remoteResult = await RunGitAsync(
 			repositoryPath,
 			["config", "--get", remoteConfigKey],
 			cancellationToken);
@@ -577,7 +707,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		}
 
 		var mergeConfigKey = BuildBranchConfigKey(branchName, "merge");
-		var mergeResult = await _gitService.RunAsync(
+		var mergeResult = await RunGitAsync(
 			repositoryPath,
 			["config", "--get", mergeConfigKey],
 			cancellationToken);
@@ -759,8 +889,7 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 				}
 
 				queue.RetryCts = null;
-				if (!TryReserveLocked(repositoryId, queue, runImmediately: true, resumePaused: false,
-					CancellationToken.None, out reservation))
+				if (!TryReserveLocked(repositoryId, queue, SyncRequest.Retry, CancellationToken.None, out reservation))
 				{
 					return;
 				}
@@ -847,16 +976,17 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		public object Gate { get; } = new();
 
 		public SyncReservation? Pending { get; set; }
+		public SyncReservation? Active { get; set; }
 
 		public CancellationTokenSource? RetryCts { get; set; }
 
 		public bool IsSyncRunning { get; set; }
 
-		public bool RerunRequested { get; set; }
-
-		public bool RerunImmediately { get; set; }
-
-		public bool RerunResumesPaused { get; set; }
+		public SyncRequest? Rerun { get; set; }
+		public DateTimeOffset? FirstChangeAt { get; set; }
+		public bool UsesCadence { get; set; }
+		public CadenceWork Cadence { get; set; } = new();
+		public CancellationTokenSource? CadenceCts { get; set; }
 
 		public int ConsecutiveTransientFailures { get; set; }
 	}
@@ -864,17 +994,17 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 	// All reservations are installed and canceled under the queue lock. Only their worker disposes the source.
 	private sealed class SyncReservation
 	{
-		public SyncReservation(bool runImmediately, TimeSpan debounceDuration,
+		public SyncReservation(SyncRequest request, TimeSpan debounceDuration,
 			RepositorySyncState stateOnCancel, CancellationToken cancellationToken)
 		{
-			RunImmediately = runImmediately;
+			Request = request;
 			DebounceDuration = debounceDuration;
 			StateOnCancel = stateOnCancel;
 			Cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 			Token = Cancellation.Token;
 		}
 
-		public bool RunImmediately { get; }
+		public SyncRequest Request { get; }
 		public TimeSpan DebounceDuration { get; }
 		public RepositorySyncState StateOnCancel { get; }
 		public CancellationTokenSource Cancellation { get; }
@@ -897,13 +1027,16 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 			string command,
 			string reason,
 			DateTimeOffset startedAt,
-			bool shouldPauseRepository)
-			: base($"同期に失敗しました。repo={repositoryPath}, command=git {command}, reason={reason}")
+			bool shouldPauseRepository,
+			bool isPushStep = false,
+			bool isGitStep = true)
+			: base($"同期に失敗しました。repo={repositoryPath}, {(isGitStep ? $"command=git {command}" : $"step={command}")}, reason={reason}")
 		{
 			Command = command;
 			Reason = reason;
 			StartedAt = startedAt;
 			ShouldPauseRepository = shouldPauseRepository;
+			IsPushStep = isPushStep;
 		}
 
 		public string Command { get; }
@@ -913,5 +1046,9 @@ public sealed class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		public DateTimeOffset StartedAt { get; }
 
 		public bool ShouldPauseRepository { get; }
+		public bool IsPushStep { get; }
 	}
+
+	// If requests coalesce, deadlines/retries outrank ordinary detection and explicit operations outrank automation.
+	private enum SyncRequest { Changed, Registered, Due, Retry, Manual, Resume }
 }

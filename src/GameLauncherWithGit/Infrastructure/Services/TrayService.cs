@@ -360,7 +360,9 @@ public sealed class TrayService : ITrayService, IDisposable
 		try
 		{
 			var normalized = Path.GetFullPath(path.Trim());
-			return Directory.Exists(normalized) ? normalized : null;
+			return Directory.Exists(normalized)
+				? SyncOrchestrator.NormalizeRepositoryKey(normalized, GitService.ResolveDirectoryPath)
+				: null;
 		}
 		catch
 		{
