@@ -51,6 +51,9 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .capture-export-mode input[type=radio] { width:1rem; height:1rem; padding:0; margin:.2rem 0 0; flex:0 0 1rem; accent-color:#85b4ff; }
 .capture-history-section { display:grid; gap:.75rem; border-top:1px solid #30415a; padding-top:1rem; }
 .capture-history-section h3 { margin:0; font-size:1rem; }
+.capture-cleanup-heading { position:relative; display:flex; align-items:center; min-block-size:2.25rem; }
+.capture-cleanup-details { position:absolute; inset-inline-end:0; }
+.capture-cleanup-details ::deep .capture-failure-trigger { white-space:nowrap; padding-inline:.35rem; font-size:.8rem; }
 .capture-history-section > button { justify-self:start; }
 .capture-danger { color:#ffc3c3; border-color:#9a5353; }
 .capture-deletion-preview { max-height:20rem; overflow:auto; border:1px solid #41516b; border-radius:5px; }

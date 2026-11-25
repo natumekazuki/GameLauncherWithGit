@@ -25,7 +25,7 @@
         {
             @if (_statusError)
             {
-                <div class="play-stack">
+                <div class="play-panel play-stack" data-play-recording-workspace @key="_displayedConnectionVersion">
                     <div><CaptureFailureDetails Label="記録の取得失敗" Detail="記録対象を読み込めませんでした。再読込してください。" Web="true" /></div>
                     <div><button type="button" class="play-labeled-button" @onclick="RefreshAsync" disabled="@_busy"><CaptureIcon Name="Refresh" />再読込</button></div>
                 </div>
@@ -43,7 +43,7 @@
         }
         else
         {
-            <div class="play-workspace" data-play-recording-workspace aria-busy="@Bool(_busy)" @key="(_state?.Target, _displayedConnectionVersion)">
+            <div class="play-workspace" data-play-recording-workspace aria-busy="@Bool(_busy)" @key="WorkspaceKey">
                 <section class="play-controls play-stack" aria-label="プレイ中の操作">
                     <div class="play-panel play-stack">
                         <div class="play-control-heading">
@@ -52,7 +52,7 @@
                             {
                                 <div class="play-control-result"><CaptureFailureDetails Label="@error.Label" Detail="@error.Detail" Web="true" /></div>
                             }
-                            else if (_screenshotResult is { } shot && _state is { } state)
+                            else if (!_statusError && _screenshotResult is { } shot && _state is { } state)
                             {
                                 var target = ForDisplay(state.Target);
                                 <div class="play-control-result">
@@ -70,33 +70,30 @@
                         <div><button type="button" class="play-labeled-button" @onclick="RefreshAsync" disabled="@_busy"><CaptureIcon Name="Refresh" />再読込</button></div>
                     }
                 </section>
-                @if (!_statusError)
-                {
-                    <div class="play-body">
-                        @if (_rangeDraft is not null) { @RangeEditor }
-                        <nav class="play-nav" aria-label="記録内容">
-                            <button type="button" aria-pressed="@Pressed(Pane.Text)" disabled="@_busy" @onclick="() => SelectPaneAsync(Pane.Text)">本文</button>
-                            <button type="button" class="play-labeled-button" @ref="_rangesTab" aria-pressed="@Pressed(Pane.Ranges)" disabled="@_busy" @onclick="() => SelectPaneAsync(Pane.Ranges)"><CaptureIcon Name="Range" />区間</button>
-                            <button type="button" class="play-labeled-button" aria-pressed="@Pressed(Pane.Paths)" disabled="@_busy" @onclick="() => SelectPaneAsync(Pane.Paths)"><CaptureIcon Name="Flow" />経路</button>
-                            <button type="button" aria-pressed="@Pressed(Pane.Scenes)" disabled="@_busy" @onclick="() => SelectPaneAsync(Pane.Scenes)">場面</button>
-                        </nav>
-                        @switch (_pane)
-                        {
-                            case Pane.Text:
-                                @TextPane
-                                break;
-                            case Pane.Ranges:
-                                @RangesPane
-                                break;
-                            case Pane.Paths:
-                                @PathsPane
-                                break;
-                            case Pane.Scenes:
-                                @ScenesPane
-                                break;
-                        }
-                    </div>
-                }
+                <div class="play-body" hidden="@_statusError" inert="@_statusError">
+                    @if (_rangeDraft is not null) { @RangeEditor }
+                    <nav class="play-nav" aria-label="記録内容">
+                        <button type="button" aria-pressed="@Pressed(Pane.Text)" disabled="@_busy" @onclick="() => SelectPaneAsync(Pane.Text)">本文</button>
+                        <button type="button" class="play-labeled-button" @ref="_rangesTab" aria-pressed="@Pressed(Pane.Ranges)" disabled="@_busy" @onclick="() => SelectPaneAsync(Pane.Ranges)"><CaptureIcon Name="Range" />区間</button>
+                        <button type="button" class="play-labeled-button" aria-pressed="@Pressed(Pane.Paths)" disabled="@_busy" @onclick="() => SelectPaneAsync(Pane.Paths)"><CaptureIcon Name="Flow" />経路</button>
+                        <button type="button" aria-pressed="@Pressed(Pane.Scenes)" disabled="@_busy" @onclick="() => SelectPaneAsync(Pane.Scenes)">場面</button>
+                    </nav>
+                    @switch (_pane)
+                    {
+                        case Pane.Text:
+                            @TextPane
+                            break;
+                        case Pane.Ranges:
+                            @RangesPane
+                            break;
+                        case Pane.Paths:
+                            @PathsPane
+                            break;
+                        case Pane.Scenes:
+                            @ScenesPane
+                            break;
+                    }
+                </div>
             </div>
         }
     </div>
@@ -179,10 +176,11 @@
     private RenderFragment RangeEditor => @<div>
         @if (_rangeDraft is { } draft)
         {
+            var target = ForDisplay(_state!.Target);
             <PlayRecordingRangeEditor @key="draft"
                 AvailableTags="_rangeTags" SuggestedTags="_speakers" Disabled="ControlsDisabled" AutoFocus="draft.AutoFocus"
-                Save="data => SaveRangeAsync(draft, data)"
-                Cancel="() => CloseRangeEditorAsync(draft)" />
+                Save="data => SaveRangeAsync(target, draft, data)"
+                Cancel="() => CloseRangeEditorAsync(target, draft)" />
         }
     </div>;
 
@@ -192,9 +190,9 @@
             <h2 id="play-text-title" @ref="_textHeading" tabindex="-1">本文</h2>
             @if (_textError && _galleryItem is null)
             {
-                <div class="play-text-failure"><CaptureFailureDetails Label="本文の取得失敗" Detail="本文を更新して再試行してください。" Web="true" /></div>
+                <div class="play-text-failure"><CaptureFailureDetails Label="本文取得失敗" Detail="本文を更新して再試行してください。" Web="true" /></div>
             }
-            <div class="play-actions">
+            <div class="play-actions play-text-views">
                 <button type="button" aria-pressed="@Bool(_latest && _textRangeId is null)" disabled="@_busy" @onclick="ShowLatestAsync">直近</button>
                 <button type="button" aria-pressed="@Bool(!_latest && _textRangeId is null)" disabled="@_busy" @onclick="ShowHistoryAsync">過去</button>
             </div>
@@ -218,11 +216,11 @@
             <div class="play-stack play-selection">
                 <p title="@_first?.Text">開始：@(_first?.Text ?? "未選択")</p>
                 <p title="@_last?.Text">終了：@(_last?.Text ?? "未選択")</p>
-                <div class="play-actions">
+                <div class="play-actions play-range-selection-actions">
                     <button type="button" class="play-labeled-button" disabled="@(_busy || !TextRangeValid || _rangeDraft is not null)" @onclick="() => PrepareTextRangeAsync(target)"><CaptureIcon Name="Save" />区間名を入力</button>
                     @if (_first is not null && _last is not null && !TextRangeValid)
                     {
-                        <CaptureFailureDetails Label="区間指定エラー" Detail="開始より後の終了位置を選んでください。" Web="true" />
+                        <div class="play-range-selection-failure"><CaptureFailureDetails Label="端点エラー" Detail="開始より後の終了位置を選んでください。" Web="true" /></div>
                     }
                 </div>
             </div>
@@ -316,32 +314,32 @@
     </div>;
 
     private RenderFragment Gallery => @<div class="play-stack" aria-label="本文の画像" @onkeydown="e => HandleEscape(e, ReturnFromGallery)">
-        <div class="play-toolbar"><h3 @ref="_galleryHeading" tabindex="-1">本文の画像</h3><button type="button" class="play-icon-button" title="本文一覧へ戻る" aria-label="本文一覧へ戻る" disabled="@_busy" @onclick="ReturnFromGallery"><CaptureIcon Name="Back" /></button></div>
+        <div class="play-toolbar play-gallery-toolbar">
+            <h3 @ref="_galleryHeading" tabindex="-1">本文の画像</h3>
+            @if (_galleryError)
+            {
+                <div class="play-gallery-failure"><CaptureFailureDetails Label="@(_galleryImages is null ? "一覧取得失敗" : "画像取得失敗")" Detail="画像を読み込めませんでした。画像を再読込してください。" Web="true" /></div>
+            }
+            <button type="button" class="play-icon-button play-gallery-return" title="本文一覧へ戻る" aria-label="本文一覧へ戻る" disabled="@_busy" @onclick="ReturnFromGallery"><CaptureIcon Name="Back" /></button>
+        </div>
         @if (_galleryText is not null) { <p>@_galleryText</p> }
-        @if (_galleryError)
-        {
-            <div><CaptureFailureDetails Label="画像の取得失敗" Detail="画像を読み込めませんでした。画像を再読込してください。" Web="true" /></div>
-            <div><button type="button" class="play-labeled-button" @onclick="ReloadGalleryAsync" disabled="@_busy"><CaptureIcon Name="Refresh" />画像を再読込</button></div>
-        }
-        else if (_galleryCount == 0)
+        <div class="play-gallery-navigation" aria-label="画像の操作">
+            <button type="button" class="play-icon-button" title="前の画像" aria-label="前の画像" aria-disabled="@Bool(_busy || !CanPageGallery(-1))" @onclick="() => PageGalleryAsync(-1)"><CaptureIcon Name="Previous" /></button>
+            <span role="status">@(_galleryImages is null ? "件数未確認" : _galleryImages.Count == 0 ? "0枚" : $"{_galleryIndex + 1} / {_galleryImages.Count}枚")</span>
+            <button type="button" class="play-icon-button" title="次の画像" aria-label="次の画像" aria-disabled="@Bool(_busy || !CanPageGallery(1))" @onclick="() => PageGalleryAsync(1)"><CaptureIcon Name="Next" /></button>
+            <button type="button" class="play-icon-button" title="画像を再読込" aria-label="画像を再読込" aria-disabled="@Bool(_busy)" @onclick="ReloadGalleryAsync"><CaptureIcon Name="Refresh" /></button>
+        </div>
+        @if (_galleryImages is { Count: 0 })
         {
             <p>この本文に画像はありません。</p>
         }
         else if (_galleryImage is { } image)
         {
             <figure class="play-gallery">
-                <img @key="image" src="@image" alt="本文に対応するゲーム画面" @onerror="() => GalleryDecodeFailed(image)" />
-                <figcaption>@(_galleryIndex + 1) / @_galleryCount</figcaption>
+                <img @key="image" src="@image.Source" alt="本文に対応するゲーム画面" @onerror="() => GalleryDecodeFailed(image)" />
             </figure>
-            @if (_galleryCount > 1)
-            {
-                <div class="play-actions">
-                    <button type="button" class="play-icon-button" title="前の画像" aria-label="前の画像" disabled="@(_busy || _galleryIndex == 0)" @onclick="() => PageGalleryAsync(-1)"><CaptureIcon Name="Previous" /></button>
-                    <button type="button" class="play-icon-button" title="次の画像" aria-label="次の画像" disabled="@(_busy || _galleryIndex + 1 >= _galleryCount)" @onclick="() => PageGalleryAsync(1)"><CaptureIcon Name="Next" /></button>
-                </div>
-            }
         }
-        else
+        else if (!_galleryError)
         {
             <p role="status">画像を読み込み中…</p>
         }

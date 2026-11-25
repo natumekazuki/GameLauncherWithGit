@@ -60,32 +60,33 @@ public partial class PlayRecordingPanel
             await ShowGalleryAsync(item, imageId, showRawText: imageId is not null);
     }
 
-    private Task LoadGalleryImageAsync()
+    private async Task LoadGalleryImageAsync(bool refreshList = true)
     {
-        if (_state is not { } state || _galleryItem is not { } item) return Task.CompletedTask;
+        if (_state is not { } state || _galleryItem is not { } item) return;
+        var target = ForDisplay(state.Target);
         var key = new CaptureEventKey(item.SessionId, item.Sequence);
-        var preferredId = _preferredGalleryImageId;
-        var previousIndex = _galleryIndex;
         _galleryImage = null;
         _galleryError = false;
-        _galleryCount = -1;
-        return ReadAsync("screenshot", async gameId =>
+        if (refreshList)
         {
-            var images = await Operations.GetScreenshotsAsync(gameId, state.Target, key);
-            var index = Math.Clamp(previousIndex, 0, Math.Max(0, images.Count - 1));
-            if (preferredId is not null)
+            await ReadAsync("screenshot list", gameId => Operations.GetScreenshotsAsync(gameId, target.Recording, key),
+                images => _galleryImages = images, () => { _galleryImages = null; _galleryError = true; });
+        }
+        if (_disposed || _unauthorized || !IsDisplayedTargetCurrent(target) || _galleryImages is not { Count: > 0 } images) return;
+        _galleryIndex = Math.Clamp(_galleryIndex, 0, images.Count - 1);
+        if (_preferredGalleryImageId is { } preferredId)
+        {
+            var index = Array.FindIndex(images.ToArray(), image => image.ImageId == preferredId);
+            if (index < 0)
             {
-                index = Array.FindIndex(images.ToArray(), image => image.ImageId == preferredId);
-                if (index < 0) throw new InvalidOperationException("撮影した画像が見つかりません。");
+                _galleryError = true;
+                return;
             }
-            var png = images.Count == 0 ? null : await Operations.ReadScreenshotAsync(gameId, state.Target, key, images[index].ImageId);
-            return (Count: images.Count, Index: index, Png: png);
-        }, data =>
-        {
-            _galleryIndex = data.Index;
-            _galleryCount = data.Count;
-            _galleryImage = data.Png is null ? null : "data:image/png;base64," + Convert.ToBase64String(data.Png);
-        }, () => _galleryError = true);
+            _galleryIndex = index;
+        }
+        var imageId = images[_galleryIndex].ImageId;
+        await ReadAsync("screenshot", gameId => Operations.ReadScreenshotAsync(gameId, target.Recording, key, imageId),
+            png => _galleryImage = new("data:image/png;base64," + Convert.ToBase64String(png)), () => _galleryError = true);
     }
 
     private Task LoadPathsAsync()
@@ -100,15 +101,16 @@ public partial class PlayRecordingPanel
     }
 
     private Task CutPathAsync(DisplayTarget target, CaptureTextItem item) =>
-        CutPathAsync(target, gameId => Operations.CutPathAsync(gameId, target.Recording, item));
+        CutPathAsync(target, gameId => Operations.CutPathAsync(gameId, target.Recording, item), item.Id);
 
     private Task CutOccurrenceAsync(DisplayTarget target, ScenarioFlowOccurrence occurrence) =>
         CutPathAsync(target, gameId => Operations.CutPathAsync(gameId, target.Recording, occurrence.Start));
 
-    private Task CutPathAsync(DisplayTarget target, Func<string, Task> operation) => RunMutationAsync(target, async () =>
+    private Task CutPathAsync(DisplayTarget target, Func<string, Task> operation, long? rowId = null) => RunMutationAsync(target, async () =>
     {
         await UseActionAsync(target, operation);
-        await RefreshStatusAsync(loadPane: true);
+        await RefreshStatusAsync(loadPane: _pane == Pane.Paths, refreshLatestText: false);
+        if (rowId is { } id) FocusAfterRender(FocusTarget.PathRow, id);
     }, "経路変更失敗");
 
     private async Task LoadScenesAsync()

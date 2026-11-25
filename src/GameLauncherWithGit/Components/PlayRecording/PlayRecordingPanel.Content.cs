@@ -9,7 +9,8 @@ public partial class PlayRecordingPanel
     private const int TextPageSize = 24;
     private bool _latest = true, _pickingRange;
     private bool _textError, _rangesError, _galleryError, _pathsError, _scenesError;
-    private int _galleryIndex, _galleryCount;
+    private int _galleryIndex;
+    private IReadOnlyList<PlayRecordingScreenshot>? _galleryImages;
     private readonly List<CapturePosition> _olderPages = [];
     private CapturePosition? _nextBefore;
     private long? _textRangeId;
@@ -20,7 +21,9 @@ public partial class PlayRecordingPanel
     private CaptureTextItem? _editItem, _galleryItem, _first, _last;
     private long _editLabel, _connectionTarget;
     private string _editSpeaker = "";
-    private string? _galleryImage, _preferredGalleryImageId, _galleryText;
+    private sealed class GalleryImage(string source) { public string Source { get; } = source; }
+    private GalleryImage? _galleryImage;
+    private string? _preferredGalleryImageId, _galleryText;
     private ScenarioFlowGraph? _graph;
     private bool _matchingComplete;
     private ScenarioSceneFlowSnapshot? _sceneFlow;
@@ -146,7 +149,7 @@ public partial class PlayRecordingPanel
         _preferredGalleryImageId = null;
         _galleryError = false;
         _galleryIndex = 0;
-        _galleryCount = -1;
+        _galleryImages = null;
     }
 
     private Task OpenGalleryAsync(DisplayTarget target, CaptureTextItem item) => ReadForDisplayedTargetAsync(target, () => ShowGalleryAsync(item));
@@ -168,20 +171,22 @@ public partial class PlayRecordingPanel
         return LoadGalleryImageAsync();
     }
 
-    private Task ReloadGalleryAsync() => RunForegroundAsync(LoadGalleryImageAsync);
+    private Task ReloadGalleryAsync() => RunForegroundAsync(() => LoadGalleryImageAsync());
+
+    private bool CanPageGallery(int direction) =>
+        _galleryImages is { } images && _galleryIndex + direction >= 0 && _galleryIndex + direction < images.Count;
 
     private Task PageGalleryAsync(int direction) => RunForegroundAsync(async () =>
     {
-        var index = _galleryIndex + direction;
-        if (index < 0 || index >= _galleryCount) return;
+        if (!CanPageGallery(direction)) return;
         _preferredGalleryImageId = null;
-        _galleryIndex = index;
-        await LoadGalleryImageAsync();
+        _galleryIndex += direction;
+        await LoadGalleryImageAsync(refreshList: false);
     });
 
-    private void GalleryDecodeFailed(string image)
+    private void GalleryDecodeFailed(GalleryImage image)
     {
-        if (_galleryImage != image) return;
+        if (!ReferenceEquals(_galleryImage, image)) return;
         _galleryImage = null;
         _galleryError = true;
     }

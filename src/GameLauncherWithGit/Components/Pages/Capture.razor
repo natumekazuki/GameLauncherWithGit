@@ -50,7 +50,7 @@
     @if (_loading) { <p role="status">読込中…</p> }
     else if (_initialError is not null)
     {
-        <button type="button" class="secondary-button capture-text-button" @onclick="LoadInitialAsync"><CaptureIcon Name="Refresh" />シナリオを再読込</button>
+        <button type="button" class="secondary-button capture-text-button" @ref="_initialRetry" @onclick="RetryInitialAsync"><CaptureIcon Name="Refresh" />シナリオを再読込</button>
     }
     else
     {
@@ -127,7 +127,7 @@
                     }
                     else
                     {
-                        <button class="secondary-button capture-icon-button" title="前の200件" aria-label="前の200件" @onclick="PreviousAsync" disabled="@(_busy || _itemsError is not null || _offset == 0)"><CaptureIcon Name="Previous" /></button>
+                        <button class="secondary-button capture-icon-button" title="前の200件" aria-label="前の200件" @onclick="PreviousAsync" disabled="@(_busy || _offset == 0)"><CaptureIcon Name="Previous" /></button>
                         <span class="capture-page-count">@(_itemsError is not null ? "—" : _items.Count == 0 ? "0" : $"{_offset + 1}–{_offset + _items.Count}")</span>
                         <button class="secondary-button capture-icon-button" title="次の200件" aria-label="次の200件" @onclick="NextAsync" disabled="@(_busy || !_hasMore)"><CaptureIcon Name="Next" /></button>
                         <button class="secondary-button capture-icon-button" title="更新" aria-label="更新" @onclick="RefreshAsync" disabled="@_busy"><CaptureIcon Name="Refresh" /></button>
@@ -155,11 +155,11 @@
                             {
                                 <label><input type="checkbox" aria-label="表示分を選択" checked="@(_items.Count > 0 && _selected.Count == _items.Count)" @onchange="SelectPage" disabled="@(_busy || _items.Count == 0 || !CanEdit)" />表示分を選択</label>
                                 <span role="status">@_selected.Count 件選択</span>
-                                <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="OpenBulk" disabled="@(_busy || _selected.Count == 0)"><CaptureIcon Name="BulkEdit" />一括修正</button>
+                                <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="OpenBulk" disabled="@(_busy || !CanOperateOnSelection)"><CaptureIcon Name="BulkEdit" />一括修正</button>
                                 <button type="button" class="secondary-button capture-text-button" @onclick="ClearSelection" disabled="@(_busy || _selected.Count == 0)"><CaptureIcon Name="ClearSelection" />選択解除</button>
                                 @if (!_live)
                                 {
-                                    <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="OpenSelectedDeletionAsync" disabled="@(_busy || _selected.Count == 0)"><CaptureIcon Name="Trash" />選択した本文の原文を削除</button>
+                                    <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="OpenSelectedDeletionAsync" disabled="@(_busy || !CanOperateOnSelection)"><CaptureIcon Name="Trash" />選択した本文の原文を削除</button>
                                 }
                             }
                             <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="OpenSceneEditor" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Edit" />場面フローを編集</button>
@@ -169,7 +169,7 @@
                             <button type="button" class="secondary-button capture-text-button" aria-label="条件の全件をZIP出力" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="() => OpenExportAsync(true)" disabled="@(_busy || _profileId == 0)"><CaptureIcon Name="Archive" />ZIP出力</button>
                             @if (_screenshotCountsError is not null)
                             {
-                                <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="RefreshAsync" disabled="@_busy"><CaptureIcon Name="Refresh" />画像件数を再読込</button>
+                                <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="RetryScreenshotCountsAsync" disabled="@_busy"><CaptureIcon Name="Refresh" />画像件数を再読込</button>
                             }
                             @if (_screenshotCleanup is { RemainingImageCount: > 0 })
                             {
@@ -201,7 +201,7 @@
                 {
                     <div class="capture-feed-error">
                         <CaptureFailureDetails Label="本文の取得失敗" Detail="@_itemsError" />
-                        <button class="secondary-button capture-text-button" @onclick="RefreshAsync" disabled="@_busy"><CaptureIcon Name="Refresh" />本文を再読込</button>
+                        <button class="secondary-button capture-text-button" @onclick="RetryItemsAsync" disabled="@_busy"><CaptureIcon Name="Refresh" />本文を再読込</button>
                     </div>
                 }
                 else if (_items.Count == 0) { <p class="capture-empty">@EmptyMessage</p> }
@@ -269,9 +269,9 @@
 {
     <div class="modal-backdrop"><section id="capture-editor" class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-screenshot-settings-title">
         <header class="capture-dialog-header"><h2 id="capture-screenshot-settings-title">撮影設定</h2>
-            @if (Screenshots.Snapshot.LastFailure is { } failure)
+            @if (Screenshots.Snapshot is { LastFailure: { } failure } screenshotStatus)
             {
-                <CaptureFailureDetails Label="撮影失敗" Detail="@ScreenshotFailureDetails(failure)" />
+                <CaptureFailureDetails Label="撮影失敗" Detail="@ScreenshotFailureDetails(failure, screenshotStatus)" />
             }
             <button class="secondary-button capture-icon-button" title="閉じる" aria-label="閉じる" @onclick="CloseEditors"><CaptureIcon Name="Close" /></button>
         </header>
@@ -332,13 +332,15 @@
                     <button class="secondary-button capture-text-button capture-danger" @onclick="PrepareClearHistoryAsync" disabled="@(_busy || (_historyCounts.Events == 0 && _historyCounts.Ranges == 0))"><CaptureIcon Name="Trash" />全履歴を消去…</button>
                 </section>
                 <section class="capture-history-section">
-                    <h3>不要画像の後片付け</h3>
+                    <div class="capture-cleanup-heading">
+                        <h3>不要画像の後片付け</h3>
+                        @if (_screenshotCleanup is { RemainingImageCount: > 0 } pending)
+                        {
+                            <div class="capture-cleanup-details"><CaptureFailureDetails Label="残件あり" Detail="@CleanupDetails(pending)" /></div>
+                        }
+                    </div>
                     <p class="capture-muted">すべてのゲームの未参照画像だけを整理します。本文や参照中の画像は削除しません。</p>
                     <button class="secondary-button capture-text-button" @onclick="RetryScreenshotCleanupAsync" disabled="@_busy"><CaptureIcon Name="Refresh" />不要画像の後片付けを再試行</button>
-                    @if (_screenshotCleanup is { RemainingImageCount: > 0 } pending)
-                    {
-                        <CaptureFailureDetails Label="後片付け未完了" Detail="@CleanupDetails(pending)" />
-                    }
                 </section>
             }
             else if (_historyDialog == HistoryDialog.DeleteSelected)
@@ -660,15 +662,15 @@
         if (!EditorOpen && _error is { } error)
             yield return (_errorLabel ?? (_flowOpen ? "経路の操作失敗" : _pickingRange ? "区間指定エラー" : "シナリオの操作失敗"), error);
         if (_live && CaptureStatusLabel != _snapshot.Status) yield return (CaptureStatusLabel, _snapshot.Status);
-        if (_live && Screenshots.Snapshot.LastFailure is { } shot)
-            yield return ("撮影失敗", ScreenshotFailureDetails(shot));
+        if (_live && Screenshots.Snapshot is { LastFailure: { } shot } screenshotStatus)
+            yield return ("撮影失敗", ScreenshotFailureDetails(shot, screenshotStatus));
         if (_screenshotCountsError is { } counts) yield return ("画像件数の取得失敗", counts);
         if (_screenshotCleanup is { RemainingImageCount: > 0 } cleanup) yield return ("後片付け未完了", CleanupDetails(cleanup));
     }
     private static string CleanupDetails(ScreenshotCleanupResult result) =>
         string.Join("\n", new[] { $"後片付けが残っている画像：{result.RemainingImageCount} 件" }.Concat(result.FailureReasons));
-    private static string ScreenshotFailureDetails(ScreenshotFailure failure) =>
-        $"{failure.OccurredAt.ToLocalTime():M/d HH:mm:ss}\n{failure.Message}";
+    private static string ScreenshotFailureDetails(ScreenshotFailure failure, ScreenshotStatus current) =>
+        $"直近の失敗（{failure.OccurredAt.ToLocalTime():M/d HH:mm:ss}）\n{failure.Message}\n\n現在の撮影状態：{current.Status}\n撮影キー：{(current.Registered ? "登録済み" : "未登録")}";
     private bool _windowsOnly = true;
     private int _settingsTab, _windowCountdown;
     private CancellationTokenSource? _windowPick;
@@ -677,7 +679,8 @@
     private readonly HashSet<string> _updatedSources = [];
     private readonly HashSet<long> _selected = [];
     private readonly CancellationTokenSource _stop = new();
-    private ElementReference _feed, _rawInput;
+    private ElementReference _feed, _rawInput, _initialRetry;
+    private bool _focusAfterInitialRetry, _focusFeed;
     private IJSObjectReference? _module;
     private DotNetObjectReference<Capture>? _self;
     private CaptureTextItem? _edit, _partition;
@@ -748,17 +751,38 @@
         catch (Exception ex) { _initialError = $"シナリオ画面を読み込めませんでした：{ex.Message}"; }
         finally { _loading = false; }
     }
+    private async Task RetryInitialAsync()
+    {
+        if (_loading) return;
+        await LoadInitialAsync();
+        _focusAfterInitialRetry = true;
+    }
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (_loading) return;
+        if (_initialError is not null)
+        {
+            if (_focusAfterInitialRetry && _initialRetry.Id is not null)
+            {
+                _focusAfterInitialRetry = false;
+                await _initialRetry.FocusAsync(preventScroll: true);
+            }
+            return;
+        }
         if (_module is null)
         {
+            if (_feed.Id is null) return;
             _module = await JS.InvokeAsync<IJSObjectReference>("import", "./capture-view.js");
             _self = DotNetObjectReference.Create(this);
             await _module.InvokeVoidAsync("observeFeed", _feed, _self);
             _scrollToEnd = _live;
         }
         if (_scrollToEnd is { } end) { _scrollToEnd = null; await _module.InvokeVoidAsync("scrollFeed", _feed, end); }
+        if (_focusAfterInitialRetry || _focusFeed)
+        {
+            _focusAfterInitialRetry = _focusFeed = false;
+            await _feed.FocusAsync(preventScroll: true);
+        }
         if (_focusEditor) { _focusEditor = false; await _module.InvokeVoidAsync("focusEditor", _self); }
         if (_focusSettingsTab) { _focusSettingsTab = false; if (_settingsOpen) await _module.InvokeVoidAsync("focusSettingsTab"); }
         if (_focusHistoryContent) { _focusHistoryContent = false; await _module.InvokeVoidAsync("focusEditorContent"); }
@@ -870,6 +894,7 @@
         }
         _hasMore = items.Count > 200;
         _items = items.Take(200).ToArray();
+        if (_selected.Count > 0) _selected.IntersectWith(_items.Select(x => x.Id));
         await LoadScreenshotCountsAsync();
     }
     private int? ScreenshotCount(CaptureTextItem item) => _screenshotCounts is null ? null
@@ -930,7 +955,9 @@
     });
     private Task OpenSelectedDeletionAsync() => RunAsync(async () =>
     {
+        if (!CanOperateOnSelection) return;
         _deletionTargets = await Store.GetCaptureDeletionTargetsAsync(_profileId, _selected.ToArray());
+        if (_deletionTargets.Count == 0) return;
         _historyDialog = HistoryDialog.DeleteSelected; _focusEditor = true;
     });
     private Task StopHistoryCaptureAsync(PlayRecordingTarget expected) => RunAsync(async () =>
@@ -970,9 +997,21 @@
     private Task ChangeProfileAsync(ChangeEventArgs e) => RunAsync(async () => { _profileId = long.Parse(e.Value!.ToString()!); await LoadProfileAsync(); _scrollToEnd = false; });
     private Task ChangeRangeAsync() => RunAsync(async () => { _offset = 0; _selected.Clear(); await LoadItemsAsync(); _scrollToEnd = FollowingView && _following; });
     private Task FilterAsync() => RunAsync(async () => { _offset = 0; _selected.Clear(); await LoadItemsAsync(); _scrollToEnd = FollowingView && _following; });
-    private Task PreviousAsync() => RunAsync(async () => { _offset = Math.Max(0, _offset - 200); _selected.Clear(); await LoadItemsAsync(); _scrollToEnd = false; });
+    private Task PreviousAsync() => RunAsync(async () =>
+    {
+        _offset = Math.Max(0, _offset - 200); _selected.Clear();
+        await LoadItemsAsync();
+        _scrollToEnd = false;
+        _focusFeed = _itemsError is null;
+    });
     private Task NextAsync() => RunAsync(async () => { _offset += 200; _selected.Clear(); await LoadItemsAsync(); _scrollToEnd = false; });
     private Task RefreshAsync() => RunAsync(() => _flowOpen ? LoadFlowAsync() : LoadItemsAsync());
+    private Task RetryItemsAsync() => RunAsync(async () =>
+    {
+        await LoadItemsAsync();
+        _focusFeed = _itemsError is null;
+    });
+    private Task RetryScreenshotCountsAsync() => RunAsync(LoadScreenshotCountsAsync);
     private void OpenSceneEditor() { _sceneEditorOpen = true; _following = false; _focusEditor = true; }
     private async Task LoadTagChoicesAsync()
     {
@@ -1119,7 +1158,12 @@
         await LoadItemsAsync();
     }, "区間を保存しました。");
     private void ClearSelection() => _selected.Clear();
-    private void OpenBulk() { _error = null; _bulkOpen = true; _focusEditor = true; }
+    private bool CanOperateOnSelection => _itemsError is null && _selected.Count != 0 && CanEdit;
+    private void OpenBulk()
+    {
+        if (_busy || !CanOperateOnSelection) return;
+        _error = null; _bulkOpen = true; _focusEditor = true;
+    }
     private void OpenSettings()
     {
         _error = null;
@@ -1130,8 +1174,21 @@
     }
     private void SelectItem(long id, bool selected) { if (selected) _selected.Add(id); else _selected.Remove(id); _following = false; }
     private void SelectPage(ChangeEventArgs e) { _selected.Clear(); if (e.Value is true) _selected.UnionWith(_items.Select(x => x.Id)); _following = false; }
-    private Task BulkLabelAsync() { var groups = _items.Where(x => _selected.Contains(x.Id)).GroupBy(x => x.SessionId).ToArray(); var count = _selected.Count; return RunAsync(async () => { foreach (var group in groups) await Store.SetCaptureLabelsAsync(group.Key, group.Select(x => x.Id).ToArray(), _bulkLabel == 0 ? null : _bulkLabel); _selected.Clear(); CloseEditors(); await LoadItemsAsync(); }, $"{count}件の分類を変更しました。"); }
-    private Task ReapplyAsync() { var groups = _items.Where(x => _selected.Contains(x.Id)).GroupBy(x => x.SessionId).ToArray(); var count = _selected.Count; return RunAsync(async () => { if (_profile is null) return; foreach (var group in groups) await Store.ReapplyCaptureRulesAsync(group.Key, group.Select(x => x.Id).ToArray(), _profile.Rules); _selected.Clear(); CloseEditors(); await LoadItemsAsync(); }, $"選択した{count}件へルールを再適用しました。"); }
+    private Task BulkLabelAsync() => ApplyBulkAsync(
+        (sessionId, ids) => Store.SetCaptureLabelsAsync(sessionId, ids, _bulkLabel == 0 ? null : _bulkLabel),
+        count => $"{count}件の分類を変更しました。");
+    private Task ReapplyAsync() => _profile is { } profile
+        ? ApplyBulkAsync((sessionId, ids) => Store.ReapplyCaptureRulesAsync(sessionId, ids, profile.Rules), count => $"選択した{count}件へルールを再適用しました。")
+        : Task.CompletedTask;
+    private Task ApplyBulkAsync(Func<long, long[], Task> apply, Func<int, string> success) => RunAsync(async () =>
+    {
+        if (!_bulkOpen || !CanOperateOnSelection) return;
+        var targets = _items.Where(x => _selected.Contains(x.Id)).ToArray();
+        if (targets.Length == 0) return;
+        foreach (var group in targets.GroupBy(x => x.SessionId)) await apply(group.Key, group.Select(x => x.Id).ToArray());
+        _selected.Clear(); CloseEditors(); await LoadItemsAsync();
+        _message = success(targets.Length);
+    });
     private void FindProcesses() => _processes = CaptureService.GetProcesses();
     private async Task PickWindowAsync()
     {

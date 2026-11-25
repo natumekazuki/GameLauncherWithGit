@@ -14,7 +14,7 @@ public partial class PlayRecordingPanel
     [Inject] private NavigationManager Navigation { get; set; } = default!;
 
     private enum Pane { Text, Ranges, Paths, Scenes }
-    private enum FocusTarget { FinishImpact, FinishButton, Pause, Resume, Screenshot, RangeStatus, RangeStart, RangePicker, Ranges, Classification, EditButton, Gallery, GalleryButton, Text }
+    private enum FocusTarget { FinishImpact, FinishButton, Pause, Resume, Screenshot, RangeStatus, RangeStart, RangePicker, Ranges, Classification, EditButton, PathRow, Gallery, GalleryButton, Text }
     private (FocusTarget Target, long ItemId)? _nextFocus;
     private ElementReference _finishImpact, _finishButton, _pauseButton, _resumeButton, _rangeStatus,
         _startRangeButton, _pickRangeButton, _rangesTab, _editClassification, _galleryHeading, _textHeading, _screenshotButton;
@@ -64,7 +64,7 @@ public partial class PlayRecordingPanel
             FocusTarget.RangePicker when textVisible && !_textError && _textItems is { Count: > 0 } && _textRangeId is null => _pickRangeButton,
             FocusTarget.Ranges when _pane == Pane.Ranges => _rangesTab,
             FocusTarget.Classification when rowVisible && _editItem?.Id == request.ItemId => _editClassification,
-            FocusTarget.EditButton when rowVisible && _textRangeId is null && _editItem?.Id != request.ItemId && row is not null => row.Open,
+            FocusTarget.EditButton or FocusTarget.PathRow when rowVisible && _textRangeId is null && _editItem?.Id != request.ItemId && row is not null => row.Open,
             FocusTarget.Gallery when _pane == Pane.Text && _galleryItem?.Id == request.ItemId => _galleryHeading,
             FocusTarget.GalleryButton when rowVisible && _editItem?.Id != request.ItemId && row is not null => row.Open,
             FocusTarget.EditButton or FocusTarget.GalleryButton or FocusTarget.Text when textVisible => _textHeading,
@@ -72,7 +72,7 @@ public partial class PlayRecordingPanel
         };
         if (destination.Id is not null)
         {
-            try { await destination.FocusAsync(preventScroll: request.Target == FocusTarget.Screenshot); }
+            try { await destination.FocusAsync(preventScroll: request.Target is FocusTarget.Screenshot or FocusTarget.PathRow); }
             catch (JSDisconnectedException) { }
         }
     }
