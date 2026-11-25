@@ -49,30 +49,62 @@ public sealed class GitService : IGitService
 		RunInternalAsync(repositoryPath, arguments, cancellationToken);
 
 	Task<GitCommandResult> IGitService.ReadCadencePushUrlsAsync(string repositoryPath, string remote, CancellationToken token) =>
-		RunInternalAsync(repositoryPath, ["remote", "get-url", "--push", "--all", "--", remote], token,
+		ReadCadenceUrlsAsync(repositoryPath, remote, push: true, token);
+
+	Task<GitCommandResult> IGitService.ReadCadenceFetchUrlsAsync(string repositoryPath, string remote, CancellationToken token) =>
+		ReadCadenceUrlsAsync(repositoryPath, remote, push: false, token);
+
+	private Task<GitCommandResult> ReadCadenceUrlsAsync(string repositoryPath, string remote, bool push, CancellationToken token) =>
+		RunInternalAsync(repositoryPath, push ? ["remote", "get-url", "--push", "--all", "--", remote]
+			: ["remote", "get-url", "--all", "--", remote], token,
 			protectedResult: result => result.IsSuccess ? new(0, result.StandardOutput, "") : CadenceEndpointFailure(result),
 			safeArguments: ["remote get-url (cadence)"]);
 
 	Task<GitCommandResult> IGitService.RunCadenceEndpointAsync(string repositoryPath, string resolvedUrl,
 		string destinationRef, string? commit, CancellationToken token)
 	{
-		if (string.IsNullOrWhiteSpace(resolvedUrl) || resolvedUrl.IndexOfAny(['\r', '\n', '\t', '\0']) >= 0
-			|| !IsSupportedCadenceTransport(resolvedUrl)
-			|| !destinationRef.StartsWith("refs/heads/", StringComparison.Ordinal)
-			|| destinationRef.IndexOfAny([':', '*', '\r', '\n', '\0']) >= 0
+		if (!IsCadenceRef(destinationRef, "refs/heads/")
 			|| (commit is not null && !IsObjectName(commit)))
 			return Task.FromResult(CadenceEndpointFailure(new(-1, "", "")));
 
-		var alias = $"cadence-{Guid.NewGuid():N}";
-		var marker = $"{alias}.invalid";
-		string[] command = commit is null
+		return RunAtCadenceEndpointAsync(repositoryPath, resolvedUrl, alias => commit is null
 			? ["-c", "http.followRedirects=false", "ls-remote", "--refs", "--", alias, destinationRef]
 			: ["-c", "http.followRedirects=false", "push", "--porcelain", "--no-force", "--no-mirror", "--no-tags",
-				"--no-follow-tags", "--recurse-submodules=no", "--", alias, $"{commit}:{destinationRef}"];
-		return RunInternalAsync(repositoryPath, command, token,
+				"--no-follow-tags", "--recurse-submodules=no", "--", alias, $"{commit}:{destinationRef}"],
+			result => ReadCadenceEndpointResult(result, destinationRef, commit),
+			commit is null ? "ls-remote (cadence)" : "push (cadence)", token);
+	}
+
+	Task<GitCommandResult> IGitService.FetchCadenceTrackingAsync(string repositoryPath, string resolvedUrl,
+		string remoteRef, string trackingRef, CancellationToken token)
+	{
+		if (!IsCadenceRef(remoteRef, "refs/heads/") || !IsCadenceRef(trackingRef, "refs/remotes/"))
+			return Task.FromResult(CadenceEndpointFailure(new(-1, "", "")));
+
+		return RunAtCadenceEndpointAsync(repositoryPath, resolvedUrl, alias =>
+			["-c", "http.followRedirects=false", "-c", "fetch.writeCommitGraph=false", "fetch", "--no-tags", "--no-prune",
+				"--no-prune-tags", "--no-recurse-submodules", "--no-write-fetch-head", "--no-auto-maintenance",
+				"--refmap=", "--", alias, $"{remoteRef}:{trackingRef}"],
+			result => result.IsSuccess ? new(0, "", "") : CadenceEndpointFailure(result),
+			"fetch tracking (cadence)", token, requirePhysicalRoot: true);
+	}
+
+	private static bool IsCadenceRef(string name, string prefix) =>
+		name.StartsWith(prefix, StringComparison.Ordinal) && name.Length > prefix.Length
+		&& name.IndexOfAny([':', '*', '?', '[', '\r', '\n', '\t', '\0']) < 0;
+
+	private Task<GitCommandResult> RunAtCadenceEndpointAsync(string repositoryPath, string resolvedUrl,
+		Func<string, string[]> buildCommand, Func<GitCommandResult, GitCommandResult> protectedResult,
+		string safeCommand, CancellationToken token, bool requirePhysicalRoot = false)
+	{
+		if (string.IsNullOrWhiteSpace(resolvedUrl) || resolvedUrl.IndexOfAny(['\r', '\n', '\t', '\0']) >= 0
+			|| !IsSupportedCadenceTransport(resolvedUrl))
+			return Task.FromResult(CadenceEndpointFailure(new(-1, "", "")));
+		var alias = $"cadence-{Guid.NewGuid():N}";
+		var marker = $"{alias}.invalid";
+		return RunInternalAsync(repositoryPath, buildCommand(alias), token,
 			configure: start => ConfigureCadenceEndpoint(start, alias, marker, resolvedUrl),
-			protectedResult: result => ReadCadenceEndpointResult(result, destinationRef, commit),
-			safeArguments: [commit is null ? "ls-remote (cadence)" : "push (cadence)"]);
+			protectedResult: protectedResult, safeArguments: [safeCommand], requirePhysicalRoot: requirePhysicalRoot);
 	}
 
 	private static bool IsSupportedCadenceTransport(string url)
@@ -131,7 +163,7 @@ public sealed class GitService : IGitService
 	private async Task<GitCommandResult> RunInternalAsync(
 		string repositoryPath, IReadOnlyList<string> arguments, CancellationToken cancellationToken,
 		Action<ProcessStartInfo>? configure = null, Func<GitCommandResult, GitCommandResult>? protectedResult = null,
-		IReadOnlyList<string>? safeArguments = null)
+		IReadOnlyList<string>? safeArguments = null, bool requirePhysicalRoot = false)
 	{
 		var loggedArguments = safeArguments ?? arguments;
 		string root;
@@ -139,6 +171,9 @@ public sealed class GitService : IGitService
 		{
 			cancellationToken.ThrowIfCancellationRequested();
 			root = ResolveDirectoryPath(repositoryPath);
+			if (requirePhysicalRoot && !string.Equals(repositoryPath, root,
+				OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+				return CadenceEndpointFailure(new(-1, "", ""));
 			if ((File.GetAttributes(root) & FileAttributes.Directory) == 0)
 			{
 				throw new DirectoryNotFoundException($"ディレクトリではありません: {root}");

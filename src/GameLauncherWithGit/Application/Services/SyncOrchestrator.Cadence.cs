@@ -3,6 +3,7 @@ using GameLauncherWithGit.Application.Models;
 using GameLauncherWithGit.Domain.Models;
 using GameLauncherWithGit.Infrastructure.Abstractions;
 using GameLauncherWithGit.Infrastructure.Models;
+using Microsoft.Extensions.Logging;
 
 namespace GameLauncherWithGit.Application.Services;
 
@@ -160,6 +161,8 @@ public sealed partial class SyncOrchestrator
 		UpdatePushWork(push, outgoing, now);
 		if (push is not null && (IsPushDue(push, settings, force, now) || force))
 		{
+			var tracking = IsCadenceEnabled(settings) && outgoing.Identity is { BlockedReason: null } target
+				? await ReadTrackingPlanAsync(repositoryId, target, startedAt, token) : null;
 			push.Since ??= now;
 			await PushCurrentBranchAsync(repositoryId, outgoing, startedAt, token);
 			push.EndpointKnown = true;
@@ -168,6 +171,10 @@ public sealed partial class SyncOrchestrator
 			push.Since = null;
 			push.RetryAt = null;
 			push.Failures = 0;
+			if (tracking is not null)
+			{
+				await RefreshTrackingAfterPushAsync(repositoryId, outgoing.Identity!, tracking, startedAt, token);
+			}
 		}
 
 		return !work.HasPending && outgoing.Identity is not null && mayAcquireWorktree();
@@ -388,6 +395,83 @@ public sealed partial class SyncOrchestrator
 	{
 		var normalized = output.Replace("\r\n", "\n", StringComparison.Ordinal);
 		return (normalized.EndsWith('\n') ? normalized[..^1] : normalized).Split('\n');
+	}
+
+	private sealed record TrackingPlan(string LocalRef, string FetchRefspec);
+
+	private async Task<TrackingPlan?> ReadTrackingPlanAsync(string repositoryId, PushIdentity target,
+		DateTimeOffset startedAt, CancellationToken token)
+	{
+		try
+		{
+			var remote = target.Remote!;
+			var fetchUrls = await _gitService.ReadCadenceFetchUrlsAsync(repositoryId, remote, token);
+			token.ThrowIfCancellationRequested();
+			if (!fetchUrls.IsSuccess || ReadLines(fetchUrls.StandardOutput) is not [var url] || url != target.PushUrl)
+				return null;
+
+			var branch = target.SourceRef["refs/heads/".Length..];
+			if (await ReadConfigAsync(repositoryId, $"branch.{branch}.remote", startedAt, token) is not [var upstreamRemote]
+				|| upstreamRemote != remote
+				|| await ReadConfigAsync(repositoryId, $"branch.{branch}.merge", startedAt, token) is not [var upstreamRef]
+				|| upstreamRef != target.DestinationRef
+				|| await ReadConfigAsync(repositoryId, $"remote.{remote}.fetch", startedAt, token) is not [var fetchRefspec]
+				|| GetTrackingRef(fetchRefspec, upstreamRef) is not { } trackingRef)
+				return null;
+
+			var validated = await RunGitAsync(repositoryId, ["check-ref-format", trackingRef], token);
+			if (!validated.IsSuccess) return null;
+			var symbolic = await RunGitAsync(repositoryId, ["symbolic-ref", "--quiet", "--no-recurse", trackingRef], token);
+			if (!IsMissingGitConfigValue(symbolic)) return null; // Do not write through a symbolic tracking ref.
+
+			var selected = await RunGitAsync(repositoryId, ["symbolic-ref", "--quiet", "HEAD"], token);
+			return selected.IsSuccess && FirstNonEmptyLine(selected.StandardOutput) == target.SourceRef
+				? new(trackingRef, fetchRefspec) : null;
+		}
+		catch (Exception) when (!token.IsCancellationRequested)
+		{
+			// Unknown tracking is not a reason to delay or block the send itself.
+			return null;
+		}
+	}
+
+	private static string? GetTrackingRef(string fetchRefspec, string remoteRef)
+	{
+		var spec = fetchRefspec.StartsWith('+') ? fetchRefspec[1..] : fetchRefspec;
+		if (spec.Split(':') is not [var from, var to] || !to.StartsWith("refs/remotes/", StringComparison.Ordinal))
+			return null;
+		if (from == remoteRef && !to.Contains('*')) return to;
+		if (from.EndsWith("/*", StringComparison.Ordinal) && to.EndsWith("/*", StringComparison.Ordinal)
+			&& !from[..^1].Contains('*') && !to[..^1].Contains('*')
+			&& remoteRef.StartsWith(from[..^1], StringComparison.Ordinal))
+			return to[..^1] + remoteRef[(from.Length - 1)..];
+		return null;
+	}
+
+	private async Task RefreshTrackingAfterPushAsync(string repositoryId, PushIdentity sentTarget,
+		TrackingPlan beforePush, DateTimeOffset startedAt, CancellationToken token)
+	{
+		// A confirmed send is already complete. Refresh only the same configured mapping;
+		// a skipped/failed fetch never enters the queue's failure or retry path.
+		try
+		{
+			if (await ResolvePushIdentityAsync(repositoryId, sentTarget.SourceRef, startedAt, token) != sentTarget
+				|| await ReadTrackingPlanAsync(repositoryId, sentTarget, startedAt, token) != beforePush)
+				return;
+
+			var refreshed = await _gitService.FetchCadenceTrackingAsync(repositoryId, sentTarget.PushUrl!,
+				sentTarget.DestinationRef!, beforePush.LocalRef, token);
+			if (refreshed.IsSuccess || token.IsCancellationRequested) return;
+		}
+		catch (OperationCanceledException) when (token.IsCancellationRequested)
+		{
+			return;
+		}
+		catch (Exception)
+		{
+			// Never include an exception or raw transport output in the post-push warning.
+		}
+		_logger.LogWarning("Git confirmed the push but could not refresh its tracking ref. repositoryId={RepositoryId}", repositoryId);
 	}
 
 	private async Task PushCurrentBranchAsync(string repositoryId, OutgoingCommits outgoing,
