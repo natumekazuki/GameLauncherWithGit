@@ -14,6 +14,8 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Services/GitService.cs" Link="GitService.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Services/RepositoryWatcherService.cs" Link="RepositoryWatcherService.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Services/TraySyncTargets.cs" Link="TraySyncTargets.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Models/GitCommandResult.cs" Link="GitCommandResult.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/IGitService.cs" Link="IGitService.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/ILogAccessService.cs" Link="ILogAccessService.cs" />

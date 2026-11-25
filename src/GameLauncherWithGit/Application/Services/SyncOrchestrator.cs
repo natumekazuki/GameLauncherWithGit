@@ -125,29 +125,36 @@ public sealed partial class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		RepositorySyncQueue queue,
 		SyncRequest request,
 		CancellationToken cancellationToken,
-		out SyncReservation? reservation)
+		out SyncReservation? reservation,
+		bool replay = false)
 	{
 		reservation = null;
 		var currentState = queue.Pending is { Token.IsCancellationRequested: true } canceled
 			? canceled.StateOnCancel
 			: _repositoryStateStore.GetStateOrDefault(repositoryId);
 		var isPaused = currentState == RepositorySyncState.ErrorPaused;
+		// Only an explicit request made while stopped can release that stop.
+		if (request == SyncRequest.Resume && !isPaused)
+		{
+			request = SyncRequest.Manual;
+		}
 		if (_isDisposed || cancellationToken.IsCancellationRequested || (isPaused && request != SyncRequest.Resume))
 		{
 			return false;
 		}
 
 		var settings = _appSettingsService.Get();
-		var useCadence = queue.UsesCadence || IsCadenceEnabled(settings);
+		var useCadence = queue.HasCadenceWork || queue.RunningCadence || IsCadenceEnabled(settings);
 		if (request == SyncRequest.Registered && !useCadence)
 		{
 			return false;
 		}
 
 		var now = _clock.GetUtcNow();
-		if (request == SyncRequest.Changed && useCadence)
+		if (request == SyncRequest.Changed && useCadence && !replay)
 		{
 			queue.FirstChangeAt ??= now;
+			queue.ChangeReadyAt = now + GetDebounceDuration();
 		}
 
 		var forced = request is SyncRequest.Manual or SyncRequest.Resume;
@@ -177,10 +184,15 @@ public sealed partial class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		}
 
 		var wait = request == SyncRequest.Changed ? GetDebounceDuration() : TimeSpan.Zero;
-		if (request == SyncRequest.Changed && settings.AutoCommitIntervalMinutes > 0 && queue.FirstChangeAt is { } firstChange)
+		if (request == SyncRequest.Changed && useCadence && queue.ChangeReadyAt is { } ready)
 		{
-			var commitDeadline = firstChange.AddMinutes(settings.AutoCommitIntervalMinutes) - now;
-			wait = commitDeadline <= TimeSpan.Zero ? TimeSpan.Zero : commitDeadline < wait ? commitDeadline : wait;
+			wait = ready - now;
+			if (settings.AutoCommitIntervalMinutes > 0 && queue.FirstChangeAt is { } firstChange)
+			{
+				var deadlineWait = firstChange.AddMinutes(settings.AutoCommitIntervalMinutes) - now;
+				if (deadlineWait < wait) wait = deadlineWait;
+			}
+			if (wait < TimeSpan.Zero) wait = TimeSpan.Zero;
 		}
 
 		reservation = new SyncReservation(request, wait,
@@ -258,6 +270,9 @@ public sealed partial class SyncOrchestrator : ISyncOrchestrator, IDisposable
 			}
 
 			DateTimeOffset? firstChangeAt;
+			DateTimeOffset? commitNotBefore;
+			AppSettings settings;
+			bool useCadence;
 			lock (queue.Gate)
 			{
 				if (_isDisposed || !ReferenceEquals(queue.Pending, reservation) || reservation.Token.IsCancellationRequested)
@@ -268,12 +283,24 @@ public sealed partial class SyncOrchestrator : ISyncOrchestrator, IDisposable
 				queue.Pending = null;
 				queue.Active = reservation;
 				queue.IsSyncRunning = true;
+				settings = _appSettingsService.Get().Normalize();
+				useCadence = queue.HasCadenceWork || IsCadenceEnabled(settings);
+				queue.RunningCadence = useCadence;
 				firstChangeAt = queue.FirstChangeAt;
-				queue.FirstChangeAt = null;
+				var now = _clock.GetUtcNow();
+				commitNotBefore = useCadence && reservation.Request is not (SyncRequest.Manual or SyncRequest.Resume)
+					&& queue.ChangeReadyAt is { } ready && ready > now ? ready : null;
+				if (commitNotBefore is null || (settings.AutoCommitIntervalMinutes > 0
+					&& firstChangeAt?.AddMinutes(settings.AutoCommitIntervalMinutes) <= now))
+				{
+					queue.FirstChangeAt = null;
+					queue.ChangeReadyAt = null;
+				}
 				CancelCadenceWakeLocked(queue);
 			}
 
-			await RunSyncAsync(repositoryId, queue, reservation.Request, firstChangeAt, reservation.Token);
+			await RunSyncAsync(repositoryId, queue, reservation.Request, settings, useCadence, firstChangeAt,
+				commitNotBefore, reservation.Token);
 		}
 		catch (OperationCanceledException) when (reservation.Token.IsCancellationRequested)
 		{
@@ -307,30 +334,30 @@ public sealed partial class SyncOrchestrator : ISyncOrchestrator, IDisposable
 	}
 
 	private async Task RunSyncAsync(string repositoryId, RepositorySyncQueue queue, SyncRequest request,
-		DateTimeOffset? firstChangeAt, CancellationToken cancellationToken)
+		AppSettings settings, bool useCadence, DateTimeOffset? firstChangeAt, DateTimeOffset? commitNotBefore,
+		CancellationToken cancellationToken)
 	{
 		var syncStartedAt = DateTimeOffset.Now;
-		var settings = _appSettingsService.Get().Normalize();
-		var useCadence = queue.UsesCadence || IsCadenceEnabled(settings);
-		lock (queue.Gate)
-		{
-			queue.UsesCadence = useCadence;
-		}
-
 		try
 		{
 			SetRepositoryState(repositoryId, RepositorySyncState.Syncing);
+			var force = request is SyncRequest.Manual or SyncRequest.Resume;
+			if ((useCadence || !force) && !await CheckRegisteredAsync(repositoryId, syncStartedAt, cancellationToken))
+			{
+				queue.Cadence = new();
+				lock (queue.Gate)
+				{
+					queue.FirstChangeAt = null;
+					queue.ChangeReadyAt = null;
+				}
+				ResetTransientFailureState(queue);
+				return;
+			}
+
 			if (useCadence)
 			{
-				var force = request is SyncRequest.Manual or SyncRequest.Resume;
-				if (!await CheckRegisteredAsync(repositoryId, syncStartedAt, cancellationToken))
-				{
-					queue.Cadence = new();
-					ResetTransientFailureState(queue);
-					return;
-				}
-
-				if (!await ExecuteCadenceAsync(repositoryId, queue.Cadence, settings, force, firstChangeAt, syncStartedAt, cancellationToken))
+				if (!await ExecuteCadenceAsync(repositoryId, queue.Cadence, settings, force, firstChangeAt,
+					commitNotBefore, syncStartedAt, cancellationToken))
 				{
 					return;
 				}
@@ -346,7 +373,8 @@ public sealed partial class SyncOrchestrator : ISyncOrchestrator, IDisposable
 				DateTimeOffset.Now,
 				command: null,
 				reason: null);
-			var hadTransientFailure = ClearTransientFailureState(queue);
+			var hadTransientFailure = ClearTransientFailureState(queue) || queue.Cadence.ReportPushRecovery;
+			queue.Cadence.ReportPushRecovery = false;
 			SetRepositoryState(repositoryId, RepositorySyncState.Idle);
 			if (hadTransientFailure)
 			{
@@ -388,7 +416,9 @@ public sealed partial class SyncOrchestrator : ISyncOrchestrator, IDisposable
 			}
 			else
 			{
-				var retryPlan = RegisterTransientFailure(queue);
+				var retryPlan = useCadence && ex.IsPushStep
+					? CreateRetryPlan(++queue.Cadence.PushFailures)
+					: RegisterTransientFailure(queue);
 				_logger.LogWarning(
 					ex,
 					"Repository sync transient failure. repositoryId={RepositoryId}, failureCount={FailureCount}, retryDelaySeconds={RetryDelaySeconds}",
@@ -441,10 +471,13 @@ public sealed partial class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		finally
 		{
 			SyncReservation? reservation = null;
+			CadenceWake? wake;
 			var stateChanged = false;
 			lock (queue.Gate)
 			{
 				queue.IsSyncRunning = false;
+				queue.RunningCadence = false;
+				queue.HasCadenceWork = queue.Cadence.HasPending || queue.ChangeReadyAt is not null;
 				if (_repositoryStateStore.GetStateOrDefault(repositoryId) == RepositorySyncState.Syncing)
 				{
 					_repositoryStateStore.SetState(repositoryId, RepositorySyncState.Idle);
@@ -454,8 +487,10 @@ public sealed partial class SyncOrchestrator : ISyncOrchestrator, IDisposable
 				if (queue.Rerun is { } rerun)
 				{
 					queue.Rerun = null;
-					TryReserveLocked(repositoryId, queue, rerun, CancellationToken.None, out reservation);
+					TryReserveLocked(repositoryId, queue, rerun, CancellationToken.None, out reservation, replay: true);
 				}
+				wake = useCadence && !cancellationToken.IsCancellationRequested
+					? ReserveCadenceWakeLocked(repositoryId, queue, settings) : null;
 			}
 
 			if (stateChanged && reservation is null && !_isDisposed)
@@ -463,9 +498,9 @@ public sealed partial class SyncOrchestrator : ISyncOrchestrator, IDisposable
 				_trayService.SetState(GetAggregateState());
 			}
 			StartReservation(repositoryId, queue, reservation);
-			if (useCadence && !cancellationToken.IsCancellationRequested)
+			if (wake is not null)
 			{
-				ScheduleCadenceWake(repositoryId, queue, settings);
+				_ = WakeAtDeadlineAsync(repositoryId, queue, wake.Delay, wake.Source, wake.Token);
 			}
 		}
 	}
@@ -814,14 +849,12 @@ public sealed partial class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		lock (queue.Gate)
 		{
 			queue.ConsecutiveTransientFailures++;
-			var failureCount = queue.ConsecutiveTransientFailures;
-			var delay = CalculateRetryDelay(failureCount);
-			return new RetryPlan(
-				failureCount,
-				delay,
-				ShouldNotify: failureCount == 1);
+			return CreateRetryPlan(queue.ConsecutiveTransientFailures);
 		}
 	}
+
+	private RetryPlan CreateRetryPlan(int failureCount) =>
+		new(failureCount, CalculateRetryDelay(failureCount), ShouldNotify: failureCount == 1);
 
 	private bool ClearTransientFailureState(RepositorySyncQueue queue)
 	{
@@ -984,7 +1017,9 @@ public sealed partial class SyncOrchestrator : ISyncOrchestrator, IDisposable
 
 		public SyncRequest? Rerun { get; set; }
 		public DateTimeOffset? FirstChangeAt { get; set; }
-		public bool UsesCadence { get; set; }
+		public DateTimeOffset? ChangeReadyAt { get; set; }
+		public bool HasCadenceWork { get; set; }
+		public bool RunningCadence { get; set; }
 		public CadenceWork Cadence { get; set; } = new();
 		public CancellationTokenSource? CadenceCts { get; set; }
 

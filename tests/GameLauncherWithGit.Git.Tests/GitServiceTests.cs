@@ -112,6 +112,18 @@ public sealed class GitServiceTests : IDisposable
 		RunGit(root, "worktree", "add", "--detach", worktree);
 		Assert.True(File.Exists(Path.Combine(worktree, ".git")));
 		var link = Path.Combine(_directory, "リンク");
+		CreateDirectoryAlias(link, worktree);
+		SetEnvironment("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1");
+
+		foreach (var path in new[] { worktree, link })
+		{
+			var result = await _service.RunAsync(path, ["status", "--porcelain"]);
+			Assert.True(result.IsSuccess, result.GetFailureReason());
+		}
+	}
+
+	private void CreateDirectoryAlias(string link, string worktree)
+	{
 		if (OperatingSystem.IsWindows())
 		{
 			var command = $"New-Item -ItemType Junction -Path '{link.Replace("'", "''")}' -Target '{worktree.Replace("'", "''")}' | Out-Null";
@@ -130,13 +142,6 @@ public sealed class GitServiceTests : IDisposable
 			Directory.CreateSymbolicLink(link, worktree);
 		}
 		_links.Add(link);
-		SetEnvironment("GIT_TEST_ASSUME_DIFFERENT_OWNER", "1");
-
-		foreach (var path in new[] { worktree, link })
-		{
-			var result = await _service.RunAsync(path, ["status", "--porcelain"]);
-			Assert.True(result.IsSuccess, result.GetFailureReason());
-		}
 	}
 
 	// @test-value v2
@@ -239,6 +244,196 @@ public sealed class GitServiceTests : IDisposable
 		Assert.Equal("fatal: another failure", unknown.GetFailureReason());
 	}
 
+	// @test-value v2
+	// kind = "invariant"
+	// claim = "実監視登録から期限済みの未送信を復元し、指定された別名の宛先枝だけを更新する"
+	// oracle = { type = "contract", ref = "Session Graph game-sync-cadence-push-scope; game-sync-cadence-watch-lifetime" }
+	// fault = "実監視登録の復元が未接続、tracking名を送信先にする、または暗黙タグ／別枝も送る"
+	// observable = "実RepositoryWatcherService登録後の成功履歴と、隔離bareの全refの変更前後"
+	// observation_boundary = "public-boundary"
+	// scope = "production watcher-to-positive-cadence push against a temporary local bare repository"
+	// lifecycle = "permanent"
+	// @end-test-value
+	[Fact]
+	public async Task WatcherRegistrationRestoresAndSendsOnlyTheConfiguredDestination()
+	{
+		var (root, bare) = CreateCadenceRepositories();
+		RunGit(root, "config", "--local", "remote.origin.push", "refs/heads/sample:refs/heads/destination");
+		RunGit(root, "config", "--local", "push.followTags", "true");
+		MakeOutgoingCommit(root);
+		RunGit(root, "tag", "-a", "-m", "unsent tag", "local-only");
+		var head = RunGit(root, "rev-parse", "HEAD").Trim();
+		var before = Refs(bare);
+		Assert.NotEqual(head, before.Single(line => line.StartsWith("refs/heads/destination ")).Split(' ')[1]);
+
+		using var watcher = new RepositoryWatcherService(NullLogger<RepositoryWatcherService>.Instance);
+		using var f = new SyncCadenceTests.Fixture(commit: 10, push: 1, repository: root, git: _service, watcher: watcher);
+		watcher.Register(root, root);
+		var history = await f.FirstHistory.Task.WaitAsync(TimeSpan.FromSeconds(15));
+		watcher.Unregister(root);
+
+		Assert.Equal(RepositorySyncHistoryStatus.Succeeded, history.Status);
+		Assert.Equal(before.Select(line => line.StartsWith("refs/heads/destination ") ? $"refs/heads/destination {head}" : line), Refs(bare));
+	}
+
+	// @test-value v2
+	// kind = "invariant"
+	// claim = "送信範囲を安全に一枝へ限定できない設定は、隔離bareを変更せず失敗として返す"
+	// oracle = { type = "contract", ref = "Session Graph game-sync-cadence-push-scope CAD-CORE-01" }
+	// fault = "force・複数・matching・mirrorを実pushへ渡し、実行後にだけ結果を判定する"
+	// observable = "新送信経路での失敗履歴の理由、隔離bareの全ref先端および存在が不変"
+	// observation_boundary = "public-boundary"
+	// scope = "preflight refusal through SyncOrchestrator with real Git"
+	// lifecycle = "permanent"
+	// @end-test-value
+	[Theory]
+	[InlineData("force")]
+	[InlineData("multiple")]
+	[InlineData("matching")]
+	[InlineData("mirror")]
+	public async Task UnsafePushConfigurationCannotChangeAnyRemoteRef(string kind)
+	{
+		var (root, bare) = CreateCadenceRepositories();
+		MakeOutgoingCommit(root);
+		RunGit(root, "branch", "-f", "other", "HEAD");
+		RunGit(root, "tag", "-a", "-m", "unsent tag", "local-only");
+		switch (kind)
+		{
+			case "force":
+				RunGit(root, "config", "--local", "remote.origin.push", "+refs/heads/sample:refs/heads/destination");
+				break;
+			case "multiple":
+				RunGit(root, "config", "--local", "--add", "remote.origin.push", "refs/heads/sample:refs/heads/destination");
+				RunGit(root, "config", "--local", "--add", "remote.origin.push", "refs/heads/other:refs/heads/other");
+				break;
+			case "matching":
+				RunGit(root, "config", "--local", "push.default", "matching");
+				break;
+			case "mirror":
+				RunGit(root, "config", "--local", "remote.origin.mirror", "true");
+				break;
+		}
+		var before = Refs(bare);
+		var git = new RecordingGit(_service);
+		using var f = new SyncCadenceTests.Fixture(commit: 1, push: 1, repository: root, git: git);
+		Assert.True(f.Sync.TryQueueRepositorySyncNow(root));
+		var history = await f.FirstHistory.Task.WaitAsync(TimeSpan.FromSeconds(15));
+
+		Assert.Equal(RepositorySyncHistoryStatus.Failed, history.Status);
+		Assert.Contains("送信先設定", history.Reason);
+		Assert.DoesNotContain("push", git.Commands);
+		Assert.Equal(before, Refs(bare));
+	}
+
+	// @test-value v2
+	// kind = "invariant"
+	// claim = "単一宛先が決まっていても分岐したremote枝を強制更新しない"
+	// oracle = { type = "contract", ref = "Session Graph game-sync-cadence-push-scope CAD-CORE-01" }
+	// fault = "非fast-forwardを強制送信する、または拒否を成功として記録する"
+	// observable = "実Gitでのpush実行と失敗履歴、隔離bareの全refの不変"
+	// observation_boundary = "public-boundary"
+	// scope = "non-force push through SyncOrchestrator"
+	// lifecycle = "permanent"
+	// @end-test-value
+	[Fact]
+	public async Task ExplicitPushDoesNotOverwriteADivergentDestination()
+	{
+		var (root, bare) = CreateCadenceRepositories();
+		RunGit(root, "config", "--local", "remote.origin.push", "refs/heads/sample:refs/heads/destination");
+		RunGit(root, "switch", "other");
+		RunGit(root, "commit", "--allow-empty", "-m", "destination advance");
+		RunGit(root, "push", "origin", "refs/heads/other:refs/heads/destination");
+		RunGit(root, "switch", "sample");
+		MakeOutgoingCommit(root);
+		var before = Refs(bare);
+		var git = new RecordingGit(_service);
+		using var f = new SyncCadenceTests.Fixture(commit: 1, push: 1, repository: root, git: git);
+		Assert.True(f.Sync.TryQueueRepositorySyncNow(root));
+		var history = await f.FirstHistory.Task.WaitAsync(TimeSpan.FromSeconds(15));
+		Assert.Contains("push", git.Commands);
+		Assert.Equal(RepositorySyncHistoryStatus.Failed, history.Status);
+		Assert.Equal(before, Refs(bare));
+	}
+
+	// @test-value v2
+	// kind = "invariant"
+	// claim = "同一remote名でもfetch URLとpush URLが違うなら、fetch側の一致だけで送信済みとしない"
+	// oracle = { type = "contract", ref = "Session Graph game-sync-cadence-push-scope CAD-CORE-01" }
+	// fault = "fetch側のtracking refがHEADと等しいだけで、別のpush側の宛先を調べず取り残す"
+	// observable = "監視登録後の成功履歴、fetch側の全ref不変とpush側の宛先枝新設"
+	// observation_boundary = "public-boundary"
+	// scope = "separate Git fetch and push endpoints"
+	// lifecycle = "permanent"
+	// @end-test-value
+	[Fact]
+	public async Task EqualFetchTrackingDoesNotHideADifferentPushEndpoint()
+	{
+		var (root, fetch) = CreateCadenceRepositories();
+		var push = Directory.CreateDirectory(Path.Combine(_directory, "separate-push.git")).FullName;
+		RunGit(push, "init", "--bare", "--quiet");
+		RunGit(root, "remote", "set-url", "--push", "origin", push);
+		var head = RunGit(root, "rev-parse", "HEAD").Trim();
+		Assert.Equal(head, RunGit(root, "rev-parse", "refs/remotes/origin/sample").Trim());
+		var fetchRefs = Refs(fetch);
+
+		using var watcher = new RepositoryWatcherService(NullLogger<RepositoryWatcherService>.Instance);
+		using var f = new SyncCadenceTests.Fixture(commit: 1, push: 0, repository: root, git: _service, watcher: watcher);
+		watcher.Register(root, root);
+		var history = await f.FirstHistory.Task.WaitAsync(TimeSpan.FromSeconds(15));
+		Assert.Equal(RepositorySyncHistoryStatus.Succeeded, history.Status);
+		Assert.Equal(fetchRefs, Refs(fetch));
+		Assert.Equal(new[] { $"refs/heads/sample {head}" }, Refs(push));
+	}
+
+	// @test-value v2
+	// kind = "invariant"
+	// claim = "Tray一括の対象集計は物理先の別名を一件にまとめ、同じobject庫の別worktreeを別件にする"
+	// oracle = { type = "contract", ref = "Session Graph game-git-repository-identity-boundary" }
+	// fault = "Trayが別名を重複計上する、またはリンクされた別worktreeを同一件として落とす"
+	// observable = "TrayServiceが受付数算出前に使う実対象選択の返却パス"
+	// observation_boundary = "component-behavior"
+	// scope = "Tray sync target selection without native UI or notifications"
+	// lifecycle = "permanent"
+	// @end-test-value
+	[Fact]
+	public void TrayCountsAnAliasOnceButKeepsASeparateLinkedWorktree()
+	{
+		var (root, _) = CreateCadenceRepositories();
+		var linked = Path.Combine(_directory, "linked-worktree");
+		RunGit(root, "worktree", "add", "--detach", linked);
+		var alias = Path.Combine(_directory, "physical-alias");
+		CreateDirectoryAlias(alias, root);
+		using var f = new SyncCadenceTests.Fixture(commit: 0, push: 0);
+		var targetPaths = TraySyncTargets.GetDistinctRepositories(
+			[f.Game("alias-only", alias), f.Game("real", root), f.Game("linked", linked)]);
+		Assert.Equal(new[] { GitService.ResolveDirectoryPath(root), GitService.ResolveDirectoryPath(linked) }, targetPaths);
+	}
+
+	private (string Root, string Bare) CreateCadenceRepositories()
+	{
+		var root = CreateRepository("cadence");
+		var bare = Directory.CreateDirectory(Path.Combine(_directory, "cadence.git")).FullName;
+		RunGit(bare, "init", "--bare", "--quiet");
+		RunGit(root, "symbolic-ref", "HEAD", "refs/heads/sample");
+		RunGit(root, "config", "--local", "user.name", "Fixture");
+		RunGit(root, "config", "--local", "user.email", "fixture@example.invalid");
+		RunGit(root, "commit", "--allow-empty", "-m", "base");
+		RunGit(root, "branch", "other");
+		RunGit(root, "remote", "add", "origin", bare);
+		RunGit(root, "push", "--set-upstream", "origin", "sample");
+		RunGit(root, "push", "origin", "sample:refs/heads/destination", "other");
+		return (root, bare);
+	}
+
+	private void MakeOutgoingCommit(string root)
+	{
+		SetEnvironment("GIT_COMMITTER_DATE", DateTimeOffset.UtcNow.AddDays(-1).ToString("O"));
+		RunGit(root, "commit", "--allow-empty", "-m", "outgoing");
+	}
+
+	private static string[] Refs(string bare) =>
+		RunGit(bare, "for-each-ref", "--format=%(refname) %(objectname)").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
 	private string CreateRepository(string name)
 	{
 		var path = Directory.CreateDirectory(Path.Combine(_directory, name)).FullName;
@@ -246,7 +441,7 @@ public sealed class GitServiceTests : IDisposable
 		return path;
 	}
 
-	private static void RunGit(string directory, params string[] arguments)
+	private static string RunGit(string directory, params string[] arguments)
 	{
 		var info = new ProcessStartInfo("git") { WorkingDirectory = directory, RedirectStandardOutput = true, RedirectStandardError = true };
 		foreach (var argument in arguments) info.ArgumentList.Add(argument);
@@ -255,6 +450,7 @@ public sealed class GitServiceTests : IDisposable
 		var error = process.StandardError.ReadToEnd();
 		process.WaitForExit();
 		Assert.True(process.ExitCode == 0, $"git {string.Join(' ', arguments)}: {output}\n{error}");
+		return output;
 	}
 
 	private void SetEnvironment(string key, string? value)
@@ -288,5 +484,18 @@ public sealed class GitServiceTests : IDisposable
 		public Task<IReadOnlyList<LogViewerEntry>> GetLatestEntriesAsync(int limit, LogLevel? severity = null, string? keyword = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 		public Task OpenLatestErrorLogAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
 		public Task OpenLogDirectoryAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+	}
+
+	private sealed class RecordingGit(IGitService git) : IGitService
+	{
+		public ConcurrentQueue<string> Commands { get; } = new();
+		public Task<GitCommandResult> CheckAvailabilityAsync(CancellationToken cancellationToken = default) =>
+			git.CheckAvailabilityAsync(cancellationToken);
+		public Task<GitCommandResult> RunAsync(string repositoryPath, IReadOnlyList<string> arguments,
+			CancellationToken cancellationToken = default)
+		{
+			Commands.Enqueue(arguments[0]);
+			return git.RunAsync(repositoryPath, arguments, cancellationToken);
+		}
 	}
 }

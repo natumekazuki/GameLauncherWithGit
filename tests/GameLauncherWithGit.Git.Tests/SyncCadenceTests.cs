@@ -77,10 +77,104 @@ public sealed class SyncCadenceTests
 
     // @test-value v2
     // kind = "invariant"
+    // claim = "保留を見つけなかった正値照会の後に0/0にすると、次の変更は従来経路から始まる"
+    // oracle = { type = "contract", ref = "Session Graph game-sync-cadence-independent-review CAD-CORE-02" }
+    // fault = "最後の正値実行を理由に、保留がなくても新しい0/0設定で旧経路に戻らない"
+    // observable = "正値照会で履歴なし、切替後はfetchから開始し引数なしpushで終了"
+    // observation_boundary = "public-boundary"
+    // scope = "zero cadence after a clean positive-cadence probe"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public void CleanProbeDoesNotKeepCadenceAfterSettingsReturnToZero()
+    {
+        using var f = new Fixture(commit: 1, push: 1);
+        f.Watch();
+        Assert.Contains("status --porcelain", f.Commands);
+        Assert.Empty(f.History);
+        var before = f.Commands.Count;
+        f.Settings = AppSettings.Default;
+        f.Dirty = true;
+        f.Change();
+        f.Advance(seconds: 9);
+        Assert.Equal(before, f.Commands.Count);
+        f.Advance(seconds: 1);
+        Assert.Equal("fetch", f.Commands[before]);
+        Assert.Equal("push", f.Commands.Last());
+        Assert.Equal(RepositorySyncHistoryStatus.Succeeded, Assert.Single(f.History).Status);
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "0/0の監視予約・DB失敗後の再試行も、別名付替え後の旧物理先にはGitを開始しない"
+    // oracle = { type = "contract", ref = "Session Graph game-sync-cadence-independent-review CAD-CORE-04" }
+    // fault = "旧経路のデバウンスまたは再試行だけが現在の登録を照合しない"
+    // observable = "付替えとDBエラーを挟んだ後の旧物理先へのGit呼出しなし"
+    // observation_boundary = "public-boundary"
+    // scope = "old queue identity with zero cadence"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ZeroCadenceDoesNotRunOnTheOldPhysicalTarget(bool retry)
+    {
+        const string alias = "test-alias";
+        var target = Path.Combine(Path.GetTempPath(), "cadence-repository");
+        using var f = new Fixture(commit: 0, push: 0, resolveDirectoryPath: path => path == alias ? target : path);
+        f.Games = [f.Game("aliased", alias)];
+        f.Watch();
+        f.Change();
+        if (retry)
+        {
+            f.FailLibraryRead = true;
+            f.Advance(seconds: 10);
+            Assert.Equal(RepositorySyncHistoryStatus.Failed, Assert.Single(f.History).Status);
+            f.FailLibraryRead = false;
+        }
+        target += "-new";
+        f.Advance(seconds: 30);
+        Assert.Empty(f.Commands);
+        Assert.Equal(retry ? 1 : 0, f.History.Count);
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "旧コミットの送信期限は、新しい書込のデバウンスを破らず、既存コミットだけを送信する"
+    // oracle = { type = "contract", ref = "Session Graph game-sync-cadence-independent-review CAD-CORE-06" }
+    // fault = "期限起床が未成熟な書込をステージまたはautostashし、デバウンスを短縮する"
+    // observable = "送信期限ではpushのみ、後続の10秒満了で初めてcommit"
+    // observation_boundary = "public-boundary"
+    // scope = "outgoing deadline while a fresh change is debouncing"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public void OutgoingDeadlineDoesNotBypassChangeDebounce()
+    {
+        using var f = new Fixture(commit: 0, push: 1) { Ahead = true };
+        f.Watch();
+        f.Advance(seconds: 59);
+        f.Dirty = true;
+        f.Change();
+        var checkpoint = f.Commands.Count;
+        f.Advance(seconds: 1);
+        Assert.Equal((0, 1), (f.Commits, f.Pushes));
+        Assert.DoesNotContain(f.Commands.Skip(checkpoint), command =>
+            command is "add -A" or "fetch" || command.StartsWith("pull ", StringComparison.Ordinal));
+        Assert.True(f.Dirty);
+        Assert.Empty(f.History);
+        f.Advance(seconds: 8);
+        Assert.Equal(0, f.Commits);
+        f.Advance(seconds: 1);
+        Assert.Equal((1, 1), (f.Commits, f.Pushes));
+    }
+
+    // @test-value v2
+    // kind = "invariant"
     // claim = "変更や監視再登録でコミット期限を延ばさず、以後の変更がなくてもHome離脱中に独立したpush期限で送信する"
     // oracle = { type = "contract", ref = "Session Graph game-git-cadence-settings-contract; game-sync-cadence-watch-lifetime" }
     // fault = "変更で期限を更新する、コミットをpush期限まで待つ、監視解除で保持した期限を捨てる、または待機を成功にする"
-    // observable = "仮想時刻ごとのcommit・push呼出し、送信前の履歴・通知なし、送信後の成功履歴"
+    // observable = "仮想時刻ごとのcommit・push呼出し、追加commit後も最初の送信期限、送信前の履歴・通知なし、送信後の成功履歴"
     // observation_boundary = "public-boundary"
     // scope = "independent deadlines through watcher re-registration and Home departure"
     // lifecycle = "permanent"
@@ -103,13 +197,18 @@ public sealed class SyncCadenceTests
         Assert.Equal(0, f.Pushes);
         Assert.Empty(f.History);
         Assert.Empty(f.Notifications);
+        f.Advance(seconds: 1);
+        f.Dirty = true;
+        f.Change();
+        f.Advance(seconds: 120);
+        Assert.Equal((2, 0), (f.Commits, f.Pushes));
         f.Unwatch();
         f.Games = [f.Game("other", f.Repository + Path.DirectorySeparatorChar)];
-        f.Advance(seconds: 179);
+        f.Advance(seconds: 58);
         Assert.Equal(0, f.Pushes);
         f.Advance(seconds: 1);
 
-        Assert.Equal(1, f.Commits);
+        Assert.Equal(2, f.Commits);
         Assert.Equal(1, f.Pushes);
         Assert.Equal(RepositorySyncHistoryStatus.Succeeded, Assert.Single(f.History).Status);
     }
@@ -118,7 +217,7 @@ public sealed class SyncCadenceTests
     // kind = "invariant"
     // claim = "作業ツリー変更が継続してデバウンス完了を待てなくても、最初の検知からのコミット期限は維持される"
     // oracle = { type = "contract", ref = "Session Graph game-git-cadence-settings-contract" }
-    // fault = "最初のローカルGit確認をデバウンス終了まで遅らせ、変更が続く間はコミット期限を起動しない"
+    // fault = "変更検知の継続で最初のコミット期限を超過する"
     // observable = "デバウンス以下の間隔で監視通知した場合の期限直前と期限到達のcommit/push回数"
     // observation_boundary = "public-boundary"
     // scope = "commit deadline with continuous change detection"
@@ -166,7 +265,10 @@ public sealed class SyncCadenceTests
         Assert.Empty(f.History);
         f.Advance(seconds: 1);
         Assert.Equal((0, outgoing ? 1 : 0), (f.Commits, f.Pushes));
-        Assert.Equal(outgoing && !dirty ? 1 : 0, f.History.Count);
+        if (outgoing && !dirty)
+            Assert.Equal(RepositorySyncHistoryStatus.Succeeded, Assert.Single(f.History).Status);
+        else
+            Assert.Empty(f.History);
     }
 
     // @test-value v2
@@ -201,15 +303,16 @@ public sealed class SyncCadenceTests
     // claim = "期限実行前に登録を再確認し、読めないときは再試行、全登録が消えたときはGitを実行しない"
     // oracle = { type = "contract", ref = "Session Graph game-sync-cadence-watch-lifetime" }
     // fault = "登録解除後に期限からGitを実行する、またはDB読取失敗を未登録として期限を捨てる"
-    // observable = "照合失敗時の失敗履歴、期限/再試行でのGit呼出し数、DB復帰後のcommit"
+    // observable = "照合失敗時の失敗履歴、DB復帰後の再照合で登録ありならcommit、削除済みならGit呼出しなし"
     // observation_boundary = "public-boundary"
     // scope = "registration authority and retry at deadline"
     // lifecycle = "permanent"
     // @end-test-value
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void DeadlineRechecksRegistrationAndDoesNotTreatDbFailureAsRemoval(bool readFails)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void DeadlineRechecksRegistrationAndDoesNotTreatDbFailureAsRemoval(bool readFails, bool removedDuringRetry)
     {
         using var f = new Fixture(commit: 1, push: 0) { Dirty = true };
         f.Watch();
@@ -230,9 +333,20 @@ public sealed class SyncCadenceTests
         {
             Assert.Equal(RepositorySyncHistoryStatus.Failed, Assert.Single(f.History).Status);
             f.FailLibraryRead = false;
+            if (removedDuringRetry) f.Games = [];
+            var reads = f.LibraryReads;
             f.Advance(seconds: 5);
-            Assert.Equal(1, f.Commits);
-            Assert.Equal(RepositorySyncHistoryStatus.Succeeded, f.History.Last().Status);
+            Assert.Equal(reads + 1, f.LibraryReads);
+            if (removedDuringRetry)
+            {
+                Assert.Equal(before, f.Commands.Count);
+                Assert.Single(f.History);
+            }
+            else
+            {
+                Assert.Equal(1, f.Commits);
+                Assert.Equal(RepositorySyncHistoryStatus.Succeeded, f.History.Last().Status);
+            }
         }
         else
         {
@@ -246,7 +360,7 @@ public sealed class SyncCadenceTests
     // kind = "invariant"
     // claim = "同一worktreeの別名は期限・受付・停止を共有し、付替えで登録を失った旧物理先にはGitを実行しない"
     // oracle = { type = "contract", ref = "Session Graph game-git-repository-identity-boundary; game-sync-cadence-watch-lifetime" }
-    // fault = "watcher、DB、Trayが異なる文字列で同一worktreeを別キューとして扱う"
+    // fault = "watcher、DB、同期受付で異なる文字列を同一物理先として扱えない"
     // observable = "物理キーだけで動くGit代替、同一期限のcommit/push回数、別名からの停止時受付拒否"
     // observation_boundary = "public-boundary"
     // scope = "queue and registration identity with a shared path resolver"
@@ -286,7 +400,7 @@ public sealed class SyncCadenceTests
 
     // @test-value v2
     // kind = "invariant"
-    // claim = "手動と明示再開は期限を待たず、pull/自動stash復元の競合で停止したら監視・期限・一括同期で解除しない"
+    // claim = "手動と明示再開は期限を待たず、pull/自動stash復元の競合で停止したら監視・期限・通常の即時受付で解除しない"
     // oracle = { type = "contract", ref = "Session Graph game-git-cadence-settings-contract; app-wide-sync-queue-vs-completion" }
     // fault = "手動も分間隔を待つ、または競合した作業を自動で続行しステージ・送信する"
     // observable = "即時受付・停止状態・履歴、停止前後と再開でのGitのcommit/push呼出し"
@@ -353,12 +467,110 @@ public sealed class SyncCadenceTests
 
     // @test-value v2
     // kind = "invariant"
-    // claim = "Gitが実行取消を返した起動済み同期は処理を続けず、競合停止や失敗再試行に変えない"
+    // claim = "送信元枝または宛先を替えた次の確認では、前の送信期限や再試行を流用しない"
+    // oracle = { type = "contract", ref = "Session Graph game-sync-cadence-independent-review CAD-CORE-03" }
+    // fault = "旧対象の期限・backoffで変更後の宛先へ送信する"
+    // observable = "旧失敗履歴、新対象が旧再試行時刻では未送信、新対象の期限でその宛先へ送信"
+    // observation_boundary = "public-boundary"
+    // scope = "outgoing deadlines and retry identity by branch and destination"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ChangingBranchOrDestinationDoesNotInheritTheFailedPushDeadline(bool changeSource)
+    {
+        using var f = new Fixture(commit: 0, push: 1, retry: 30) { Ahead = true, PushReportsBranch = false };
+        f.Watch();
+        f.Advance(seconds: 60);
+        Assert.Equal(RepositorySyncHistoryStatus.Failed, Assert.Single(f.History).Status);
+        f.Advance(seconds: 1);
+        if (changeSource) f.Branch = "another";
+        else f.Destination = "different-destination";
+        f.Oldest = f.Clock.GetUtcNow();
+        f.PushReportsBranch = true;
+        f.Change();
+        f.Advance(seconds: 59);
+        Assert.Equal(1, f.Pushes);
+        Assert.Single(f.History);
+        f.Advance(seconds: 1);
+        Assert.Equal(2, f.Pushes);
+        Assert.EndsWith($":refs/heads/{f.Destination}", f.Commands.Last());
+        Assert.Equal(RepositorySyncHistoryStatus.Succeeded, f.History.Last().Status);
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "旧枝の期限を過ぎても非選択中は送信せず、戻ったときはGitに残る未送信を再検出する"
+    // oracle = { type = "contract", ref = "Session Graph game-sync-cadence-independent-review CAD-CORE-03" }
+    // fault = "非選択の枝を送信する、または再選択時に古いコミットを検出せず期限を初めから待つ"
+    // observable = "枝を戻す前後のpush回数、送信した宛先と成功履歴"
+    // observation_boundary = "public-boundary"
+    // scope = "reselecting a branch with previously unsent commits"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public void ReselectingABranchRecoversItsUnsentCommitTimes()
+    {
+        using var f = new Fixture(commit: 0, push: 1) { Ahead = true };
+        var originalCommit = f.Oldest;
+        f.Watch();
+        f.Branch = f.Destination = "another";
+        f.Ahead = false;
+        f.Change();
+        f.Advance(seconds: 75);
+        Assert.Equal(0, f.Pushes);
+        Assert.Empty(f.History);
+
+        f.Branch = f.Destination = "sample";
+        f.Ahead = true;
+        f.Oldest = originalCommit;
+        f.Change();
+        f.Advance(seconds: 10);
+        Assert.Equal(1, f.Pushes);
+        Assert.EndsWith(":refs/heads/sample", f.Commands.Last());
+        Assert.Equal(RepositorySyncHistoryStatus.Succeeded, Assert.Single(f.History).Status);
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "進行中に受けた再開要求は、その後発生した新しい競合停止を解除しない"
+    // oracle = { type = "contract", ref = "Session Graph game-sync-cadence-independent-review CAD-CORE-05" }
+    // fault = "稼働中のResumeを停止解除として予約し、競合後に別の実行を開始する"
+    // observable = "fetchを止めた時の受付完了、後発競合の停止、受付済みResumeによる2度目のfetchなし"
+    // observation_boundary = "public-boundary"
+    // scope = "resume accepted before synchronization was paused"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task ResumeAcceptedBeforeAConflictCannotReleaseTheNewPause()
+    {
+        var gate = new TaskCompletionSource<GitCommandResult>();
+        using var f = new Fixture(commit: 1, push: 1) { Dirty = true, Conflict = true, FetchGate = gate };
+        Assert.True(f.Sync.TryQueueRepositorySyncNow(f.Repository));
+        Assert.Equal("fetch", f.Commands.Last());
+        try
+        {
+            await f.Sync.ResumeRepositorySyncAsync(f.Repository).WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            gate.SetResult(new(0, "", ""));
+        }
+        Assert.Equal(RepositorySyncState.ErrorPaused, f.State);
+        Assert.Equal(RepositorySyncHistoryStatus.Paused, Assert.Single(f.History).Status);
+        Assert.Single(f.Commands, command => command == "fetch");
+        Assert.Equal((0, 0), (f.Commits, f.Pushes));
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "ResumeRepositorySyncAsyncのtokenがfetch中に取り消されると、後続Gitや失敗再試行を開始しない"
     // oracle = { type = "contract", ref = "Session Graph game-sync-cadence-core-worker; src/GameLauncherWithGit/Infrastructure/Abstractions/IGitService.cs" }
     // fault = "Gitの取消を失敗または成功として扱い後続コマンドや自動再試行を実行する"
     // observable = "取消後のGit呼出し、状態と同期履歴"
     // observation_boundary = "public-boundary"
-    // scope = "cancellation of an active scheduled sync"
+    // scope = "explicit resume caller cancellation at fetch"
     // lifecycle = "permanent"
     // @end-test-value
     [Fact]
@@ -369,6 +581,7 @@ public sealed class SyncCadenceTests
         f.CancelOnFetch = cancel;
         await f.Sync.ResumeRepositorySyncAsync(f.Repository, cancel.Token).WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(cancel.IsCancellationRequested);
+        Assert.Equal("fetch", f.Commands.Last());
         Assert.Equal(RepositorySyncState.Idle, f.State);
         var before = f.Commands.Count;
         f.Advance(seconds: 600);
@@ -377,12 +590,15 @@ public sealed class SyncCadenceTests
         Assert.Empty(f.History);
     }
 
-    private sealed class Fixture : IDisposable, IRepositoryWatcherService, IGameLibraryStore, IGitService,
+    internal sealed class Fixture : IDisposable, IRepositoryWatcherService, IGameLibraryStore, IGitService,
         IAppSettingsService, INotificationService, ITrayService, ILogAccessService, IRepositorySyncHistoryStore
     {
-        private const string TrackingRef = "refs/remotes/origin/sample";
+        private string Head => (Commits + 1).ToString("x40", CultureInfo.InvariantCulture);
+        private string TrackingRef => "refs/remotes/origin/" + Destination;
+        public string Branch { get; set; } = "sample";
+        public string Destination { get; set; } = "sample";
         private readonly RepositoryStateStore _states = new();
-        public string Repository { get; } = Path.Combine(Path.GetTempPath(), "cadence-repository");
+        public string Repository { get; }
         public ManualClock Clock { get; } = new();
         public SyncOrchestrator Sync { get; }
         public List<string> Commands { get; } = [];
@@ -399,22 +615,30 @@ public sealed class SyncCadenceTests
         public bool TargetKnown { get; set; } = true;
         public bool PushReportsBranch { get; set; } = true;
         public bool FailLibraryRead { get; set; }
+        public int LibraryReads { get; private set; }
         public CancellationTokenSource? CancelOnFetch { get; set; }
+        public TaskCompletionSource<GitCommandResult>? FetchGate { get; set; }
+        public TaskCompletionSource<RepositorySyncHistoryItem> FirstHistory { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int Commits { get; private set; }
         public int Pushes { get; private set; }
         public RepositorySyncState State => _states.GetStateOrDefault(Repository);
         private bool _watching;
 
-        public Fixture(int commit, int push, int retry = 5, Func<string, string>? resolveDirectoryPath = null)
+        public Fixture(int commit, int push, int retry = 5, Func<string, string>? resolveDirectoryPath = null,
+            string? repository = null, IGitService? git = null, IRepositoryWatcherService? watcher = null)
         {
+            Repository = repository ?? Path.Combine(Path.GetTempPath(), "cadence-repository");
             Settings = AppSettings.Default with
             {
                 AutoCommitIntervalMinutes = commit, AutoPushIntervalMinutes = push, SyncRetryInitialSeconds = retry
             };
             Games = [Game("fixture", Repository)];
             Oldest = Clock.GetUtcNow();
-            Sync = new SyncOrchestrator(_states, this, this, this, this, this, this, this,
-                NullLogger<SyncOrchestrator>.Instance, Clock.Delay, Clock, this, resolveDirectoryPath);
+            var logger = NullLogger<SyncOrchestrator>.Instance;
+            Sync = git is null
+                ? new SyncOrchestrator(_states, watcher ?? this, this, this, this, this, this, this,
+                    logger, Clock.Delay, Clock, this, resolveDirectoryPath)
+                : new SyncOrchestrator(_states, watcher ?? this, git, this, this, this, this, this, this, logger);
         }
 
         public GameCardItem Game(string id, string repository) => new(id, id, "", repository, null, null, GameCardStatus.Unknown);
@@ -440,27 +664,38 @@ public sealed class SyncCadenceTests
             Assert.Equal(Repository, repositoryPath);
             var command = arguments[0] == "commit" ? "commit" : string.Join(' ', arguments);
             Commands.Add(command);
+            if (command == "fetch" && FetchGate is { } gate)
+            {
+                FetchGate = null;
+                return gate.Task;
+            }
             GitCommandResult result = command switch
             {
                 "status --porcelain" => new(0, ConflictedIndex ? "UU save.dat\n" : Dirty ? " M save.dat\n" : "", ""),
-                "rev-parse --verify --quiet HEAD" => new(0, "abc", ""),
-                "symbolic-ref --quiet HEAD" => new(0, "refs/heads/sample\n", ""),
-                "for-each-ref --format=%(push)%09%(push:remotename) refs/heads/sample" =>
-                    new(0, TargetKnown ? TrackingRef + "\torigin\n" : "\t\n", ""),
-                "remote get-url --all -- origin" or "remote get-url --push --all -- origin" => new(0, "fixture-remote\n", ""),
-                "show-ref --verify --quiet " + TrackingRef => new(0, "", ""),
-                "log --format=%ct " + TrackingRef + "..HEAD" =>
+                var c when c == $"rev-parse --verify --quiet refs/heads/{Branch}" => new(0, Head, ""),
+                "symbolic-ref --quiet HEAD" => new(0, $"refs/heads/{Branch}\n", ""),
+                var c when c == $"config --null --get-all branch.{Branch}.remote" => new(0, "origin\0", ""),
+                "config --null --get-all remote.origin.push" => new(0, $"refs/heads/{Branch}:refs/heads/{Destination}\0", ""),
+                "config --null --get-all remote.origin.fetch" => new(0, "+refs/heads/*:refs/remotes/origin/*\0", ""),
+                var c when c.StartsWith("config --null ", StringComparison.Ordinal) => new(1, "", ""),
+                "remote get-url --all -- origin" => new(0, TargetKnown ? "fixture-remote\n" : "other-url\n", ""),
+                "remote get-url --push --all -- origin" => new(0, "fixture-remote\n", ""),
+                var c when c == $"check-ref-format refs/heads/{Destination}" => new(0, "", ""),
+                var c when c == "show-ref --verify --quiet " + TrackingRef => new(0, "", ""),
+                var c when c == "log --format=%ct " + TrackingRef + ".." + Head =>
                     new(0, Ahead ? Oldest.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture) + "\n" : "", ""),
-                "rev-list --count " + TrackingRef + "..HEAD" => new(0, Ahead ? "1\n" : "0\n", ""),
-                "branch --show-current" => new(0, "sample", ""),
-                "config --get branch.sample.remote" => new(0, "origin", ""),
-                "config --get branch.sample.merge" => new(0, "refs/heads/sample", ""),
-                "pull --rebase --autostash origin sample" when Conflict => new(1, "CONFLICT", ""),
-                "pull --rebase --autostash origin sample" when ConflictAfterPull => ApplyConflictingAutostash(),
+                var c when c == "rev-list --count " + TrackingRef + ".." + Head => new(0, Ahead ? "1\n" : "0\n", ""),
+                "branch --show-current" => new(0, Branch, ""),
+                var c when c == $"config --get branch.{Branch}.remote" => new(0, "origin", ""),
+                var c when c == $"config --get branch.{Branch}.merge" => new(0, $"refs/heads/{Branch}", ""),
+                var c when c == $"pull --rebase --autostash origin {Branch}" && Conflict => new(1, "CONFLICT", ""),
+                var c when c == $"pull --rebase --autostash origin {Branch}" && ConflictAfterPull => ApplyConflictingAutostash(),
                 "fetch" when CancelOnFetch is { } cancel => Cancel(cancel),
-                "fetch" or "pull --rebase --autostash origin sample" or "add -A" => new(0, "", ""),
+                "fetch" or "add -A" => new(0, "", ""),
+                var c when c == $"pull --rebase --autostash origin {Branch}" => new(0, "", ""),
                 "commit" => Commit(),
-                "push" or "push --porcelain" => Push(),
+                "push" => Push(),
+                var c when c == $"push --porcelain --no-force --no-mirror --no-tags --no-follow-tags --recurse-submodules=no -- origin {Head}:refs/heads/{Destination}" => Push(),
                 _ => throw new NotSupportedException(command)
             };
             return Task.FromResult(result);
@@ -492,17 +727,21 @@ public sealed class SyncCadenceTests
             Pushes++;
             if (PushReportsBranch) Ahead = false;
             return new(0, PushReportsBranch
-                ? " \trefs/heads/sample:refs/heads/sample\told..new\n"
+                ? $" \t{Head}:refs/heads/{Destination}\told..new\n"
                 : "=\trefs/heads/other:refs/heads/other\t[up to date]\n", "");
         }
 
-        public Task<IReadOnlyList<GameCardItem>> GetAllAsync(CancellationToken cancellationToken = default) =>
-            FailLibraryRead ? Task.FromException<IReadOnlyList<GameCardItem>>(new IOException("fixture read failed"))
+        public Task<IReadOnlyList<GameCardItem>> GetAllAsync(CancellationToken cancellationToken = default)
+        {
+            LibraryReads++;
+            return FailLibraryRead ? Task.FromException<IReadOnlyList<GameCardItem>>(new IOException("fixture read failed"))
                 : Task.FromResult(Games);
+        }
         public AppSettings Get() => Settings;
         public Task AppendAsync(RepositorySyncHistoryItem entry, CancellationToken cancellationToken = default)
         {
             History.Add(entry);
+            FirstHistory.TrySetResult(entry);
             return Task.CompletedTask;
         }
         public Task NotifyAsync(string title, string message, CancellationToken cancellationToken = default)
@@ -532,7 +771,7 @@ public sealed class SyncCadenceTests
             throw new NotSupportedException();
     }
 
-    private sealed class ManualClock : TimeProvider
+    internal sealed class ManualClock : TimeProvider
     {
         private DateTimeOffset _now = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
         private readonly List<PendingDelay> _delays = [];
