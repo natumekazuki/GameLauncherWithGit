@@ -1145,13 +1145,20 @@ else
                     var result = await LauncherService.LaunchAsync(game.Id);
                     if (result.ShowCapture)
                     {
-                        Navigation.NavigateTo("capture", new NavigationOptions { HistoryEntryState = result.Message });
+                        Navigation.NavigateTo("capture", new NavigationOptions
+                        {
+                            HistoryEntryState = result.HasWarnings ? result.Message : null
+                        });
                         return;
                     }
 
                     var message = $"「{game.Title}」: {result.Message}";
-                    SetNotification(result.IsSuccess ? result.Message : message, result.IsSuccess,
-                        summary: result.IsSuccess ? "起動済み" : "起動エラー", launchGameId: game.Id);
+                    if (!result.IsSuccess)
+                        SetNotification(message, false, summary: "起動エラー", launchGameId: game.Id);
+                    else if (result.HasWarnings)
+                        SetNotification(message, null, summary: "起動済み・警告", launchGameId: game.Id, retainWarning: true);
+                    else
+                        SetNotification(result.Message, true, summary: "起動済み", launchGameId: game.Id);
                     try
                     {
                         if (await ReloadGamesAsync())
@@ -1166,7 +1173,7 @@ else
 
                     SetNotification($"{message} 一覧の再読込に失敗しました。", false, addToHistory: false,
                         summary: result.IsSuccess ? "起動済み・一覧エラー" : "起動・一覧エラー",
-                        launchGameId: result.IsSuccess ? null : game.Id);
+                        launchGameId: game.Id);
                 });
         }
         finally
@@ -3582,15 +3589,17 @@ else
     }
 
     private void SetNotification(string message, bool? isSuccess, bool addToHistory = true, string? summary = null,
-        string? launchGameId = null, string? targetId = null, string? repositoryPath = null, [CallerMemberName] string operation = "")
+        string? launchGameId = null, string? targetId = null, string? repositoryPath = null, bool retainWarning = false,
+        [CallerMemberName] string operation = "")
     {
         var entry = new NotificationHistoryEntry(DateTimeOffset.Now, isSuccess,
             summary ?? (isSuccess == false ? "操作エラー" : "操作結果"), message.Trim());
         var resultKey = (operation, launchGameId ?? targetId, repositoryPath?.ToUpperInvariant());
-        if (isSuccess == false || _notificationFailure is null || _notificationFailure == resultKey)
+        var needsAttention = isSuccess == false || retainWarning;
+        if (needsAttention || _notificationFailure is null || _notificationFailure == resultKey)
         {
             _notification = isSuccess == true ? null : entry;
-            _notificationFailure = isSuccess == false ? resultKey : null;
+            _notificationFailure = needsAttention ? resultKey : null;
         }
         _announcedOperation = null;
         _operationAnnouncement = isSuccess == true ? null : entry.Summary;
