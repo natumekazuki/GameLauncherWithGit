@@ -13,9 +13,12 @@ public partial class PlayRecordingPanel
 
     private PlayRecordingState? _state;
     private RangeDraft? _rangeDraft;
-    private bool _confirmFinish;
+    private FinishConfirmation? _finishConfirmation;
     private bool _focusNextSharedRange;
     private bool HasUsableTarget => _state is { BlockedByOtherGame: false };
+    // The command version can change without changing which recording the user is reading.
+    private (long? ProfileId, long? SessionId, long ConnectionVersion) WorkspaceKey =>
+        (_state?.Target.ProfileId, _state?.Target.SessionId, _displayedConnectionVersion);
 
     private string RecordingStatus => _state switch
     {
@@ -26,7 +29,20 @@ public partial class PlayRecordingPanel
         _ => "記録を開始できません"
     };
 
-    private sealed record RangeDraft(DisplayTarget Target, PlayRecordingRangeSelection Selection, bool Shared = false, bool AutoFocus = false);
+    private sealed record RangeDraft(PlayRecordingRangeSelection Selection, bool Shared = false, bool AutoFocus = false,
+        CaptureTextItem? First = null, CaptureTextItem? Last = null);
+
+    private sealed record FinishConfirmation(DisplayTarget Target, string Title, CapturePosition? RangeStart,
+        PlayRecordingRangeSelection? PendingRange)
+    {
+        public bool HasUnsavedRange => RangeStart is not null || PendingRange is not null;
+
+        // A new command version alone (for example, after a screenshot) does not change the impact.
+        public bool Matches(PlayRecordingState state, long connectionVersion) =>
+            state.CanFinish && !state.BlockedByOtherGame && Target.ConnectionVersion == connectionVersion &&
+            Target.Recording.ProfileId == state.Target.ProfileId && Target.Recording.SessionId == state.Target.SessionId &&
+            Title == state.Title && Equals(RangeStart, state.RangeStart) && ReferenceEquals(PendingRange, state.PendingRange);
+    }
 
     private Task<T> UseAsync<T>(Func<string, Task<T>> operation) => WebSession.UseAsync(operation);
 
@@ -51,13 +67,13 @@ public partial class PlayRecordingPanel
         catch (UnauthorizedAccessException) { ExpireAccess(); }
         catch (Exception ex)
         {
-            if (_disposed || _unauthorized) return;
+            if (_disposed || _unauthorized || !WebSession.IsConnectionCurrent(connectionVersion)) return;
             Logger.LogWarning("Play recording Web read failed for {Section} ({ExceptionType}).", section, ex.GetType().Name);
             failed();
         }
     }
 
-    private async Task RefreshStatusAsync(bool loadPane)
+    private async Task RefreshStatusAsync(bool loadPane, bool refreshLatestText = true)
     {
         var connectionVersion = WebSession.ConnectionVersion;
         PlayRecordingState state;
@@ -65,27 +81,37 @@ public partial class PlayRecordingPanel
         catch (UnauthorizedAccessException) { ExpireAccess(); return; }
         catch (Exception ex)
         {
-            if (!_statusError && !_disposed)
+            if (_disposed || !WebSession.IsConnectionCurrent(connectionVersion)) return;
+            if (!_statusError)
                 Logger.LogWarning("Play recording Web status unavailable ({ExceptionType}).", ex.GetType().Name);
+            if (_displayedConnectionVersion != connectionVersion)
+            {
+                ClearTargetData();
+                _gameTitle = null;
+                _displayedConnectionVersion = connectionVersion;
+            }
             _statusError = true;
             return;
         }
         if (_disposed || _unauthorized || !WebSession.IsConnectionCurrent(connectionVersion)) return;
 
-        var targetChanged = _state?.Target != state.Target || _state?.BlockedByOtherGame != state.BlockedByOtherGame
+        var targetChanged = _state?.Target.ProfileId != state.Target.ProfileId ||
+            _state?.Target.SessionId != state.Target.SessionId || _state?.BlockedByOtherGame != state.BlockedByOtherGame
             || _displayedConnectionVersion != connectionVersion;
+        var closeFinish = _finishConfirmation is { } confirmation && !confirmation.Matches(state, connectionVersion);
         if (targetChanged) ClearTargetData();
         _displayedConnectionVersion = connectionVersion;
         _state = state;
         _gameTitle = state.Title;
         _statusError = false;
+        if (closeFinish) CloseFinishConfirmation();
         if (!HasUsableTarget) return;
 
         if (state.PendingRange is { } pending)
         {
             if (_rangeDraft is null || _rangeDraft.Shared && !Equals(_rangeDraft.Selection, pending))
             {
-                _rangeDraft = new(ForDisplay(state.Target), pending, Shared: true, AutoFocus: _focusNextSharedRange);
+                _rangeDraft = new(pending, Shared: true, AutoFocus: _focusNextSharedRange);
                 await LoadRangesAsync();
             }
         }
@@ -97,16 +123,16 @@ public partial class PlayRecordingPanel
 
         if (_disposed || _unauthorized) return;
         if (loadPane || targetChanged) await LoadPaneAsync();
-        else if (_pane == Pane.Text && _latest && _textRangeId is null && _olderPages.Count == 0 && !_pickingRange && _editItem is null && _galleryItem is null)
+        else if (refreshLatestText && _pane == Pane.Text && _latest && _textRangeId is null && _olderPages.Count == 0 && !_pickingRange && _editItem is null && _galleryItem is null)
             await RefreshLatestTextAsync();
     }
 
     private void ClearTargetData()
     {
         _state = null;
-        _notice = _actionError = null;
+        _actionError = null;
         _rangeDraft = null;
-        _confirmFinish = false;
+        _finishConfirmation = null;
         _latest = true;
         ResetTextPages();
         _textRangeId = null;
@@ -145,7 +171,7 @@ public partial class PlayRecordingPanel
         await UseActionAsync(target, gameId => Operations.StartRangeAsync(gameId, target.Recording));
         await RefreshStatusAsync(loadPane: false);
         FocusAfterRender(FocusTarget.RangeStatus);
-    });
+    }, "区間開始失敗");
 
     private Task EndRangeAsync(DisplayTarget target) => RunMutationAsync(target, async () =>
     {
@@ -153,7 +179,7 @@ public partial class PlayRecordingPanel
         _focusNextSharedRange = true;
         try { await RefreshStatusAsync(loadPane: false); }
         finally { _focusNextSharedRange = false; }
-    });
+    }, "区間固定失敗");
 
     private Task CancelRangeAsync(DisplayTarget target) => RunMutationAsync(target, async () =>
     {
@@ -161,12 +187,12 @@ public partial class PlayRecordingPanel
         _rangeDraft = null;
         await RefreshStatusAsync(loadPane: false);
         FocusAfterRender(FocusTarget.RangeStart);
-    });
+    }, "区間取消失敗");
 
-    private Task CloseRangeEditorAsync(RangeDraft draft)
+    private Task CloseRangeEditorAsync(DisplayTarget target, RangeDraft draft)
     {
-        if (ControlsDisabled || !IsDisplayedTargetCurrent(draft.Target) || !ReferenceEquals(draft, _rangeDraft)) return Task.CompletedTask;
-        if (draft.Shared) return CancelRangeAsync(draft.Target);
+        if (ControlsDisabled || !IsDisplayedTargetCurrent(target) || !ReferenceEquals(draft, _rangeDraft)) return Task.CompletedTask;
+        if (draft.Shared) return CancelRangeAsync(target);
         _rangeDraft = null;
         FocusAfterRender(FocusTarget.RangePicker);
         return Task.CompletedTask;
@@ -177,62 +203,85 @@ public partial class PlayRecordingPanel
         if (!TextRangeValid || _first is not { } first || _last is not { } last) return;
         var selection = await UseAsync(target, gameId => Operations.SelectRangeAsync(gameId, target.Recording, first, last));
         if (_disposed || _unauthorized) return;
-        _rangeDraft = new(target, selection, AutoFocus: true);
+        _rangeDraft = new(selection, AutoFocus: true, First: first, Last: last);
         ClearRangePick();
         await LoadRangesAsync();
-    });
+    }, "区間指定失敗");
 
-    private Task SaveRangeAsync(RangeDraft draft, (string Name, string[] Tags) data) => RunMutationAsync(draft.Target, async () =>
+    private Task SaveRangeAsync(DisplayTarget target, RangeDraft draft, (string Name, string[] Tags) data) => RunMutationAsync(target, async () =>
     {
         if (!ReferenceEquals(draft, _rangeDraft)) return;
-        await UseAsync(draft.Target, gameId => Operations.SaveRangeAsync(gameId, draft.Target.Recording, draft.Selection, data.Name, data.Tags));
+        var selection = draft.Selection;
+        // A new Save can revalidate the original displayed endpoints; an old command is still rejected above.
+        if (!draft.Shared && selection.Target != target.Recording && draft.First is { } first && draft.Last is { } last)
+            selection = await UseAsync(target, gameId => Operations.SelectRangeAsync(gameId, target.Recording, first, last));
+        await UseAsync(target, gameId => Operations.SaveRangeAsync(gameId, target.Recording, selection, data.Name, data.Tags));
 
         if (_disposed || _unauthorized) return;
         _rangeDraft = null;
         _pane = Pane.Ranges;
         await RefreshStatusAsync(loadPane: true);
         if (!_disposed && !_unauthorized)
-        {
-            _notice = "区間を保存しました。";
             FocusAfterRender(FocusTarget.Ranges);
-        }
-    });
+    }, "区間保存失敗");
 
     private Task StartRecordingAsync(DisplayTarget target) =>
         ChangeRecordingAsync(target, gameId => Operations.StartAsync(gameId, target.Recording),
-            "記録を開始できませんでした。PCで対象ゲームと取得設定を確認してください。");
+            "記録開始失敗", "記録を開始できませんでした。PCで対象ゲームと取得設定を確認してください。");
 
     private Task PauseRecordingAsync(DisplayTarget target) =>
-        ChangeRecordingAsync(target, gameId => Operations.PauseAsync(gameId, target.Recording), focus: FocusTarget.Resume);
+        ChangeRecordingAsync(target, gameId => Operations.PauseAsync(gameId, target.Recording), "一時停止失敗", focus: FocusTarget.Resume);
 
     private Task ResumeRecordingAsync(DisplayTarget target) =>
-        ChangeRecordingAsync(target, gameId => Operations.ResumeAsync(gameId, target.Recording), focus: FocusTarget.Pause);
+        ChangeRecordingAsync(target, gameId => Operations.ResumeAsync(gameId, target.Recording), "記録再開失敗", focus: FocusTarget.Pause);
 
-    private Task FinishRecordingAsync(DisplayTarget target) =>
-        ChangeRecordingAsync(target, gameId => Operations.FinishAsync(gameId, target.Recording));
+    private Task FinishRecordingAsync(DisplayTarget target, FinishConfirmation confirmation)
+    {
+        if (!ReferenceEquals(_finishConfirmation, confirmation)) return Task.CompletedTask;
+        return RunMutationAsync(target, async () =>
+        {
+            if (_state is not { } state || !confirmation.Matches(state, target.ConnectionVersion))
+            {
+                CloseFinishConfirmation();
+                return;
+            }
+            // The backend checks the rendered command version under the same gate as range changes.
+            // Never substitute a newer version for this click.
+            await UseActionAsync(target, gameId => Operations.FinishAsync(gameId, target.Recording));
+            _finishConfirmation = null;
+            await RefreshStatusAsync(loadPane: true);
+        }, "記録終了失敗", isStillRelevant: () => ReferenceEquals(_finishConfirmation, confirmation));
+    }
 
-    private Task ChangeRecordingAsync(DisplayTarget target, Func<string, Task> operation, string? rejection = null, FocusTarget? focus = null) => RunMutationAsync(target, async () =>
+    private Task ChangeRecordingAsync(DisplayTarget target, Func<string, Task> operation, string failureLabel, string? rejection = null, FocusTarget? focus = null) => RunMutationAsync(target, async () =>
     {
         await UseActionAsync(target, operation);
-        _confirmFinish = false;
         await RefreshStatusAsync(loadPane: true);
         if (focus is { } next) FocusAfterRender(next);
-    }, rejection);
+    }, failureLabel, rejection);
 
     private Task BreakLivePathAsync(DisplayTarget target) => RunMutationAsync(target, async () =>
     {
         await UseActionAsync(target, gameId => Operations.BreakPathAsync(gameId, target.Recording));
         await RefreshStatusAsync(loadPane: true);
-        if (_disposed || _unauthorized) return;
-        _notice = "次の本文から別経路にします。";
-    });
+    }, "経路変更失敗");
 
-    private Task TakeScreenshotAsync(DisplayTarget target) => RunMutationAsync(target, async () =>
+    private async Task TakeScreenshotAsync(DisplayTarget target)
     {
-        ClearScreenshotResult();
-        var shot = await UseAsync(target, gameId => Operations.TakeScreenshotAsync(gameId, target.Recording));
-        await RefreshStatusAsync(loadPane: true);
-        if (HasUsableTarget && _state?.Target.SessionId == shot.Event.SessionId)
-            _screenshotResult = shot;
-    }, "ゲーム画像を保存できませんでした。PCで対象のゲームを確認してください。");
+        bool StillShowingRecording() => HasUsableTarget && !_statusError
+            && WebSession.IsConnectionCurrent(target.ConnectionVersion)
+            && _state!.Target.ProfileId == target.Recording.ProfileId
+            && _state.Target.SessionId == target.Recording.SessionId;
+
+        await RunMutationAsync(target, async () =>
+        {
+            ClearScreenshotResult();
+            var shot = await UseAsync(target, gameId => Operations.TakeScreenshotAsync(gameId, target.Recording));
+            await RefreshStatusAsync(loadPane: false, refreshLatestText: false);
+            if (StillShowingRecording() && _state?.Target.SessionId == shot.Event.SessionId)
+                _screenshotResult = shot;
+        }, "撮影失敗", "ゲーム画像を保存できませんでした。PCで対象のゲームを確認してください。");
+
+        if (StillShowingRecording()) FocusAfterRender(FocusTarget.Screenshot);
+    }
 }

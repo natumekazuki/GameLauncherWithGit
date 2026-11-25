@@ -1,9 +1,11 @@
 .scene-backdrop { position:fixed; inset:0; z-index:1100; background:#080d17e8; padding:1rem; color:#e6edf7; }
 .scene-editor { height:100%; background:#0a0f18; border:1px solid #30415a; border-radius:8px; position:relative; padding:1rem; box-sizing:border-box; }
-.scene-main { height:100%; display:grid; grid-template-rows:3.5rem 3.25rem 2rem minmax(0,1fr); gap:.5rem; }
+.scene-main { height:100%; display:grid; grid-template-rows:3.5rem 3.25rem minmax(0,1fr); gap:.5rem; }
 .scene-header { display:flex; justify-content:space-between; align-items:center; gap:1rem; }
 .scene-header h2 { font-size:1.25rem; margin:0 0 .25rem; }
 .scene-header span { font-size:.85rem; color:#adbed5; }
+.scene-header > div,.scene-subdialog h3 { min-width:0; margin-inline-end:auto; }
+.scene-header > div,.scene-subdialog h3 { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 .scene-editor button { width:auto; }
 .scene-editor .scene-icon { display:inline-flex; align-items:center; justify-content:center; width:2.25rem; height:2.25rem; min-width:2.25rem; padding:0; flex-shrink:0; }
 .scene-editor ::deep svg { display:block; flex-shrink:0; }
@@ -13,8 +15,8 @@
 .scene-tools button { display:inline-flex; align-items:center; gap:.4rem; }
 .scene-editor .scene-jump { display:flex; align-items:center; gap:.6rem; min-width:0; color:#adbed5; flex:1; }
 .scene-editor .scene-jump select { width:min(24rem,100%); flex:0 1 24rem; }
-.scene-feedback { min-width:0; font-size:.85rem; color:#adbed5; overflow:auto; line-height:1.5; }
-.scene-error { color:#ffb7b7; overflow-wrap:anywhere; }
+.scene-status { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+.scene-preview-heading { min-height:2.25rem; }
 .scene-workspace { display:grid; grid-template-columns:minmax(0,1fr) 22rem; min-height:0; gap:1rem; }
 .scene-canvas-panel { display:grid; grid-template-rows:3rem minmax(0,1fr) 2rem; min-width:0; background:#0f1929; border:1px solid #30415a; border-radius:7px; overflow:hidden; }
 .scene-canvas-tools,.scene-canvas-tools>div,.scene-canvas-tools>span { display:flex; align-items:center; gap:.5rem; }
@@ -81,13 +83,10 @@
 .scene-subdialog h3 { font-size:1.1rem; margin:0; overflow-wrap:anywhere; }
 .scene-subdialog p { margin:0; line-height:1.7; overflow-wrap:anywhere; }
 .scene-tag-actions { display:flex; justify-content:space-between; flex-wrap:wrap; gap:.5rem; }
-.scene-tag-feedback { min-height:1.5rem; color:#adbed5; font-size:.85rem; }
-.scene-busy { position:absolute; inset:0; z-index:3; background:#080d17aa; display:grid; place-items:center; border-radius:8px; }
-.scene-busy span { background:#17273e; border:1px solid #52617c; border-radius:6px; padding:1rem 1.5rem; }
 @media(max-width:850px) {
  .scene-backdrop { padding:.35rem; }
  .scene-editor { padding:.6rem; }
- .scene-main { grid-template-rows:3rem 3rem 1.7rem minmax(0,1fr); gap:.35rem; }
+ .scene-main { grid-template-rows:3rem 3rem minmax(0,1fr); gap:.35rem; }
  .scene-header h2 { font-size:1.1rem; }
  .scene-header span { font-size:.75rem; }
  .scene-workspace { grid-template-columns:1fr; grid-template-rows:minmax(170px,42%) minmax(0,1fr); gap:.5rem; }

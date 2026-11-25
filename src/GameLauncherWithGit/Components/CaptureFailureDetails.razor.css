@@ -1,0 +1,11 @@
+.capture-failure-announcement { position:absolute; inline-size:1px; block-size:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+.capture-failure-trigger { display:inline-flex; align-items:center; gap:.35rem; block-size:2.25rem; width:auto; padding:.2rem .55rem; line-height:1.25; color:#ffc3c3; }
+.capture-failure-popover {
+    box-sizing:border-box; width:min(28rem,calc(100vw - 2rem)); max-height:calc(100vh - 2rem);
+    padding:1rem; color:#e6edf7; background:#152238; border:1px solid #52617c; border-radius:8px;
+    overflow:auto; overflow-wrap:anywhere; box-shadow:0 8px 24px #0009;
+}
+.capture-failure-popover h3 { margin:0; font-size:1rem; }
+.capture-failure-popover p { margin:.75rem 0; white-space:pre-wrap; }
+.capture-failure-popover button { width:auto; }
+.capture-failure-trigger:focus-visible,.capture-failure-popover button:focus-visible { outline:2px solid #a4c8ff; outline-offset:2px; }

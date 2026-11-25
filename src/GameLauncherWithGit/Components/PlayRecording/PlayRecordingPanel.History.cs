@@ -23,7 +23,7 @@ public partial class PlayRecordingPanel
         {
             _labels = labels.ToArray();
             BeginTextEdit(item);
-        }, () => _actionError = "分類を読み込めませんでした。本文を更新してください。");
+        }, () => _actionError = new("分類の取得失敗", "分類を読み込めませんでした。本文を更新してください。"));
     });
 
     private bool TextLabelChanged(CaptureTextItem? item) => item is not null && (item.LabelId ?? 0) != _editLabel;
@@ -38,9 +38,8 @@ public partial class PlayRecordingPanel
             TextLabelChanged(item), _editLabel == 0 ? null : _editLabel,
             TextSpeakerChanged(item), EditingNarration ? null : Optional(_editSpeaker)));
         CancelTextEdit();
-        _notice = "訂正を保存しました。";
         await LoadTextAsync();
-    });
+    }, "訂正失敗");
 
     private static string? Optional(string input) => string.IsNullOrWhiteSpace(input) ? null : input.Trim();
 
@@ -54,38 +53,40 @@ public partial class PlayRecordingPanel
     {
         CaptureTextItem? item = null;
         await ReadAsync("text at position", gameId => Operations.GetItemAtAsync(gameId, target.Recording, position),
-            value => item = value, () => _actionError = "対応する本文を読み込めませんでした。記録を更新してください。");
+            value => item = value, () => _actionError = new("本文の取得失敗", "対応する本文を読み込めませんでした。記録を更新してください。"));
         if (item is null) return;
         await OpenTextViewAsync(false, null);
-        if (!_disposed && !_unauthorized) await ShowGalleryAsync(item, imageId, showRawText: imageId is not null);
+        if (!_disposed && !_unauthorized && IsDisplayedTargetCurrent(target))
+            await ShowGalleryAsync(item, imageId, showRawText: imageId is not null);
     }
 
-    private Task LoadGalleryImageAsync()
+    private async Task LoadGalleryImageAsync(bool refreshList = true)
     {
-        if (_state is not { } state || _galleryItem is not { } item) return Task.CompletedTask;
+        if (_state is not { } state || _galleryItem is not { } item) return;
+        var target = ForDisplay(state.Target);
         var key = new CaptureEventKey(item.SessionId, item.Sequence);
-        var preferredId = _preferredGalleryImageId;
-        var previousIndex = _galleryIndex;
         _galleryImage = null;
         _galleryError = false;
-        _galleryCount = -1;
-        return ReadAsync("screenshot", async gameId =>
+        if (refreshList)
         {
-            var images = await Operations.GetScreenshotsAsync(gameId, state.Target, key);
-            var index = Math.Clamp(previousIndex, 0, Math.Max(0, images.Count - 1));
-            if (preferredId is not null)
+            await ReadAsync("screenshot list", gameId => Operations.GetScreenshotsAsync(gameId, target.Recording, key),
+                images => _galleryImages = images, () => { _galleryImages = null; _galleryError = true; });
+        }
+        if (_disposed || _unauthorized || !IsDisplayedTargetCurrent(target) || _galleryImages is not { Count: > 0 } images) return;
+        _galleryIndex = Math.Clamp(_galleryIndex, 0, images.Count - 1);
+        if (_preferredGalleryImageId is { } preferredId)
+        {
+            var index = Array.FindIndex(images.ToArray(), image => image.ImageId == preferredId);
+            if (index < 0)
             {
-                index = Array.FindIndex(images.ToArray(), image => image.ImageId == preferredId);
-                if (index < 0) throw new InvalidOperationException("撮影した画像が見つかりません。");
+                _galleryError = true;
+                return;
             }
-            var png = images.Count == 0 ? null : await Operations.ReadScreenshotAsync(gameId, state.Target, key, images[index].ImageId);
-            return (Count: images.Count, Index: index, Png: png);
-        }, data =>
-        {
-            _galleryIndex = data.Index;
-            _galleryCount = data.Count;
-            _galleryImage = data.Png is null ? null : "data:image/png;base64," + Convert.ToBase64String(data.Png);
-        }, () => _galleryError = true);
+            _galleryIndex = index;
+        }
+        var imageId = images[_galleryIndex].ImageId;
+        await ReadAsync("screenshot", gameId => Operations.ReadScreenshotAsync(gameId, target.Recording, key, imageId),
+            png => _galleryImage = new("data:image/png;base64," + Convert.ToBase64String(png)), () => _galleryError = true);
     }
 
     private Task LoadPathsAsync()
@@ -100,18 +101,17 @@ public partial class PlayRecordingPanel
     }
 
     private Task CutPathAsync(DisplayTarget target, CaptureTextItem item) =>
-        CutPathAsync(target, gameId => Operations.CutPathAsync(gameId, target.Recording, item));
+        CutPathAsync(target, gameId => Operations.CutPathAsync(gameId, target.Recording, item), item.Id);
 
     private Task CutOccurrenceAsync(DisplayTarget target, ScenarioFlowOccurrence occurrence) =>
         CutPathAsync(target, gameId => Operations.CutPathAsync(gameId, target.Recording, occurrence.Start));
 
-    private Task CutPathAsync(DisplayTarget target, Func<string, Task> operation) => RunMutationAsync(target, async () =>
+    private Task CutPathAsync(DisplayTarget target, Func<string, Task> operation, long? rowId = null) => RunMutationAsync(target, async () =>
     {
         await UseActionAsync(target, operation);
-        await RefreshStatusAsync(loadPane: true);
-        if (_disposed || _unauthorized) return;
-        _notice = "ここから別経路にしました。";
-    });
+        await RefreshStatusAsync(loadPane: _pane == Pane.Paths, refreshLatestText: false);
+        if (rowId is { } id) FocusAfterRender(FocusTarget.PathRow, id);
+    }, "経路変更失敗");
 
     private async Task LoadScenesAsync()
     {
@@ -142,10 +142,9 @@ public partial class PlayRecordingPanel
             id = await UseAsync(target, gameId => Operations.CreateSceneAsync(gameId, target.Recording, edit));
         _sceneDraft = null;
         await RefreshStatusAsync(loadPane: true);
-        if (!_disposed && !_unauthorized) _notice = "場面を保存しました。";
         if (_sceneFlow is { } updated && updated.Scenes.FirstOrDefault(x => x.Id == id) is { } saved)
             _sceneDraft = new(saved, saved.Definition, updated.Tags);
-    });
+    }, "場面保存失敗");
 
     private Task SetSceneConnectionAsync(DisplayTarget target, long fromId, long toId, bool connected) => RunMutationAsync(target, async () =>
     {
@@ -154,8 +153,7 @@ public partial class PlayRecordingPanel
         await UseActionAsync(target, gameId => Operations.SetSceneConnectionAsync(gameId, target.Recording, from, to, connected));
         _connectionTarget = 0;
         await RefreshStatusAsync(loadPane: true);
-        if (!_disposed && !_unauthorized) _notice = connected ? "場面の接続を追加しました。" : "場面の接続を削除しました。";
         if (_sceneFlow is { } updated && updated.Scenes.FirstOrDefault(x => x.Id == fromId) is { } selected)
             _sceneDraft = new(selected, selected.Definition, updated.Tags);
-    });
+    }, "場面接続失敗");
 }

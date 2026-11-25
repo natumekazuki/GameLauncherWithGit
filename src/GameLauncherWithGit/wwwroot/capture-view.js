@@ -33,7 +33,11 @@ export function focusEditor(owner) {
     const elements = controls();
     (elements.find(x => x.matches('input, select, textarea')) ?? elements[0])?.focus({ preventScroll: true });
     dialog.onkeydown = event => {
-        if (event.key === 'Escape') { event.preventDefault(); owner.invokeMethodAsync('CloseEditorFromKeyboard'); }
+        if (event.key === 'Escape') {
+            if (dialog.querySelector('.capture-failure-popover:popover-open')) return;
+            event.preventDefault();
+            owner.invokeMethodAsync('CloseEditorFromKeyboard');
+        }
         if (event.key !== 'Tab') return;
         const elements = controls(), first = elements[0], last = elements.at(-1);
         if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
