@@ -23,7 +23,7 @@ public partial class PlayRecordingPanel
         {
             _labels = labels.ToArray();
             BeginTextEdit(item);
-        }, () => _actionError = "分類を読み込めませんでした。本文を更新してください。");
+        }, () => _actionError = new("分類の取得失敗", "分類を読み込めませんでした。本文を更新してください。"));
     });
 
     private bool TextLabelChanged(CaptureTextItem? item) => item is not null && (item.LabelId ?? 0) != _editLabel;
@@ -38,9 +38,8 @@ public partial class PlayRecordingPanel
             TextLabelChanged(item), _editLabel == 0 ? null : _editLabel,
             TextSpeakerChanged(item), EditingNarration ? null : Optional(_editSpeaker)));
         CancelTextEdit();
-        _notice = "訂正を保存しました。";
         await LoadTextAsync();
-    });
+    }, "訂正失敗");
 
     private static string? Optional(string input) => string.IsNullOrWhiteSpace(input) ? null : input.Trim();
 
@@ -54,10 +53,11 @@ public partial class PlayRecordingPanel
     {
         CaptureTextItem? item = null;
         await ReadAsync("text at position", gameId => Operations.GetItemAtAsync(gameId, target.Recording, position),
-            value => item = value, () => _actionError = "対応する本文を読み込めませんでした。記録を更新してください。");
+            value => item = value, () => _actionError = new("本文の取得失敗", "対応する本文を読み込めませんでした。記録を更新してください。"));
         if (item is null) return;
         await OpenTextViewAsync(false, null);
-        if (!_disposed && !_unauthorized) await ShowGalleryAsync(item, imageId, showRawText: imageId is not null);
+        if (!_disposed && !_unauthorized && IsDisplayedTargetCurrent(target))
+            await ShowGalleryAsync(item, imageId, showRawText: imageId is not null);
     }
 
     private Task LoadGalleryImageAsync()
@@ -109,9 +109,7 @@ public partial class PlayRecordingPanel
     {
         await UseActionAsync(target, operation);
         await RefreshStatusAsync(loadPane: true);
-        if (_disposed || _unauthorized) return;
-        _notice = "ここから別経路にしました。";
-    });
+    }, "経路変更失敗");
 
     private async Task LoadScenesAsync()
     {
@@ -142,10 +140,9 @@ public partial class PlayRecordingPanel
             id = await UseAsync(target, gameId => Operations.CreateSceneAsync(gameId, target.Recording, edit));
         _sceneDraft = null;
         await RefreshStatusAsync(loadPane: true);
-        if (!_disposed && !_unauthorized) _notice = "場面を保存しました。";
         if (_sceneFlow is { } updated && updated.Scenes.FirstOrDefault(x => x.Id == id) is { } saved)
             _sceneDraft = new(saved, saved.Definition, updated.Tags);
-    });
+    }, "場面保存失敗");
 
     private Task SetSceneConnectionAsync(DisplayTarget target, long fromId, long toId, bool connected) => RunMutationAsync(target, async () =>
     {
@@ -154,8 +151,7 @@ public partial class PlayRecordingPanel
         await UseActionAsync(target, gameId => Operations.SetSceneConnectionAsync(gameId, target.Recording, from, to, connected));
         _connectionTarget = 0;
         await RefreshStatusAsync(loadPane: true);
-        if (!_disposed && !_unauthorized) _notice = connected ? "場面の接続を追加しました。" : "場面の接続を削除しました。";
         if (_sceneFlow is { } updated && updated.Scenes.FirstOrDefault(x => x.Id == fromId) is { } selected)
             _sceneDraft = new(selected, selected.Definition, updated.Tags);
-    });
+    }, "場面接続失敗");
 }

@@ -3,19 +3,18 @@
 @inject ScenarioScreenshotService Screenshots
 
 <div class="screenshot-settings">
-    @if (LastFailure is { } failure)
-    {
-        <section class="screenshot-failure" aria-label="直近の撮影失敗">
-            <h3>直近の撮影失敗 · @failure.OccurredAt.ToLocalTime().ToString("HH:mm:ss")</h3>
-            <p>@failure.Message</p>
-            @if (Screenshots.Snapshot.Status != failure.Message)
-            {
-                <p class="screenshot-note">現在の撮影状態：@Screenshots.Snapshot.Status</p>
-            }
-        </section>
-    }
     <section>
-        <h3>撮影ショートカット</h3>
+        <div class="screenshot-setting-heading">
+            <h3>撮影ショートカット</h3>
+            @if (_error is not null && _hotkeyError)
+            {
+                <CaptureFailureDetails Label="設定失敗" Detail="@_error" />
+            }
+            else if (!(_ctrl || _alt || _shift))
+            {
+                <CaptureFailureDetails Label="未入力" Detail="Ctrl・Alt・Shiftのいずれかを選択してください。" />
+            }
+        </div>
         <form @onsubmit="SaveHotkeyAsync" @onsubmit:preventDefault>
             <div class="screenshot-hotkey">
                 <label><input type="checkbox" @bind="_ctrl" disabled="@_busy" />Ctrl</label>
@@ -26,12 +25,14 @@
                 </select>
                 <button type="submit" class="launch-button screenshot-icon" title="ショートカットを保存" aria-label="ショートカットを保存" disabled="@(_busy || !(_ctrl || _alt || _shift))"><CaptureIcon Name="Save" /></button>
             </div>
-            <p class="screenshot-feedback" role="@(_error is null ? "status" : "alert")">@((_error != LastFailure?.Message ? _error : null) ?? _message ?? (!(_ctrl || _alt || _shift) ? "Ctrl・Alt・Shiftのいずれかを選択してください。" : ""))</p>
         </form>
         <p class="screenshot-note">Ctrlで文章をスキップするゲームがあります。ゲーム操作と競合しない組み合わせを選んでください。</p>
     </section>
     <section>
-        <div class="screenshot-window-heading"><h3>撮影ウィンドウ</h3><button class="secondary-button screenshot-icon" title="ウィンドウ一覧を更新" aria-label="ウィンドウ一覧を更新" @onclick="RefreshWindows" disabled="@_busy"><CaptureIcon Name="Refresh" /></button></div>
+        <div class="screenshot-window-heading"><h3>撮影ウィンドウ</h3>
+            @if (_error is not null && !_hotkeyError) { <CaptureFailureDetails Label="撮影先エラー" Detail="@_error" /> }
+            <button class="secondary-button screenshot-icon" title="ウィンドウ一覧を更新" aria-label="ウィンドウ一覧を更新" @onclick="RefreshWindows" disabled="@_busy"><CaptureIcon Name="Refresh" /></button>
+        </div>
         <p class="screenshot-current" title="@CurrentWindow">@CurrentWindow</p>
         <div class="screenshot-windows" aria-label="撮影ウィンドウ候補">
             <button class="secondary-button screenshot-window" aria-pressed="@(!Screenshots.Snapshot.ManualWindow ? "true" : "false")" @onclick="() => SelectWindow(null)" disabled="@_busy"><strong>自動選択</strong><span>本文の取得先にウィンドウが1つある場合</span></button>
@@ -45,10 +46,9 @@
 </div>
 
 @code {
-    [Parameter] public ScreenshotFailure? LastFailure { get; set; }
-    private bool _ctrl, _alt, _shift, _busy;
+    private bool _ctrl, _alt, _shift, _busy, _hotkeyError;
     private uint _key;
-    private string? _error, _message;
+    private string? _error;
     private IReadOnlyList<CaptureWindow> _windows = [];
     private static readonly (uint Value, string Name)[] Keys = Enumerable.Range('A', 26).Concat(Enumerable.Range('0', 10)).Select(x => ((uint)x, ((char)x).ToString())).Concat(Enumerable.Range(1, 11).Select(x => ((uint)(0x6F + x), $"F{x}"))).ToArray();
     private string CurrentWindow => Screenshots.Snapshot.Window is { } window ? $"{window.DisplayTitle} · {window.ProcessName} · PID {window.ProcessId}" : Screenshots.Snapshot.ManualWindow ? "撮影先未選択" : "本文の取得先から撮影時に自動選択";
@@ -60,19 +60,21 @@
     }
     private void RefreshWindows()
     {
+        _hotkeyError = false;
         try { _windows = Screenshots.GetWindows(); _error = null; }
         catch (Exception ex) { _error = ex.Message; }
     }
     private void SelectWindow(CaptureWindow? window)
     {
-        try { Screenshots.SelectWindow(window); _error = null; _message = "撮影先を変更しました。"; }
+        _hotkeyError = false;
+        try { Screenshots.SelectWindow(window); _error = null; }
         catch (Exception ex) { _error = ex.Message; }
     }
     private async Task SaveHotkeyAsync()
     {
         if (_busy || !(_ctrl || _alt || _shift)) return;
-        _busy = true; _error = _message = null;
-        try { await Screenshots.ConfigureHotkeyAsync(new((_ctrl ? 2u : 0) | (_alt ? 1u : 0) | (_shift ? 4u : 0), _key)); _message = "ショートカットを保存しました。"; }
+        _busy = true; _error = null; _hotkeyError = true;
+        try { await Screenshots.ConfigureHotkeyAsync(new((_ctrl ? 2u : 0) | (_alt ? 1u : 0) | (_shift ? 4u : 0), _key)); }
         catch (Exception ex) { _error = ex.Message; }
         finally { _busy = false; }
     }

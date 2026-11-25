@@ -51,7 +51,7 @@ public partial class PlayRecordingPanel
         catch (UnauthorizedAccessException) { ExpireAccess(); }
         catch (Exception ex)
         {
-            if (_disposed || _unauthorized) return;
+            if (_disposed || _unauthorized || !WebSession.IsConnectionCurrent(connectionVersion)) return;
             Logger.LogWarning("Play recording Web read failed for {Section} ({ExceptionType}).", section, ex.GetType().Name);
             failed();
         }
@@ -65,7 +65,8 @@ public partial class PlayRecordingPanel
         catch (UnauthorizedAccessException) { ExpireAccess(); return; }
         catch (Exception ex)
         {
-            if (!_statusError && !_disposed)
+            if (_disposed || !WebSession.IsConnectionCurrent(connectionVersion)) return;
+            if (!_statusError)
                 Logger.LogWarning("Play recording Web status unavailable ({ExceptionType}).", ex.GetType().Name);
             _statusError = true;
             return;
@@ -104,7 +105,7 @@ public partial class PlayRecordingPanel
     private void ClearTargetData()
     {
         _state = null;
-        _notice = _actionError = null;
+        _actionError = null;
         _rangeDraft = null;
         _confirmFinish = false;
         _latest = true;
@@ -145,7 +146,7 @@ public partial class PlayRecordingPanel
         await UseActionAsync(target, gameId => Operations.StartRangeAsync(gameId, target.Recording));
         await RefreshStatusAsync(loadPane: false);
         FocusAfterRender(FocusTarget.RangeStatus);
-    });
+    }, "区間開始失敗");
 
     private Task EndRangeAsync(DisplayTarget target) => RunMutationAsync(target, async () =>
     {
@@ -153,7 +154,7 @@ public partial class PlayRecordingPanel
         _focusNextSharedRange = true;
         try { await RefreshStatusAsync(loadPane: false); }
         finally { _focusNextSharedRange = false; }
-    });
+    }, "区間固定失敗");
 
     private Task CancelRangeAsync(DisplayTarget target) => RunMutationAsync(target, async () =>
     {
@@ -161,7 +162,7 @@ public partial class PlayRecordingPanel
         _rangeDraft = null;
         await RefreshStatusAsync(loadPane: false);
         FocusAfterRender(FocusTarget.RangeStart);
-    });
+    }, "区間取消失敗");
 
     private Task CloseRangeEditorAsync(RangeDraft draft)
     {
@@ -180,7 +181,7 @@ public partial class PlayRecordingPanel
         _rangeDraft = new(target, selection, AutoFocus: true);
         ClearRangePick();
         await LoadRangesAsync();
-    });
+    }, "区間指定失敗");
 
     private Task SaveRangeAsync(RangeDraft draft, (string Name, string[] Tags) data) => RunMutationAsync(draft.Target, async () =>
     {
@@ -192,47 +193,52 @@ public partial class PlayRecordingPanel
         _pane = Pane.Ranges;
         await RefreshStatusAsync(loadPane: true);
         if (!_disposed && !_unauthorized)
-        {
-            _notice = "区間を保存しました。";
             FocusAfterRender(FocusTarget.Ranges);
-        }
-    });
+    }, "区間保存失敗");
 
     private Task StartRecordingAsync(DisplayTarget target) =>
         ChangeRecordingAsync(target, gameId => Operations.StartAsync(gameId, target.Recording),
-            "記録を開始できませんでした。PCで対象ゲームと取得設定を確認してください。");
+            "記録開始失敗", "記録を開始できませんでした。PCで対象ゲームと取得設定を確認してください。");
 
     private Task PauseRecordingAsync(DisplayTarget target) =>
-        ChangeRecordingAsync(target, gameId => Operations.PauseAsync(gameId, target.Recording), focus: FocusTarget.Resume);
+        ChangeRecordingAsync(target, gameId => Operations.PauseAsync(gameId, target.Recording), "一時停止失敗", focus: FocusTarget.Resume);
 
     private Task ResumeRecordingAsync(DisplayTarget target) =>
-        ChangeRecordingAsync(target, gameId => Operations.ResumeAsync(gameId, target.Recording), focus: FocusTarget.Pause);
+        ChangeRecordingAsync(target, gameId => Operations.ResumeAsync(gameId, target.Recording), "記録再開失敗", focus: FocusTarget.Pause);
 
     private Task FinishRecordingAsync(DisplayTarget target) =>
-        ChangeRecordingAsync(target, gameId => Operations.FinishAsync(gameId, target.Recording));
+        ChangeRecordingAsync(target, gameId => Operations.FinishAsync(gameId, target.Recording), "記録終了失敗");
 
-    private Task ChangeRecordingAsync(DisplayTarget target, Func<string, Task> operation, string? rejection = null, FocusTarget? focus = null) => RunMutationAsync(target, async () =>
+    private Task ChangeRecordingAsync(DisplayTarget target, Func<string, Task> operation, string failureLabel, string? rejection = null, FocusTarget? focus = null) => RunMutationAsync(target, async () =>
     {
         await UseActionAsync(target, operation);
         _confirmFinish = false;
         await RefreshStatusAsync(loadPane: true);
         if (focus is { } next) FocusAfterRender(next);
-    }, rejection);
+    }, failureLabel, rejection);
 
     private Task BreakLivePathAsync(DisplayTarget target) => RunMutationAsync(target, async () =>
     {
         await UseActionAsync(target, gameId => Operations.BreakPathAsync(gameId, target.Recording));
         await RefreshStatusAsync(loadPane: true);
-        if (_disposed || _unauthorized) return;
-        _notice = "次の本文から別経路にします。";
-    });
+    }, "経路変更失敗");
 
-    private Task TakeScreenshotAsync(DisplayTarget target) => RunMutationAsync(target, async () =>
+    private async Task TakeScreenshotAsync(DisplayTarget target)
     {
-        ClearScreenshotResult();
-        var shot = await UseAsync(target, gameId => Operations.TakeScreenshotAsync(gameId, target.Recording));
-        await RefreshStatusAsync(loadPane: true);
-        if (HasUsableTarget && _state?.Target.SessionId == shot.Event.SessionId)
-            _screenshotResult = shot;
-    }, "ゲーム画像を保存できませんでした。PCで対象のゲームを確認してください。");
+        bool StillShowingRecording() => HasUsableTarget && !_statusError
+            && WebSession.IsConnectionCurrent(target.ConnectionVersion)
+            && _state!.Target.ProfileId == target.Recording.ProfileId
+            && _state.Target.SessionId == target.Recording.SessionId;
+
+        await RunMutationAsync(target, async () =>
+        {
+            ClearScreenshotResult();
+            var shot = await UseAsync(target, gameId => Operations.TakeScreenshotAsync(gameId, target.Recording));
+            await RefreshStatusAsync(loadPane: true);
+            if (StillShowingRecording() && _state?.Target.SessionId == shot.Event.SessionId)
+                _screenshotResult = shot;
+        }, "撮影失敗", "ゲーム画像を保存できませんでした。PCで対象のゲームを確認してください。");
+
+        if (StillShowingRecording()) FocusAfterRender(FocusTarget.Screenshot);
+    }
 }

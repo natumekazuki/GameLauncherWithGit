@@ -9,12 +9,14 @@
 <div class="scene-backdrop">
 <section id="capture-editor" class="scene-editor" role="dialog" aria-modal="true" aria-labelledby="scene-editor-title" @ref="_root">
     <div class="scene-main" inert="@(_confirmation is not null || _tagManager)">
-        <header class="scene-header"><div><h2 id="scene-editor-title">場面フロー</h2><span>@Title</span></div><button class="secondary-button scene-icon" title="本文へ戻る" aria-label="本文へ戻る" @onclick="RequestCloseAsync" disabled="@_busy"><CaptureIcon Name="Back" /></button></header>
+        <header class="scene-header"><div><h2 id="scene-editor-title">場面フロー</h2><span>@Title</span></div>
+            @if (_error is not null) { <CaptureFailureDetails Label="場面の操作失敗" Detail="@_error" /> }
+            <button class="secondary-button scene-icon" title="本文へ戻る" aria-label="本文へ戻る" @onclick="RequestCloseAsync" disabled="@_busy"><CaptureIcon Name="Back" /></button>
+        </header>
         <div class="scene-toolbar">
             <label class="scene-jump">場面<select @key="_jumpVersion" aria-label="場面を選択" value="@_selectedId" @onchange="JumpAsync" disabled="@_busy"><option value="">@(_isNew ? "新しい場面" : "場面を選択")</option>@foreach (var scene in Scenes) { <option value="@scene.Id">@SceneName(scene.Definition)</option> }</select></label>
             <div class="scene-tools"><button class="secondary-button scene-icon" title="場面を追加" aria-label="場面を追加" @onclick="NewSceneAsync" disabled="@(_busy || _snapshot is null)"><CaptureIcon Name="Plus" /></button><button class="secondary-button" @onclick="OpenTags" disabled="@(_busy || _snapshot is null)"><CaptureIcon Name="Tag" />作品タグ</button><button class="secondary-button scene-icon" title="場面フローを更新" aria-label="場面フローを更新" @onclick="RefreshAsync" disabled="@_busy"><CaptureIcon Name="Refresh" /></button></div>
         </div>
-        <div class="scene-feedback" aria-live="polite">@if (_error is not null) { <span class="scene-error" role="alert">@_error</span> } else { <span role="status">@(_busy ? null : _notice)</span> }</div>
         <div class="scene-workspace" aria-busy="@_busy">
             <section class="scene-canvas-panel" aria-label="手編集の場面と接続">
                 <div class="scene-canvas-tools"><span><i></i> 手編集の接続</span><div><button class="secondary-button scene-icon" title="縮小" aria-label="縮小" @onclick="() => Zoom(-.15)" disabled="@_busy">−</button><span class="scene-scale">@(_zoom.ToString("P0", CultureInfo.CurrentCulture))</span><button class="secondary-button scene-icon" title="拡大" aria-label="拡大" @onclick="() => Zoom(.15)" disabled="@_busy">＋</button><button class="secondary-button scene-icon" title="全場面が入る倍率で表示" aria-label="全場面を表示" @onclick="FitAsync" disabled="@_busy"><CaptureIcon Name="Pick" /></button></div></div>
@@ -53,14 +55,15 @@
                         <label>章見出し（任意）<input @bind="draft.Chapter" @bind:event="oninput" @bind:after="MarkDirty" list="scene-chapters" /></label><datalist id="scene-chapters">@foreach (var chapter in Scenes.Select(s => s.Definition.Chapter).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct()) { <option value="@chapter"></option> }</datalist>
                         <CaptureTagsEditor Label="場面タグ" Tags="DraftTagNames" TagsChanged="ChangeDraftTagsAsync" AvailableTags="TagChoices" SuggestedTags="_speakers" AllowCreate="false" Disabled="_busy" />
                         @if (_speakers.Except(TagChoices, StringComparer.Ordinal).Any()) { <p class="scene-muted">記録済み話者を付けると作品タグにも追加します。</p> }
-                        <section><div class="scene-section-heading"><h4>本文範囲・画像</h4></div>
+                        <section><div class="scene-section-heading scene-preview-heading"><h4>本文範囲・画像</h4>
+                            @if (_previewError is not null) { <CaptureFailureDetails Label="範囲の取得失敗" Detail="@_previewError" /> }
+                        </div>
                             <details class="scene-range-picker"><summary>区間を選ぶ（@draft.RangeIds.Count）</summary><div>@foreach (var range in _ranges) { <label><input type="checkbox" checked="@draft.RangeIds.Contains(range.Id)" @onchange="e => ToggleRangeAsync(range.Id, e.Value is true)" />@RangeName(range)</label> }</div>@if (_ranges.Count == 0) { <p>本文画面の「区間を保存」で名前付き区間を作成できます。</p> }</details>
                             @if (draft.RangeIds.Count == 0) { <p class="scene-muted">本文範囲なし。独立した場面として保存できます。</p> }
                             else
                             {
                                 <label class="scene-preview-label">参照区間<select aria-label="プレビューする本文区間" value="@_previewRangeId" @onchange="PreviewRangeChangedAsync">@foreach (var range in _ranges.Where(r => draft.RangeIds.Contains(r.Id))) { <option value="@range.Id">@RangeName(range)</option> }</select></label>
                                 <div class="scene-preview" aria-busy="@_previewBusy">@if (_previewBusy) { <span role="status">本文・画像を取得中…</span> } else { @if (_previewImage is not null) { <img src="@_previewImage" alt="参照区間の本文を受信した頃の画像" /> }<div>@foreach (var text in _previewTexts) { <p>@text</p> }@if (_previewTexts.Count == 0 && _previewError is null) { <p class="scene-muted">この区間には有効な本文がありません。</p> }</div> }</div>
-                                @if (_previewError is not null) { <p class="scene-error" role="alert">@_previewError</p> }
                                 <div class="scene-preview-actions"><button class="secondary-button" @onclick="RefreshPreviewAsync"><CaptureIcon Name="Refresh" />再読込</button><button class="secondary-button" @onclick="OpenPreviewRangeAsync"><CaptureIcon Name="Next" />区間の本文へ</button></div>
                             }
                         </section>
@@ -80,7 +83,6 @@
                         @if (!_isNew) { <button class="scene-delete" @onclick="ConfirmDeleteScene">場面を削除…</button> }
                     </fieldset>
                 }
-                else if (_snapshot is null) { <p class="scene-muted">@(_busy ? "読込中…" : "場面を取得できませんでした。更新して再試行してください。")</p> }
                 </div>
                 <footer><button class="secondary-button" @onclick="CancelDraftAsync" disabled="@(_busy || !_dirty && !_isNew)">変更を取消</button><button class="launch-button" @onclick="SaveSceneAsync" disabled="@(_busy || _draft is null || !_dirty && !_isNew || string.IsNullOrWhiteSpace(_draft.Title))"><CaptureIcon Name="Save" />保存</button></footer>
             </aside>
@@ -88,12 +90,13 @@
     </div>
     @if (_tagManager)
     {
-        <section class="scene-subdialog" role="dialog" aria-modal="true" aria-label="作品共通タグ管理" inert="@(_confirmation is not null)"><header><h3>作品共通タグ</h3><button class="secondary-button scene-icon" title="閉じる" aria-label="作品タグ管理を閉じる" @onclick="CloseTags" disabled="@_busy"><CaptureIcon Name="Close" /></button></header><p class="scene-muted">@Title</p>
+        <section class="scene-subdialog" role="dialog" aria-modal="true" aria-label="作品共通タグ管理" inert="@(_confirmation is not null)"><header><h3>作品共通タグ</h3>
+            @if (_error is not null) { <CaptureFailureDetails Label="タグの操作失敗" Detail="@_error" /> }
+            <button class="secondary-button scene-icon" title="閉じる" aria-label="作品タグ管理を閉じる" @onclick="CloseTags" disabled="@_busy"><CaptureIcon Name="Close" /></button></header><p class="scene-muted">@Title</p>
             <label>作品タグ<select aria-label="管理する作品タグ" value="@_managedTagId" @onchange="ChangeManagedTag" disabled="@_busy"><option value="0">新しいタグ</option>@foreach (var tag in _snapshot?.Tags ?? []) { <option value="@tag.Id">@tag.Name</option> }</select></label>
             <label>@(_managedTagId == 0 ? "新しい作品タグ名" : "タグ名")<input aria-label="作品タグ名" @bind="_tagName" @bind:event="oninput" disabled="@_busy" list="scene-speaker-tags" /></label><datalist id="scene-speaker-tags">@foreach (var speaker in _speakers) { <option value="@speaker"></option> }</datalist>
             <label>記録済み話者<select aria-label="作品タグにする話者" @onchange="SelectTagSpeaker" disabled="@_busy"><option value="">話者を選択</option>@foreach (var speaker in _speakers) { <option>@speaker</option> }</select></label>
             <p class="scene-muted">ここでの変更は作品全体へ即時保存されます。タグを削除しても本文・区間・場面は残ります。</p>
-            <div class="scene-tag-feedback" aria-live="polite">@if (_error is not null) { <span class="scene-error" role="alert">@_error</span> } else { <span>@_notice</span> }</div>
             <div class="scene-tag-actions"><button class="scene-delete" @onclick="ConfirmDeleteTag" disabled="@(_busy || _managedTagId == 0)">タグを削除…</button><button class="launch-button" @onclick="SaveTagAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_tagName))">@(_managedTagId == 0 ? "作品に追加" : "改名を保存")</button></div>
         </section>
     }
@@ -101,7 +104,7 @@
     {
         <section class="scene-subdialog scene-confirm" role="alertdialog" aria-modal="true" aria-labelledby="scene-confirm-title" aria-describedby="scene-confirm-impact"><h3 id="scene-confirm-title">@confirmation</h3><p id="scene-confirm-impact">@_confirmationDetail</p><div class="scene-tag-actions"><button class="secondary-button" @onclick="CancelConfirmation" disabled="@_busy">キャンセル</button><button class="launch-button" @onclick="ConfirmAsync" disabled="@_busy">@_confirmationActionLabel</button></div></section>
     }
-    @if (_busy) { <div class="scene-busy" role="status"><span>処理中…</span></div> }
+    <span class="scene-status" role="status">@(_busy ? "処理中…" : _notice)</span>
 </section></div>
 
 @code {

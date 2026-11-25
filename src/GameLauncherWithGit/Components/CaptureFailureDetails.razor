@@ -1,0 +1,20 @@
+<span class="capture-failure-announcement" role="status">@Label</span>
+<button type="button" class="secondary-button capture-failure-trigger" aria-label="@($"{Label}の詳細")" aria-haspopup="dialog" popovertarget="@_id">
+    <CaptureIcon Name="Warning" />@Label
+</button>
+<section @key="Detail" id="@_id" class="capture-failure-popover" popover="auto" role="dialog" aria-labelledby="@TitleId" aria-describedby="@DetailId"
+         data-play-recording-error-details="@(Web ? "" : null)" @onkeydown:stopPropagation="true">
+    <h3 id="@TitleId">@Label</h3>
+    <p id="@DetailId">@Detail</p>
+    <button type="button" class="secondary-button" popovertarget="@_id" popovertargetaction="hide" autofocus>閉じる</button>
+</section>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = "";
+    [Parameter, EditorRequired] public string Detail { get; set; } = "";
+    [Parameter] public bool Web { get; set; }
+
+    private readonly string _id = $"capture-failure-{Guid.NewGuid():N}";
+    private string TitleId => $"{_id}-title";
+    private string DetailId => $"{_id}-detail";
+}

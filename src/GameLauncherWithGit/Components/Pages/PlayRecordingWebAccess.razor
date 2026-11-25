@@ -5,26 +5,18 @@
 
 <PageTitle>記録Webの接続許可</PageTitle>
 
-<section class="play-web-access">
+<section class="play-web-access" aria-busy="@(_busy ? "true" : "false")">
     <header>
         <a class="secondary-button utility-icon-button" href="/" title="ゲーム一覧に戻る" aria-label="ゲーム一覧に戻る"><CaptureIcon Name="Back" /></a>
         <h1>記録Webの接続許可</h1>
     </header>
 
-    @if (_error is not null)
-    {
-        <p class="play-web-error" role="alert">@_error</p>
-    }
     @if (_games is null)
     {
-        @if (_busy)
-        {
-            <p role="status">ゲームを読み込み中…</p>
-        }
-        else
-        {
-            <div class="play-web-actions"><button type="button" class="secondary-button" @onclick="RefreshAsync"><CaptureIcon Name="Refresh" />再読み込み</button></div>
-        }
+        <div class="play-web-actions">
+            <button type="button" class="secondary-button" @onclick="RefreshAsync" disabled="@_busy"><CaptureIcon Name="Refresh" />再読み込み</button>
+            @if (_origin is null) { @ErrorDetails }
+        </div>
     }
     else
     {
@@ -53,12 +45,15 @@
             </label>
             <div class="play-web-actions">
                 <button type="button" class="launch-button" @onclick="StartAsync" disabled="@(!CanIssue || string.IsNullOrWhiteSpace(_serveUrl))"><CaptureIcon Name="Play" />Web接続を開始</button>
+                @ErrorDetails
             </div>
         }
     }
 
     @if (_origin is not null)
     {
+        <div class="play-web-active">
+        @ErrorDetails
         <dl class="play-web-details">
             <dt tabindex="-1" @ref="_connectionStatus">接続先</dt>
             <dd><code>@_origin.AbsoluteUri</code></dd>
@@ -70,6 +65,7 @@
                 <dd><code>@connectionCode</code></dd>
             }
         </dl>
+        </div>
         <div class="play-web-actions">
             <button type="button" class="launch-button" @onclick="IssueAsync" disabled="@(!CanIssue)">
                 <CaptureIcon Name="@(_permission is not null && _permission.GameId == _selectedGameId ? "Refresh" : "Link")" />@(_permission is null ? "接続コードを発行" : _permission.GameId == _selectedGameId ? "旧アクセスを失効してコードを再発行" : "旧アクセスを失効してゲームを変更")
@@ -79,19 +75,20 @@
         </div>
     }
 
-    @if (_busy && _games is not null)
-    {
-        <p role="status">処理中…</p>
-    }
 </section>
 
 @code {
+    private RenderFragment ErrorDetails => @<div class="play-web-failure">
+        @if (_error is not null) { <CaptureFailureDetails Label="@_errorLabel" Detail="@_error" /> }
+    </div>;
+
     private readonly CancellationTokenSource _dispose = new();
     private IReadOnlyList<GameCardItem>? _games;
     private PlayRecordingWebPermission? _permission;
     private Task? _monitor;
     private Uri? _origin;
     private string? _error;
+    private string _errorLabel = "";
     private string _selectedGameId = "";
     private string _serveUrl = "";
     private bool _busy;
@@ -109,7 +106,7 @@
         await RefreshAsync();
     }
 
-    private Task RefreshAsync() => RunAsync(async () => _games = await Host.GetEligibleGamesAsync(), "ゲームの読み込みに失敗しました。");
+    private Task RefreshAsync() => RunAsync(async () => _games = await Host.GetEligibleGamesAsync(), "ゲームの取得失敗", "ゲームの読み込みに失敗しました。");
 
     private Task StartAsync() => RunAsync(async () =>
     {
@@ -117,11 +114,11 @@
             throw new ArgumentException("Tailscale ServeのHTTPS URLを指定してください。");
         await Host.StartAsync(_selectedGameId, origin);
         _focusAfterChange = true;
-    }, "記録Webの開始に失敗しました。");
+    }, "接続開始失敗", "記録Webの開始に失敗しました。");
 
-    private Task IssueAsync() => RunAsync(async () => await Host.IssueAsync(_selectedGameId), "接続コードを発行できませんでした。");
-    private Task RevokeAsync() => RunAsync(async () => { await Host.RevokeAsync(); _focusAfterChange = true; }, "接続許可を失効できませんでした。");
-    private Task StopAsync() => RunAsync(async () => { await Host.StopAsync(); _focusAfterChange = true; }, "記録Webを停止できませんでした。");
+    private Task IssueAsync() => RunAsync(async () => await Host.IssueAsync(_selectedGameId), "コード発行失敗", "接続コードを発行できませんでした。");
+    private Task RevokeAsync() => RunAsync(async () => { await Host.RevokeAsync(); _focusAfterChange = true; }, "許可の失効失敗", "接続許可を失効できませんでした。");
+    private Task StopAsync() => RunAsync(async () => { await Host.StopAsync(); _focusAfterChange = true; }, "接続停止失敗", "記録Webを停止できませんでした。");
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -131,11 +128,12 @@
         if (destination.Id is not null) await destination.FocusAsync();
     }
 
-    private async Task RunAsync(Func<Task> operation, string failure)
+    private async Task RunAsync(Func<Task> operation, string failureLabel, string failure)
     {
         if (_busy) return;
         _busy = true;
         _error = null;
+        _errorLabel = failureLabel;
         try { await operation(); }
         catch (ArgumentException ex) when (ex.ParamName == "origin") { _error = "Tailscale ServeのHTTPS URL（パスなし）を指定してください。"; }
         catch (ArgumentException ex) { _error = ex.Message; }

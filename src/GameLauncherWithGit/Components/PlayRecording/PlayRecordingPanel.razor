@@ -17,7 +17,7 @@
         @if (_unauthorized)
         {
             <section class="play-panel play-stack" aria-label="接続許可">
-                <p role="alert">この画面では接続を確認できません。</p>
+                <div><CaptureFailureDetails Label="接続失効" Detail="この画面では接続を確認できません。ページを再読込してください。" Web="true" /></div>
                 <div><button type="button" class="play-labeled-button" @onclick="ReloadPage"><CaptureIcon Name="Refresh" />ページを再読込</button></div>
             </section>
         }
@@ -26,7 +26,7 @@
             @if (_statusError)
             {
                 <div class="play-stack">
-                    <p class="play-error" role="alert">記録対象を読み込めませんでした。</p>
+                    <div><CaptureFailureDetails Label="記録の取得失敗" Detail="記録対象を読み込めませんでした。再読込してください。" Web="true" /></div>
                     <div><button type="button" class="play-labeled-button" @onclick="RefreshAsync" disabled="@_busy"><CaptureIcon Name="Refresh" />再読込</button></div>
                 </div>
             }
@@ -43,24 +43,30 @@
         }
         else
         {
-            <div class="play-workspace" aria-busy="@Bool(_busy)" @key="(_state?.Target, _displayedConnectionVersion)">
+            <div class="play-workspace" data-play-recording-workspace aria-busy="@Bool(_busy)" @key="(_state?.Target, _displayedConnectionVersion)">
                 <section class="play-controls play-stack" aria-label="プレイ中の操作">
                     <div class="play-panel play-stack">
-                        <h2>記録操作</h2>
+                        <div class="play-control-heading">
+                            <h2>記録操作</h2>
+                            @if (_actionError is { } error && !_statusError)
+                            {
+                                <div class="play-control-result"><CaptureFailureDetails Label="@error.Label" Detail="@error.Detail" Web="true" /></div>
+                            }
+                            else if (_screenshotResult is { } shot && _state is { } state)
+                            {
+                                var target = ForDisplay(state.Target);
+                                <div class="play-control-result">
+                                    <span class="capture-failure-announcement" role="status">ゲーム画像を保存しました。</span>
+                                    <button type="button" class="play-labeled-button" aria-label="撮影した本文・画像へ" disabled="@ControlsDisabled" @onclick="() => OpenCapturedEventAsync(target, shot)"><CaptureIcon Name="Image" />撮影結果</button>
+                                </div>
+                            }
+                        </div>
                         @RecordingControls
                         @RangeControls
                     </div>
-                    @if (_actionError is not null)
-                    {
-                        <p class="play-error" role="alert">@_actionError</p>
-                    }
-                    @if (_notice is not null)
-                    {
-                        <p class="play-status" role="status">@_notice</p>
-                    }
                     @if (_statusError)
                     {
-                        <p class="play-error" role="alert">PCの記録状態を確認できません。</p>
+                        <div><CaptureFailureDetails Label="記録の取得失敗" Detail="PCの記録状態を確認できません。再読込してください。" Web="true" /></div>
                         <div><button type="button" class="play-labeled-button" @onclick="RefreshAsync" disabled="@_busy"><CaptureIcon Name="Refresh" />再読込</button></div>
                     }
                 </section>
@@ -113,12 +119,25 @@
                 else if (state.Recording)
                 {
                     <button type="button" class="play-icon-button" @ref="_pauseButton" title="記録を一時停止" aria-label="記録を一時停止" disabled="@ControlsDisabled" @onclick="() => PauseRecordingAsync(target)"><CaptureIcon Name="Pause" /></button>
-                    <button type="button" class="play-labeled-button" aria-label="ゲームを撮影" disabled="@(ControlsDisabled || !state.CanTakeScreenshot)" @onclick="() => TakeScreenshotAsync(target)"><CaptureIcon Name="Camera" />撮影</button>
-                    <button type="button" class="play-labeled-button" disabled="@ControlsDisabled" @onclick="() => BreakLivePathAsync(target)"><CaptureIcon Name="PathBreak" />次の本文から別経路</button>
+                    <button type="button" class="play-labeled-button" aria-label="ゲームを撮影" @ref="_screenshotButton" disabled="@(ControlsDisabled || !state.CanTakeScreenshot)" @onclick="() => TakeScreenshotAsync(target)"><CaptureIcon Name="Camera" />撮影</button>
                 }
-                @if (state.CanFinish && !_confirmFinish)
+                @if (state.Recording || state.CanFinish)
                 {
-                    <button type="button" class="play-labeled-button" @ref="_finishButton" disabled="@ControlsDisabled" @onclick="OpenFinishConfirmation"><CaptureIcon Name="Stop" />記録を終了…</button>
+                    <button type="button" class="play-labeled-button" @ref="_finishButton" disabled="@ControlsDisabled" popovertarget="play-recording-tools" aria-haspopup="dialog"><CaptureIcon Name="Settings" />操作</button>
+                    <section id="play-recording-tools" class="play-row-actions" popover="auto" role="dialog" aria-label="記録中のその他の操作">
+                        <h3>記録中のその他の操作</h3>
+                        <div class="play-actions">
+                            @if (state.Recording && !state.Paused)
+                            {
+                                <button type="button" class="play-labeled-button" popovertarget="play-recording-tools" popovertargetaction="hide" disabled="@ControlsDisabled" @onclick="() => BreakLivePathAsync(target)"><CaptureIcon Name="PathBreak" />次の本文から別経路</button>
+                            }
+                            @if (state.CanFinish && !_confirmFinish)
+                            {
+                                <button type="button" class="play-labeled-button" popovertarget="play-recording-tools" popovertargetaction="hide" disabled="@ControlsDisabled" @onclick="OpenFinishConfirmation"><CaptureIcon Name="Stop" />記録を終了…</button>
+                            }
+                            <button type="button" popovertarget="play-recording-tools" popovertargetaction="hide">閉じる</button>
+                        </div>
+                    </section>
                 }
             </div>
             @if (_confirmFinish && state.CanFinish)
@@ -131,10 +150,6 @@
                     </div>
                 </div>
             }
-            @if (_screenshotResult is not null)
-            {
-                @ScreenshotResult
-            }
         }
     </div>;
 
@@ -142,31 +157,22 @@
         @if (_state is { } state)
         {
             var target = ForDisplay(state.Target);
-            @if (state.PendingRange is not null)
-            {
-                <p class="play-status" role="status">区間の末尾を固定済み</p>
-            }
-            else if (state.RangeStart is not null)
-            {
-                <p class="play-status" role="status" @ref="_rangeStatus" tabindex="-1">区間を記録中</p>
-                <div class="play-actions">
+            <div class="play-actions play-range-controls">
+                @if (state.PendingRange is not null)
+                {
+                    <p class="play-status" role="status">区間の末尾を固定済み</p>
+                }
+                else if (state.RangeStart is not null)
+                {
                     <button type="button" class="primary play-labeled-button" disabled="@(ControlsDisabled || !state.CanEndRange)" @onclick="() => EndRangeAsync(target)"><CaptureIcon Name="End" />末尾を固定</button>
                     <button type="button" class="play-icon-button" title="区間を取り消す" aria-label="区間を取り消す" disabled="@ControlsDisabled" @onclick="() => CancelRangeAsync(target)"><CaptureIcon Name="Close" /></button>
-                </div>
-            }
-            else if (state.Recording && !state.Paused)
-            {
-                <div class="play-actions"><button type="button" class="primary play-labeled-button" @ref="_startRangeButton" disabled="@(ControlsDisabled || !state.CanStartRange || _rangeDraft is not null)" @onclick="() => StartRangeAsync(target)"><CaptureIcon Name="Start" />区間を開始</button></div>
-            }
-        }
-    </div>;
-
-    private RenderFragment ScreenshotResult => @<div class="play-selection play-stack" aria-label="ゲームの撮影結果">
-        @if (_screenshotResult is { } shot && _state is { } state)
-        {
-            var target = ForDisplay(state.Target);
-            <p class="play-status" role="status">ゲーム画像を保存しました。</p>
-            <div><button type="button" class="play-labeled-button" disabled="@ControlsDisabled" @onclick="() => OpenCapturedEventAsync(target, shot)"><CaptureIcon Name="Image" />撮影した本文・画像へ</button></div>
+                    <p class="play-status" role="status" @ref="_rangeStatus" tabindex="-1">区間を記録中</p>
+                }
+                else if (state.Recording && !state.Paused)
+                {
+                    <button type="button" class="primary play-labeled-button" @ref="_startRangeButton" disabled="@(ControlsDisabled || !state.CanStartRange || _rangeDraft is not null)" @onclick="() => StartRangeAsync(target)"><CaptureIcon Name="Start" />区間を開始</button>
+                }
+            </div>
         }
     </div>;
 
@@ -182,8 +188,12 @@
 
     private RenderFragment TextPane => @<section class="play-panel play-stack" aria-labelledby="play-text-title">
         @{ var target = ForDisplay(_state!.Target); }
-        <div class="play-toolbar">
+        <div class="play-toolbar play-text-toolbar">
             <h2 id="play-text-title" @ref="_textHeading" tabindex="-1">本文</h2>
+            @if (_textError && _galleryItem is null)
+            {
+                <div class="play-text-failure"><CaptureFailureDetails Label="本文の取得失敗" Detail="本文を更新して再試行してください。" Web="true" /></div>
+            }
             <div class="play-actions">
                 <button type="button" aria-pressed="@Bool(_latest && _textRangeId is null)" disabled="@_busy" @onclick="ShowLatestAsync">直近</button>
                 <button type="button" aria-pressed="@Bool(!_latest && _textRangeId is null)" disabled="@_busy" @onclick="ShowHistoryAsync">過去</button>
@@ -193,12 +203,12 @@
         {
             <p>区間：@RangeName(rangeId)</p>
         }
-        @if (_textItems is { Count: > 0 } && _galleryItem is null)
+        @if (_galleryItem is null)
         {
             <div class="play-actions">
-                @if (_textRangeId is null)
+                @if (_textRangeId is null && _textItems is { Count: > 0 })
                 {
-                    <button type="button" class="play-labeled-button" @ref="_pickRangeButton" aria-pressed="@Bool(_pickingRange)" disabled="@_busy" @onclick="ToggleRangePick"><CaptureIcon Name="Pick" />本文から区間を選ぶ</button>
+                    <button type="button" class="play-labeled-button" @ref="_pickRangeButton" aria-pressed="@Bool(_pickingRange)" disabled="@(_busy || _textError)" @onclick="ToggleRangePick"><CaptureIcon Name="Pick" />本文から区間を選ぶ</button>
                 }
                 <button type="button" class="play-icon-button" title="本文を更新" aria-label="本文を更新" disabled="@_busy" @onclick="RefreshTextAsync"><CaptureIcon Name="Refresh" /></button>
             </div>
@@ -206,14 +216,14 @@
         @if (_pickingRange)
         {
             <div class="play-stack play-selection">
-                <p>開始：@(_first?.Text ?? "未選択")</p>
-                <p>終了：@(_last?.Text ?? "未選択")</p>
-                @if (_first is not null && _last is not null && !TextRangeValid)
-                {
-                    <p class="play-error" role="status">開始より後の終了位置を選んでください。</p>
-                }
+                <p title="@_first?.Text">開始：@(_first?.Text ?? "未選択")</p>
+                <p title="@_last?.Text">終了：@(_last?.Text ?? "未選択")</p>
                 <div class="play-actions">
                     <button type="button" class="play-labeled-button" disabled="@(_busy || !TextRangeValid || _rangeDraft is not null)" @onclick="() => PrepareTextRangeAsync(target)"><CaptureIcon Name="Save" />区間名を入力</button>
+                    @if (_first is not null && _last is not null && !TextRangeValid)
+                    {
+                        <CaptureFailureDetails Label="区間指定エラー" Detail="開始より後の終了位置を選んでください。" Web="true" />
+                    }
                 </div>
             </div>
         }
@@ -221,30 +231,28 @@
         {
             @Gallery
         }
-        else if (_textError)
-        {
-            <p class="play-error" role="alert">本文を読み込めませんでした。</p>
-            <div><button type="button" class="play-labeled-button" @onclick="RefreshTextAsync" disabled="@_busy"><CaptureIcon Name="Refresh" />本文を再読込</button></div>
-        }
         else if (_textItems is null)
         {
-            <p role="status">本文を読み込み中…</p>
+            @if (!_textError) { <p role="status">本文を読み込み中…</p> }
         }
         else if (_textItems.Count == 0)
         {
-            <p>本文はありません。</p>
+            @if (!_textError) { <p>本文はありません。</p> }
         }
         else
         {
             <ul class="play-list">
                 @foreach (var item in _textItems)
                 {
+                    var rowActionsId = $"play-row-actions-{item.Id}";
                     <li class="play-item" @key="item.Id">
-                        <div class="play-toolbar">
-                            <small><time datetime="@item.ReceivedAt.ToString("O")">@item.ReceivedAt.ToLocalTime().ToString("M/d HH:mm:ss")</time> · @ClassificationName(item.Kind)</small>
-                            @if (!string.IsNullOrWhiteSpace(item.Speaker)) { <strong>@item.Speaker</strong> }
-                        </div>
-                        <p>@item.Text</p>
+                        @if (_editItem?.Id == item.Id || _pickingRange)
+                        {
+                            <div class="play-row-content">
+                                @if (!string.IsNullOrWhiteSpace(item.Speaker)) { <strong>@item.Speaker</strong> }
+                                <p>@item.Text</p>
+                            </div>
+                        }
                         @if (_editItem?.Id == item.Id)
                         {
                             @TextEditor
@@ -252,20 +260,32 @@
                         else if (_pickingRange)
                         {
                             <div class="play-actions">
-                                <button type="button" class="play-icon-button" title="ここから" aria-label="ここから" aria-pressed="@Bool(_first?.Id == item.Id)" disabled="@_busy" @onclick="() => PickRangeEdge(item, true)"><CaptureIcon Name="Start" /></button>
-                                <button type="button" class="play-icon-button" title="ここまで" aria-label="ここまで" aria-pressed="@Bool(_last?.Id == item.Id)" disabled="@_busy" @onclick="() => PickRangeEdge(item, false)"><CaptureIcon Name="End" /></button>
+                                <button type="button" class="play-icon-button" title="ここから" aria-label="ここから" aria-pressed="@Bool(_first?.Id == item.Id)" disabled="@(_busy || _textError)" @onclick="() => PickRangeEdge(item, true)"><CaptureIcon Name="Start" /></button>
+                                <button type="button" class="play-icon-button" title="ここまで" aria-label="ここまで" aria-pressed="@Bool(_last?.Id == item.Id)" disabled="@(_busy || _textError)" @onclick="() => PickRangeEdge(item, false)"><CaptureIcon Name="End" /></button>
                             </div>
                         }
                         else
                         {
-                            <div class="play-actions">
-                                <button type="button" class="play-icon-button" @ref="_rowButtons[item.Id].Gallery" title="画像を見る" aria-label="画像を見る" disabled="@_busy" @onclick="() => OpenGalleryAsync(target, item)"><CaptureIcon Name="Image" /></button>
-                                @if (_textRangeId is null)
-                                {
-                                    <button type="button" class="play-icon-button" @ref="_rowButtons[item.Id].Edit" title="話者・分類を訂正" aria-label="話者・分類を訂正" disabled="@_busy" @onclick="() => EditTextAsync(target, item)"><CaptureIcon Name="Edit" /></button>
-                                    <button type="button" class="play-labeled-button" disabled="@_busy" @onclick="() => CutPathAsync(target, item)"><CaptureIcon Name="PathBreak" />ここから別経路</button>
-                                }
-                            </div>
+                            <button type="button" class="play-row-content play-row-select" popovertarget="@rowActionsId" aria-haspopup="dialog" @ref="_rowButtons[item.Id].Open" disabled="@(_busy || _textError)">
+                                @if (!string.IsNullOrWhiteSpace(item.Speaker)) { <strong>@item.Speaker</strong> }
+                                <span>@item.Text</span>
+                            </button>
+                            <section id="@rowActionsId" class="play-row-actions" popover="auto" role="dialog" aria-label="この本文の操作">
+                                <div class="play-stack">
+                                    <h3>この本文の操作</h3>
+                                    <p>@item.Text</p>
+                                    <small><time datetime="@item.ReceivedAt.ToString("O")">@item.ReceivedAt.ToLocalTime().ToString("M/d HH:mm:ss")</time> · @ClassificationName(item.Kind)</small>
+                                    <div class="play-actions">
+                                        <button type="button" class="play-labeled-button" popovertarget="@rowActionsId" popovertargetaction="hide" autofocus disabled="@(_busy || _textError)" @onclick="() => OpenGalleryAsync(target, item)"><CaptureIcon Name="Image" />画像を見る</button>
+                                        @if (_textRangeId is null)
+                                        {
+                                            <button type="button" class="play-labeled-button" popovertarget="@rowActionsId" popovertargetaction="hide" disabled="@(_busy || _textError)" @onclick="() => EditTextAsync(target, item)"><CaptureIcon Name="Edit" />話者・分類を訂正</button>
+                                            <button type="button" class="play-labeled-button" popovertarget="@rowActionsId" popovertargetaction="hide" disabled="@(_busy || _textError)" @onclick="() => CutPathAsync(target, item)"><CaptureIcon Name="PathBreak" />ここから別経路</button>
+                                        }
+                                        <button type="button" popovertarget="@rowActionsId" popovertargetaction="hide">閉じる</button>
+                                    </div>
+                                </div>
+                            </section>
                         }
                     </li>
                 }
@@ -273,8 +293,8 @@
             @if (_nextBefore is not null || _olderPages.Count > 0)
             {
                 <div class="play-actions" aria-label="本文のページ">
-                    <button type="button" class="play-labeled-button" disabled="@(_busy || _olderPages.Count == 0)" @onclick="() => PageTextAsync(-1)"><CaptureIcon Name="Previous" />新しい本文</button>
-                    <button type="button" class="play-labeled-button" disabled="@(_busy || _nextBefore is null)" @onclick="() => PageTextAsync(1)"><CaptureIcon Name="Next" />古い本文</button>
+                    <button type="button" class="play-labeled-button" disabled="@(_busy || _textError || _olderPages.Count == 0)" @onclick="() => PageTextAsync(-1)"><CaptureIcon Name="Previous" />新しい本文</button>
+                    <button type="button" class="play-labeled-button" disabled="@(_busy || _textError || _nextBefore is null)" @onclick="() => PageTextAsync(1)"><CaptureIcon Name="Next" />古い本文</button>
                 </div>
             }
         }
@@ -288,10 +308,7 @@
                 @foreach (var label in LabelChoices) { <option value="@label.Id">@ClassificationName(label.Kind, label.Name)</option> }
             </select>
         </label>
-        @if (!EditingNarration)
-        {
-            <label>話者 <input @bind="_editSpeaker" @bind:event="oninput" disabled="@_busy" /></label>
-        }
+        <label>話者 <input @bind="_editSpeaker" @bind:event="oninput" disabled="@(_busy || EditingNarration)" /></label>
         <div class="play-actions">
             <button type="button" disabled="@_busy" @onclick="CancelTextEdit">取消</button>
             <button type="button" class="primary play-labeled-button" aria-label="訂正を保存" disabled="@(_busy || !TextLabelChanged(item) && !TextSpeakerChanged(item))" @onclick="() => SaveTextAsync(target, item)"><CaptureIcon Name="Save" />保存</button>
@@ -303,7 +320,7 @@
         @if (_galleryText is not null) { <p>@_galleryText</p> }
         @if (_galleryError)
         {
-            <p class="play-error" role="alert">画像を読み込めませんでした。</p>
+            <div><CaptureFailureDetails Label="画像の取得失敗" Detail="画像を読み込めませんでした。画像を再読込してください。" Web="true" /></div>
             <div><button type="button" class="play-labeled-button" @onclick="ReloadGalleryAsync" disabled="@_busy"><CaptureIcon Name="Refresh" />画像を再読込</button></div>
         }
         else if (_galleryCount == 0)
@@ -335,7 +352,7 @@
         <div class="play-toolbar"><h2 id="play-ranges-title">保存した区間</h2><button type="button" class="play-icon-button" title="区間を更新" aria-label="区間を更新" disabled="@_busy" @onclick="RefreshRangesAsync"><CaptureIcon Name="Refresh" /></button></div>
         @if (_rangesError)
         {
-            <p class="play-error" role="alert">区間を読み込めませんでした。</p>
+            <div><CaptureFailureDetails Label="区間の取得失敗" Detail="区間を読み込めませんでした。区間を更新してください。" Web="true" /></div>
         }
         else if (_ranges is null)
         {
@@ -365,7 +382,7 @@
     private RenderFragment PathsPane => @<section class="play-panel play-stack" aria-labelledby="play-paths-title">
         @{ var target = ForDisplay(_state!.Target); }
         <div class="play-toolbar"><h2 id="play-paths-title">観測した経路</h2><button type="button" class="play-icon-button" title="経路を更新" aria-label="経路を更新" disabled="@_busy" @onclick="RefreshPathsAsync"><CaptureIcon Name="Refresh" /></button></div>
-        @if (_pathsError) { <p class="play-error" role="alert">経路を読み込めませんでした。</p> }
+        @if (_pathsError) { <div><CaptureFailureDetails Label="経路の取得失敗" Detail="経路を読み込めませんでした。経路を更新してください。" Web="true" /></div> }
         else if (_graph is null) { <p role="status">経路を読み込み中…</p> }
         else if (_graph.Occurrences.Count == 0) { <p>観測した経路はありません。</p> }
         else
@@ -379,7 +396,7 @@
         <div class="play-toolbar"><h2 id="play-scenes-title">手動場面</h2><button type="button" class="play-icon-button" title="場面を更新" aria-label="場面を更新" disabled="@_busy" @onclick="RefreshScenesAsync"><CaptureIcon Name="Refresh" /></button></div>
         @if (_scenesError)
         {
-            <p class="play-error" role="alert">場面を読み込めませんでした。</p>
+            <div><CaptureFailureDetails Label="場面の取得失敗" Detail="場面を読み込めませんでした。場面を更新してください。" Web="true" /></div>
         }
         else if (_sceneFlow is null)
         {
@@ -413,8 +430,9 @@
                     <CaptureTagsEditor Label="場面タグ" @bind-Tags="draft.Tags" AvailableTags="@SceneTags" AllowCreate="false" Disabled="_busy" />
                     <fieldset class="play-related" disabled="@_busy">
                         <legend>対応する区間</legend>
-                        @if (_rangesError) { <p class="play-error" role="alert">区間を読み込めませんでした。</p> }
-                        else if (_ranges is { Count: > 0 })
+                        @if (_rangesError) { <CaptureFailureDetails Label="区間の取得失敗" Detail="対応する区間を読み込めませんでした。場面の更新から再試行してください。" Web="true" /> }
+                        else if (_ranges is null) { <p role="status">区間を読み込み中…</p> }
+                        else if (_ranges.Count > 0)
                         {
                             @foreach (var range in _ranges)
                             {
