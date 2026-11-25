@@ -14,6 +14,8 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Services/GitService.cs" Link="GitService.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Services/RepositoryWatcherService.cs" Link="RepositoryWatcherService.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Services/TraySyncTargets.cs" Link="TraySyncTargets.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Models/GitCommandResult.cs" Link="GitCommandResult.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/IGitService.cs" Link="IGitService.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/ILogAccessService.cs" Link="ILogAccessService.cs" />
@@ -21,10 +23,16 @@
     <Compile Include="../../src/GameLauncherWithGit/Application/Models/AppSettings.cs" Link="AppSettings.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Application/Models/RepositorySyncHistory*.cs" Link="%(Filename)%(Extension)" />
     <Compile Include="../../src/GameLauncherWithGit/Application/Abstractions/IAppSettingsService.cs" Link="IAppSettingsService.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Application/Services/AppSettingsService.cs" Link="AppSettingsService.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Application/Services/AppDataPaths.cs" Link="AppDataPaths.cs" />
+    <Compile Include="../GameLauncherWithGit.Capture.Tests/Fixtures/NoMauiFileSystem.cs" Link="NoMauiFileSystem.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Application/Abstractions/IRepositoryStateStore.cs" Link="IRepositoryStateStore.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Application/Abstractions/ISyncOrchestrator.cs" Link="ISyncOrchestrator.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Application/Services/RepositoryStateStore.cs" Link="RepositoryStateStore.cs" />
-    <Compile Include="../../src/GameLauncherWithGit/Application/Services/SyncOrchestrator.cs" Link="SyncOrchestrator.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Application/Services/SyncOrchestrator*.cs" Link="%(Filename)%(Extension)" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/IGameLibraryStore.cs" Link="IGameLibraryStore.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Application/Models/GameCard*.cs" Link="%(Filename)%(Extension)" />
+    <Compile Include="../../src/GameLauncherWithGit/Application/Models/GameSaveLinkItem.cs" Link="GameSaveLinkItem.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Domain/Models/RepositorySyncState.cs" Link="RepositorySyncState.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/IRepositoryWatcherService.cs" Link="IRepositoryWatcherService.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/IRepositorySyncHistoryStore.cs" Link="IRepositorySyncHistoryStore.cs" />

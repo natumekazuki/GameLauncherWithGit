@@ -8,6 +8,38 @@ public sealed record GitCommandResult(
 {
 	public bool IsSuccess => ExitCode == 0;
 
+	internal bool HasPullConflict()
+	{
+		var text = $"{StandardError}\n{StandardOutput}";
+		return text.Contains("CONFLICT", StringComparison.OrdinalIgnoreCase)
+			|| text.Contains("Resolve all conflicts manually", StringComparison.OrdinalIgnoreCase)
+			|| text.Contains("could not apply", StringComparison.OrdinalIgnoreCase)
+			|| text.Contains("fix conflicts and then run", StringComparison.OrdinalIgnoreCase)
+			|| text.Contains("競合", StringComparison.OrdinalIgnoreCase);
+	}
+
+	internal bool HasPullConfigurationError()
+	{
+		var text = $"{StandardError}\n{StandardOutput}";
+		return text.Contains("Cannot rebase onto multiple branches", StringComparison.OrdinalIgnoreCase)
+			|| text.Contains("There is no tracking information for the current branch", StringComparison.OrdinalIgnoreCase)
+			|| text.Contains("no upstream configured", StringComparison.OrdinalIgnoreCase)
+			|| text.Contains("upstream branch", StringComparison.OrdinalIgnoreCase)
+			|| text.Contains("Please specify which branch you want to rebase against", StringComparison.OrdinalIgnoreCase)
+			|| text.Contains("Updating an unborn branch with changes added to the index", StringComparison.OrdinalIgnoreCase);
+	}
+
+	internal GitCommandResult ProtectCadenceIncoming(bool pull)
+	{
+		if (IsSuccess) return new(0, "", "");
+		if (ExitCode == -2) return new(-2, "", "", "Git 実行がキャンセルされました。");
+		if (pull && HasPullConflict())
+			return new(ExitCode, "", "CONFLICT", "取り込み中に競合が発生しました。Git で競合を解消してから同期を再開してください。");
+		if (pull && HasPullConfigurationError())
+			return new(ExitCode, "", "no upstream configured", "取り込み先の設定を確認してから同期を再開してください。");
+		return new(ExitCode, "", "", "リモートから取得できませんでした。Git の取得先設定・認証・接続を確認してください。");
+	}
+
 	public string GetFailureReason()
 	{
 		if (!string.IsNullOrWhiteSpace(UserMessage))

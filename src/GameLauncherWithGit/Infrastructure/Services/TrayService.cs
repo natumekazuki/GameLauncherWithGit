@@ -251,12 +251,7 @@ public sealed class TrayService : ITrayService, IDisposable
 		{
 			var syncOrchestrator = _serviceProvider.GetRequiredService<ISyncOrchestrator>();
 			var games = await _gameLibraryStore.GetAllAsync();
-			var repositories = games
-				.Select(static game => NormalizeRepositoryPath(game.RelatedRepositoryPath))
-				.Where(static path => path is not null)
-				.Select(static path => path!)
-				.Distinct(StringComparer.OrdinalIgnoreCase)
-				.ToArray();
+			var repositories = TraySyncTargets.GetDistinctRepositories(games);
 
 			if (repositories.Length == 0)
 			{
@@ -347,24 +342,6 @@ public sealed class TrayService : ITrayService, IDisposable
 		catch (Exception ex)
 		{
 			_logger.LogWarning(ex, "Failed to append tray error log.");
-		}
-	}
-
-	private static string? NormalizeRepositoryPath(string? path)
-	{
-		if (string.IsNullOrWhiteSpace(path))
-		{
-			return null;
-		}
-
-		try
-		{
-			var normalized = Path.GetFullPath(path.Trim());
-			return Directory.Exists(normalized) ? normalized : null;
-		}
-		catch
-		{
-			return null;
 		}
 	}
 

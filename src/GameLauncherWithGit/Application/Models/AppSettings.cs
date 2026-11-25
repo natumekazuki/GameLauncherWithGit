@@ -15,6 +15,13 @@ public sealed record AppSettings(
 	uint ScreenshotModifiers = 5,
 	uint ScreenshotVirtualKey = 0x53)
 {
+	/// <summary>Minutes from the first pending worktree change; zero commits when changes are processed.</summary>
+	public int AutoCommitIntervalMinutes { get; init; }
+
+	/// <summary>Minutes from the first pending outgoing commit; zero pushes when it is processed.</summary>
+	public int AutoPushIntervalMinutes { get; init; }
+
+	public const int AutoSyncIntervalMinutesMax = 1440;
 	public const int GameCardSizePercentMin = 10;
 	public const int GameCardSizePercentMax = 500;
 	public const int DefaultWindowWidth = 1280;
@@ -64,6 +71,8 @@ public sealed record AppSettings(
 		return this with
 		{
 			SyncDebounceSeconds = debounce,
+			AutoCommitIntervalMinutes = Math.Clamp(AutoCommitIntervalMinutes, 0, AutoSyncIntervalMinutesMax),
+			AutoPushIntervalMinutes = Math.Clamp(AutoPushIntervalMinutes, 0, AutoSyncIntervalMinutesMax),
 			SyncRetryInitialSeconds = retryInitial,
 			SyncRetryMaxSeconds = retryMax,
 			NotificationSuppressSeconds = suppress,

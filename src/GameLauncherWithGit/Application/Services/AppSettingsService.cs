@@ -22,9 +22,14 @@ public sealed class AppSettingsService : IAppSettingsService
 	private bool _isLoaded;
 
 	public AppSettingsService(ILogger<AppSettingsService> logger)
+		: this(logger, AppDataPaths.Directory)
+	{
+	}
+
+	internal AppSettingsService(ILogger<AppSettingsService> logger, string dataDirectory)
 	{
 		_logger = logger;
-		_settingsFilePath = Path.Combine(AppDataPaths.Directory, SettingsFileName);
+		_settingsFilePath = Path.Combine(dataDirectory, SettingsFileName);
 	}
 
 	public AppSettings Get()

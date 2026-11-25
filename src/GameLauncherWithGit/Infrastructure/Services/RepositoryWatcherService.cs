@@ -17,6 +17,7 @@ public sealed class RepositoryWatcherService : IRepositoryWatcherService, IDispo
 	}
 
 	public event EventHandler<RepositoryChangedEventArgs>? RepositoryChanged;
+	public event EventHandler<RepositoryChangedEventArgs>? RepositoryRegistered;
 
 	public void Register(string repositoryId, string watchPath)
 	{
@@ -36,14 +37,18 @@ public sealed class RepositoryWatcherService : IRepositoryWatcherService, IDispo
 		}
 
 		var registration = CreateRegistration(normalizedId, normalizedPath);
-		_watchTargets.AddOrUpdate(
-			normalizedId,
-			registration,
-			(_, existing) =>
+		if (!_watchTargets.TryAdd(normalizedId, registration))
+		{
+			_watchTargets.AddOrUpdate(normalizedId, registration, (_, existing) =>
 			{
 				existing.Dispose();
 				return registration;
 			});
+		}
+		else
+		{
+			RepositoryRegistered?.Invoke(this, new RepositoryChangedEventArgs(normalizedId));
+		}
 
 		_logger.LogInformation("Watcher registered. repositoryId={RepositoryId}, watchPath={WatchPath}", normalizedId, normalizedPath);
 	}
