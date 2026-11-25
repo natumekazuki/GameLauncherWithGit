@@ -13,15 +13,69 @@
 }
 
 .home-header {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr) max-content;
+    grid-template-areas: 'title feedback nav';
     gap: .75rem;
     padding-block: .35rem 1rem;
     border-bottom: 1px solid #29374a;
 }
 
 .home-header h1 {
+    grid-area: title;
     margin: 0;
     font-size: clamp(1.4rem, 3vw, 1.8rem);
     font-weight: 700;
+}
+
+.home-navigation { grid-area: nav; }
+.home-header > .home-feedback { grid-area: feedback; }
+.home-feedback { min-width: 0; justify-self: end; }
+
+.home-feedback-trigger,
+.home-card-problem,
+.home-history-result {
+    border: 1px solid #748cac;
+    border-radius: .45rem;
+    background: #18263a;
+    color: #e0edff;
+    cursor: pointer;
+}
+
+.home-feedback-trigger {
+    display: block;
+    max-width: 100%;
+    min-height: 2rem;
+    padding: .2rem .55rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: .85rem;
+}
+
+.home-feedback-error,
+.home-card-problem { border-color: #a45e68; color: #ffd0d7; }
+.home-feedback > span { cursor: progress; }
+
+.home-dialog-heading {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 9rem);
+    align-items: start;
+    gap: .5rem;
+    grid-auto-rows: minmax(2rem, max-content);
+}
+
+.home-dialog-heading h2 { margin: 0; overflow-wrap: anywhere; font-size: 1.15rem; }
+.home-history-result { text-align: start; max-width: 100%; overflow-wrap: anywhere; }
+.home-result-overlay { z-index: 1350; }
+.home-result-modal { width: min(36rem, 100%); }
+.home-result-body p { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.home-operation-shield {
+    position: fixed;
+    inset: 0;
+    z-index: 1500;
+    cursor: progress;
 }
 
 .home-labeled-action {
@@ -60,7 +114,7 @@
 .startup-error-panel h2 { font-size: 1.35rem; }
 
 .game-grid {
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, max(11rem, calc(280px * var(--game-card-scale)))), 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, max(14rem, calc(280px * var(--game-card-scale)))), 1fr));
     align-items: start;
     gap: 1rem;
 }
@@ -69,37 +123,48 @@
     min-width: 0;
     min-height: 0;
     gap: 0;
-    overflow: hidden;
+    border-color: #354760;
     padding: 0;
     border-radius: .75rem;
     background: #141e2d;
 }
 
 .game-thumbnail-panel {
+    display: grid;
+    place-items: center;
     width: 100%;
     height: auto;
     min-height: 0;
     aspect-ratio: 16 / 9;
     margin: 0;
     border: 0;
-    border-radius: 0;
+    border-radius: .65rem .65rem 0 0;
+    overflow: hidden;
     background: #080e18;
 }
 
 .game-thumbnail-image { width: 100%; height: 100%; object-fit: contain; }
-.home-card-content { padding: .8rem .85rem .3rem; }
+.home-card-heading { margin: 0; font-size: clamp(1rem, calc(1.1rem * var(--game-card-scale)), 1.4rem); }
 
-.home-card-content h2 {
-    margin: 0 0 .45rem;
-    font-size: clamp(1rem, calc(1.1rem * var(--game-card-scale)), 1.4rem);
+.home-card-selection {
+    display: block;
+    width: 100%;
+    border: 0;
+    border-radius: .65rem .65rem 0 0;
+    text-align: start;
+    color: inherit;
+    background: none;
+    padding: 0;
     font-weight: 700;
     line-height: 1.4;
     overflow-wrap: anywhere;
 }
 
-.home-card-states { display: flex; align-items: center; flex-wrap: wrap; gap: .3rem .55rem; }
-.home-git-state { color: #b7c8de; font-size: .8rem; }
-.home-media-error, .git-state-error .home-git-state { color: #ffb8bf; font-size: .8rem; }
+.home-card-selection:hover { background: #1b2b41; }
+.home-card-title { display: block; padding: .65rem .85rem .1rem; }
+.home-thumbnail-title { padding: .65rem .85rem; }
+.home-thumbnail-placeholder { display: inline-flex; color: #aabbd0; }
+.home-media-error { color: #ffb8bf; }
 
 .game-card-actions {
     justify-content: flex-start;
@@ -109,34 +174,21 @@
 }
 
 .game-card-actions > button { flex: 0 0 auto; }
-.game-card-actions .home-labeled-action { margin-inline-start: auto; }
+.game-card-actions > .home-card-problem,
+.game-card-actions > .home-card-resume { width: auto; padding-inline: .5rem; font-size: .85rem; }
+.home-card-resume { margin-inline-start: auto; }
 
-.home-card-details, .game-sync-history {
-    margin: 0;
-    padding: 0 .85rem;
-    border-top: 1px solid #29374a;
-    color: #c6d5e8;
-}
-
-.home-card-details summary, .game-sync-history summary {
-    padding-block: .5rem;
-    font-size: .86rem;
-    cursor: pointer;
-}
-
-.home-card-details dl {
+.home-game-details dl {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     gap: .15rem .55rem;
     margin-block: .2rem .7rem;
-    font-size: .8rem;
     overflow-wrap: anywhere;
 }
 
-.home-card-details dt { color: #aabbd0; }
-.home-card-details dd { margin: 0; }
-.game-sync-history[open] { padding-bottom: .65rem; }
-.home-history-error p { margin-bottom: .35rem; }
+.home-game-details dt { color: #aabbd0; }
+.home-game-details dd { margin: 0; }
+.home-game-details > button { margin-bottom: .5rem; }
 
 .editor-modal .editor-field h3 {
     margin: 0;
@@ -160,28 +212,27 @@
 .settings-quick-links { flex: none; gap: .5rem; margin: 0; padding: 0 1rem .7rem; }
 .settings-quick-links > button { width: auto; }
 .settings-actions-row > button { width: auto; }
-.home-history-error button { width: auto; }
 
-.notification-dismiss {
-    display: inline-grid;
-    place-items: center;
-    flex: 0 0 auto;
-    min-width: 2rem;
-    min-height: 2rem;
-}
-
-:is(.home-header, .utility-bar, .library-page, .startup-error-panel, .editor-overlay, .notification-dock)
+:is(.home-header, .utility-bar, .library-page, .startup-error-panel, .editor-overlay)
     :is(a, button, summary, input, select, h1):focus-visible {
     outline: 2px solid #9bcaff;
     outline-offset: 2px;
 }
 
-.home-card-details summary:focus-visible, .game-sync-history summary:focus-visible {
+.home-card-selection:focus-visible {
     outline-offset: -2px;
 }
 
+@media (max-width: 680px) {
+    .home-header {
+        grid-template-columns: max-content minmax(0, 1fr);
+        grid-template-areas: 'title feedback' 'nav nav';
+        grid-template-rows: minmax(2rem, auto) auto;
+        align-items: flex-start;
+    }
+}
+
 @media (max-width: 540px) {
-    .home-header { align-items: flex-start; }
     .home-navigation { width: 100%; }
     .search-control { flex-basis: 100%; }
     .editor-inline-input { min-width: 0; }

@@ -2,6 +2,11 @@
     const openers = new Map();
     let layers = [];
 
+    window.gameLauncherFocusHomeGame = id => {
+        const card = Array.from(document.querySelectorAll('[data-home-game]')).find(button => button.dataset.homeGame === id);
+        card?.focus({ preventScroll: true });
+    };
+
     window.gameLauncherDialogFocusSection = heading => {
         const body = heading.closest('.dialog-body');
         if (!body) return;

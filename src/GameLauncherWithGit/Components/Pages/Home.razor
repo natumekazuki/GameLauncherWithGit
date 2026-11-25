@@ -11,7 +11,6 @@
 @inject ISyncOrchestrator SyncOrchestrator
 @inject IRepositoryStateStore RepositoryStateStore
 @inject ISettingsPanelService SettingsPanelService
-@inject IRepositorySyncHistoryStore RepositorySyncHistoryStore
 @inject ISaveLinkService SaveLinkService
 @inject IJSRuntime JS
 @inject NavigationManager Navigation
@@ -19,14 +18,26 @@
 <PageTitle>GameLauncherWithGit</PageTitle>
 
 @{
-    RenderFragment notificationContent = @<div class="notification-message @GetMessageClass()">
-        <span>@_message</span>
-        <button type="button" class="notification-dismiss" @onclick="DismissNotification" aria-label="通知を閉じる"><CaptureIcon Name="Close" /></button>
+    RenderFragment notificationContent = @<div class="home-feedback" aria-live="polite">
+        @if (IsUserOperationLoading)
+        {
+            <span class="home-feedback-trigger" aria-hidden="true">処理中</span>
+        }
+        else if (_notification is { } feedback)
+        {
+            <button type="button" class="home-feedback-trigger @(feedback.IsSuccess == false ? "home-feedback-error" : null)"
+                    aria-haspopup="dialog" aria-label="@($"{feedback.Summary}の詳細")"
+                    @onclick="() => OpenResultDetails(feedback.Summary, feedback.Message)">@feedback.Summary</button>
+        }
     </div>;
 }
 
 <header class="home-header">
     <h1 tabindex="-1" @ref="_libraryHeading">ゲーム一覧</h1>
+    @if (HasFeedback && !_isHelpOpen && !_isSettingsOpen && !_isDeleteConfirmOpen && !_isEditorOpen && GetSelectedGame() is null)
+    {
+        @notificationContent
+    }
     <nav class="home-navigation" aria-label="ランチャー">
         <a class="secondary-button home-labeled-action" href="capture"><CaptureIcon Name="History" /> シナリオ</a>
         @if (OperatingSystem.IsWindows())
@@ -78,12 +89,8 @@
                 class="secondary-button home-labeled-action"
                 @onclick="RefreshGitStatusesManuallyAsync"
                 disabled="@(_isGitStatusRefreshing || _games is null || _libraryLoadError is not null)">
-            <CaptureIcon Name="Refresh" /> @(_isGitStatusRefreshing ? "更新中…" : "Git状態を更新")
+            <CaptureIcon Name="Refresh" /> Git状態を更新
         </button>
-        @if (_libraryLoadError is null && _saveLinkLoadFailedGameIds.Count > 0)
-        {
-            <button type="button" class="secondary-button home-labeled-action" @onclick="RetryLibraryAsync"><CaptureIcon Name="Refresh" /> ゲーム一覧を再読込</button>
-        }
     </section>
 }
 
@@ -96,22 +103,19 @@
 else if (!_isGitReady)
 {
     <section class="startup-error-panel">
-        <div role="alert">
-            <h2>Git が利用できません</h2>
-            <p class="startup-error-detail">@_startupError</p>
-            <p>Gitの設定を確認して、再試行してください。</p>
-        </div>
+        <div role="alert"><h2>Git が利用できません</h2></div>
         <button type="button" class="secondary-button home-labeled-action" @onclick="RetryStartupAsync"><CaptureIcon Name="Refresh" /> 再試行</button>
+        <button type="button" class="secondary-button home-labeled-action" aria-haspopup="dialog" aria-label="Git起動エラーの詳細"
+                @onclick='() => OpenResultDetails("Git起動エラー", $"{_startupError} Gitの設定を確認して、再試行してください。")'>詳細</button>
     </section>
 }
 else if (_libraryLoadError is not null)
 {
     <section class="startup-error-panel">
-        <div role="alert">
-            <h2>ゲーム一覧を読み込めません</h2>
-            <p class="startup-error-detail">@_libraryLoadError</p>
-        </div>
+        <div role="alert"><h2>ゲーム一覧を読み込めません</h2></div>
         <button type="button" class="secondary-button home-labeled-action" @onclick="RetryLibraryAsync"><CaptureIcon Name="Refresh" /> 再試行</button>
+        <button type="button" class="secondary-button home-labeled-action" aria-haspopup="dialog" aria-label="一覧エラーの詳細"
+                @onclick='() => OpenResultDetails("一覧エラー", _libraryLoadError)'>詳細</button>
     </section>
 }
 else
@@ -133,131 +137,57 @@ else
                 {
                     @foreach (var game in filteredGames)
                     {
-                        var effectiveStatus = GetEffectiveStatus(game);
-                        var gitVisualState = GetGitVisualState(game);
-                        var syncHistory = GetSyncHistoryTimeline(game);
-                        var hasRepository = gitVisualState != GitRepositoryVisualState.NotConfigured;
                         var canResumeSync = CanResumeRepositorySync(game);
                         var hasThumbnail = HasThumbnail(game);
                         var thumbnail = hasThumbnail ? GetThumbnailSource(game) : null;
                         var hasDisplayImage = thumbnail is { DecodeFailed: false };
-                        var showCardTitle = _showCardTitle || !hasDisplayImage;
-                        <article @key="game.Id" class="@GetGameCardClass(gitVisualState)" aria-label="@game.Title">
-                            @if (thumbnail is { DecodeFailed: false })
-                            {
-                                <div class="game-thumbnail-panel @(IsLaunchDisabled(game) ? string.Empty : "game-thumbnail-launchable")" @ondblclick="() => LaunchFromThumbnailAsync(game)" title="@(IsLaunchDisabled(game) ? GetLaunchButtonTitle(game) : "ダブルクリックで起動")">
-                                    <img @key="thumbnail" class="game-thumbnail-image" src="@thumbnail.DataUri"
-                                         alt="@(showCardTitle ? string.Empty : game.Title)"
-                                         @onerror="() => MarkThumbnailDecodeFailed(game.Id, thumbnail)" />
-                                </div>
-                            }
-                            <div class="home-card-content">
-                                @if (showCardTitle)
-                                {
-                                    <h2>@game.Title</h2>
-                                }
-                                <div class="home-card-states">
-                                    <span class="home-git-state">@GetGitCardLabel(gitVisualState)</span>
-                                    @if (hasRepository && (_showCardSyncStatus || effectiveStatus == GameCardStatus.Error))
+                        var problem = GetCardProblem(game, hasThumbnail && !hasDisplayImage);
+                        <article @key="game.Id" class="game-card" aria-label="@game.Title">
+                            <h2 class="home-card-heading">
+                                <button type="button" class="home-card-selection" aria-haspopup="dialog"
+                                        data-home-game="@game.Id" aria-label="@($"{game.Title}を選択")" @onclick="() => OpenGameDetails(game)">
+                                    @if (hasThumbnail)
                                     {
-                                        <span class="status-badge @GetStatusClass(effectiveStatus)">@(canResumeSync ? "同期停止" : GetStatusLabel(effectiveStatus))</span>
+                                        <span class="game-thumbnail-panel">
+                                            @if (thumbnail is { DecodeFailed: false })
+                                            {
+                                                <img @key="thumbnail" class="game-thumbnail-image" src="@thumbnail.DataUri" alt=""
+                                                     @onerror="() => MarkThumbnailDecodeFailed(game.Id, thumbnail)" />
+                                            }
+                                            else if (!_showCardTitle)
+                                            {
+                                                <span class="home-thumbnail-title">@game.Title</span>
+                                            }
+                                            else
+                                            {
+                                                <span class="home-thumbnail-placeholder"><CaptureIcon Name="Image" /></span>
+                                            }
+                                        </span>
                                     }
-                                    @if (hasThumbnail && !hasDisplayImage)
+                                    @if (_showCardTitle || !hasThumbnail)
                                     {
-                                        <span class="home-media-error">画像を読み込めません</span>
+                                        <span class="home-card-title">@game.Title</span>
                                     }
-                                </div>
-                            </div>
-
+                                </button>
+                            </h2>
                             <div class="game-card-actions" role="group" aria-label="@($"{game.Title}の操作")">
-                                <button type="button"
-                                        class="launch-button action-icon-button"
-                                        @onclick="() => LaunchAsync(game.Id)"
-                                        title="@GetLaunchButtonTitle(game)"
-                                        aria-label="@($"{game.Title}：{GetLaunchButtonTitle(game)}")"
-                                        disabled="@IsLaunchDisabled(game)">
+                                <button type="button" class="launch-button action-icon-button"
+                                        @onclick="() => LaunchAsync(game.Id)" title="@GetLaunchButtonTitle(game)"
+                                        aria-label="@($"{game.Title}：{GetLaunchButtonTitle(game)}")" disabled="@IsLaunchDisabled(game)">
                                     <CaptureIcon Name="Play" />
                                 </button>
-                                <button type="button"
-                                        class="secondary-button action-icon-button"
-                                        @onclick="() => OpenEditEditorAsync(game)"
-                                        title="ゲーム編集"
-                                        aria-label="@($"{game.Title}を編集")">
-                                    <CaptureIcon Name="Edit" />
-                                </button>
-                                <button type="button"
-                                        class="secondary-button pin-toggle-button @(game.IsPinned ? "pin-toggle-active" : string.Empty)"
-                                        @onclick="() => TogglePinnedAsync(game)"
-                                        title="@(game.IsPinned ? "ピン留めを解除" : "ピン留め")"
-                                        aria-label="@($"{game.Title}のピン留め")"
-                                        aria-pressed="@(game.IsPinned ? "true" : "false")"
-                                        disabled="@IsPinToggleBusy(game)">
-                                    <span class="pin-toggle-icon" aria-hidden="true"></span>
-                                </button>
+                                @if (problem is not null)
+                                {
+                                    <button type="button" class="secondary-button home-card-problem" aria-haspopup="dialog"
+                                            aria-label="@($"{problem}：{game.Title}")" @onclick="() => OpenGameDetails(game, fromProblem: true)">@problem</button>
+                                }
                                 @if (canResumeSync)
                                 {
-                                    <button type="button"
-                                            class="secondary-button home-labeled-action"
+                                    <button type="button" class="secondary-button home-card-resume"
                                             @onclick="() => ResumeRepositorySyncAsync(game)"
-                                            disabled="@IsRepositoryBusy(game)">
-                                        同期を再開
-                                    </button>
+                                            aria-label="@($"同期を再開：{game.Title}")" disabled="@IsRepositoryBusy(game)">再開</button>
                                 }
                             </div>
-
-                            <details class="home-card-details">
-                                <summary>詳細</summary>
-                                <dl>
-                                    @if (!showCardTitle)
-                                    {
-                                        <dt>タイトル</dt><dd>@game.Title</dd>
-                                    }
-                                    <dt>実行ファイル</dt><dd>@GetEditorSaveLinkPathLabel(game.ExecutablePath)</dd>
-                                    <dt>関連リポジトリ</dt><dd>@GetEditorSaveLinkPathLabel(game.RelatedRepositoryPath)</dd>
-                                    <dt>セーブリンク</dt><dd>@GetSaveLinkSummary(game)</dd>
-                                    <dt>最終プレイ</dt><dd>@FormatLastPlayed(game.LastPlayedAt)</dd>
-                                </dl>
-                            </details>
-                            @if (hasRepository)
-                            {
-                                <details class="game-sync-history">
-                                    <summary>同期履歴</summary>
-                                    @if (_syncHistoryLoadFailed)
-                                    {
-                                        <div class="home-history-error">
-                                            <p>同期履歴を読み込めません</p>
-                                            <button type="button" class="secondary-button" @onclick="() => RefreshRepositorySyncHistoriesAsync()">再試行</button>
-                                        </div>
-                                    }
-                                    else if (syncHistory.Count == 0)
-                                    {
-                                        <p class="meta-value">履歴なし</p>
-                                    }
-                                    else
-                                    {
-                                        <ul class="sync-timeline-list">
-                                            @foreach (var history in syncHistory)
-                                            {
-                                                <li class="sync-timeline-item @GetSyncHistoryStatusClass(history.Status)">
-                                                    <div class="sync-timeline-head">
-                                                        <span>@GetSyncHistoryStatusLabel(history.Status)</span>
-                                                        <span>@FormatSyncHistoryTimestamp(history.FinishedAt)</span>
-                                                    </div>
-                                                    <p class="sync-timeline-meta">所要時間: @FormatSyncHistoryDuration(history.DurationMs)</p>
-                                                    @if (!string.IsNullOrWhiteSpace(history.Command))
-                                                    {
-                                                        <p class="sync-timeline-meta">コマンド: @history.Command</p>
-                                                    }
-                                                    @if (!string.IsNullOrWhiteSpace(history.Reason))
-                                                    {
-                                                        <p class="sync-timeline-reason">@history.Reason</p>
-                                                    }
-                                                </li>
-                                            }
-                                        </ul>
-                                    }
-                                </details>
-                            }
                         </article>
                     }
                 }
@@ -266,20 +196,76 @@ else
     </section>
 }
 
-<div class="notification-dock" aria-live="polite" aria-atomic="true">
-    @if (!string.IsNullOrWhiteSpace(_message) && !_isHelpOpen && !_isSettingsOpen && !_isDeleteConfirmOpen && !_isEditorOpen && _discardChanges is null)
-    {
-        @notificationContent
-    }
-</div>
-
 @if (IsUserOperationLoading)
 {
-    <div class="operation-loading-overlay" aria-live="polite" aria-busy="true">
-        <div class="operation-loading-modal">
-            <div class="operation-loading-spinner" aria-hidden="true"></div>
-            <p class="operation-loading-message">@GetUserOperationLoadingMessage()</p>
-        </div>
+    <div class="home-operation-shield" aria-hidden="true"></div>
+}
+<span class="visually-hidden" role="status">@(IsUserOperationLoading ? GetUserOperationLoadingMessage() : null)</span>
+
+@if (GetSelectedGame() is { } selected)
+{
+    var gitStatus = GetGitVisualState(selected);
+    var syncStatus = GetEffectiveStatus(selected);
+    var paused = CanResumeRepositorySync(selected);
+    <div class="editor-overlay home-selected-overlay" @onclick="CloseGameDetails">
+        <section class="editor-modal" role="dialog" aria-modal="true" aria-labelledby="home-game-title" tabindex="-1" @onclick:stopPropagation="true">
+            <div class="dialog-heading home-dialog-heading">
+                <h2 id="home-game-title" tabindex="-1" data-dialog-initial>@selected.Title</h2>
+                @if (HasFeedback && !_isEditorOpen && !_isDeleteConfirmOpen && !_isSettingsOpen)
+                {
+                    @notificationContent
+                }
+            </div>
+            <div class="dialog-body home-game-details">
+                <dl>
+                    <dt>Git状態</dt><dd>@GetGitCardLabel(gitStatus)</dd>
+                    @if (gitStatus != GitRepositoryVisualState.NotConfigured && (_showCardSyncStatus || syncStatus == GameCardStatus.Error))
+                    {
+                        <dt>同期状態</dt><dd>@(paused ? "同期停止" : GetStatusLabel(syncStatus))</dd>
+                    }
+                    <dt>実行ファイル</dt><dd>@GetEditorSaveLinkPathLabel(selected.ExecutablePath)</dd>
+                    <dt>関連リポジトリ</dt><dd>@GetEditorSaveLinkPathLabel(selected.RelatedRepositoryPath)</dd>
+                    <dt>セーブリンク</dt><dd>@GetSaveLinkSummary(selected)</dd>
+                    <dt>最終プレイ</dt><dd>@FormatLastPlayed(selected.LastPlayedAt)</dd>
+                </dl>
+                @if (HasThumbnail(selected) && GetThumbnailSource(selected) is not { DecodeFailed: false })
+                {
+                    <p class="home-media-error">画像を読み込めません。編集でサムネイルを選び直してください。</p>
+                }
+                @if (gitStatus == GitRepositoryVisualState.Error)
+                {
+                    <button type="button" class="secondary-button home-labeled-action" @onclick="RefreshGitStatusesManuallyAsync"
+                            disabled="@_isGitStatusRefreshing">Git状態を更新</button>
+                }
+                @if (_saveLinkLoadFailedGameIds.Contains(selected.Id))
+                {
+                    <button type="button" class="secondary-button home-labeled-action" @onclick="RetryLibraryAsync">一覧を再読込</button>
+                }
+                @if (paused)
+                {
+                    <button type="button" class="secondary-button home-labeled-action" @onclick="() => ResumeRepositorySyncAsync(selected)">同期を再開</button>
+                }
+            </div>
+            <div class="editor-actions dialog-footer">
+                <button type="button" class="secondary-button" @onclick="() => OpenEditEditorAsync(selected)">編集</button>
+                <button type="button" class="secondary-button" @onclick="() => TogglePinnedAsync(selected)"
+                        aria-pressed="@(selected.IsPinned ? "true" : "false")" disabled="@IsPinToggleBusy(selected)">@(selected.IsPinned ? "ピン留め解除" : "ピン留め")</button>
+                <button type="button" class="secondary-button" data-dialog-dismiss @onclick="CloseGameDetails">閉じる</button>
+            </div>
+        </section>
+    </div>
+}
+
+@if (_openResult is { } resultDetails)
+{
+    <div class="editor-overlay home-result-overlay" @onclick="CloseResultDetails">
+        <section class="editor-modal home-result-modal" role="dialog" aria-modal="true" aria-labelledby="home-result-title" tabindex="-1" @onclick:stopPropagation="true">
+            <h2 id="home-result-title" class="dialog-heading" tabindex="-1" data-dialog-initial>@resultDetails.Summary</h2>
+            <div class="dialog-body home-result-body"><p>@resultDetails.Detail</p></div>
+            <div class="editor-actions dialog-footer">
+                <button type="button" class="secondary-button" data-dialog-dismiss @onclick="CloseResultDetails">閉じる</button>
+            </div>
+        </section>
     </div>
 }
 
@@ -287,9 +273,9 @@ else
 {
     <div class="editor-overlay help-overlay" @onclick="CloseHelp">
         <section class="help-modal" role="dialog" aria-modal="true" aria-labelledby="help-title" tabindex="-1" @onclick:stopPropagation="true">
-            <h2 id="help-title" tabindex="-1" data-dialog-initial>ヘルプ</h2>
-            <div class="dialog-notification" aria-live="polite" aria-atomic="true">
-                @if (!string.IsNullOrWhiteSpace(_message) && !_isSettingsOpen && !_isEditorOpen && !_isDeleteConfirmOpen)
+            <div class="dialog-heading home-dialog-heading">
+                <h2 id="help-title" tabindex="-1" data-dialog-initial>ヘルプ</h2>
+                @if (HasFeedback && !_isSettingsOpen && !_isEditorOpen && !_isDeleteConfirmOpen)
                 {
                     @notificationContent
                 }
@@ -307,8 +293,7 @@ else
             <div class="help-section">
                 <h3>カードの見方</h3>
                 <ul>
-                    <li><strong>Git状態</strong>：リポジトリの変更や先行・遅れを表示します。</li>
-                    <li><strong>同期履歴</strong>：直近3件の結果と時刻を確認できます。</li>
+                    <li><strong>作品を選択</strong>：Git状態の確認、編集、ピン留めができます。</li>
                 </ul>
             </div>
 
@@ -361,7 +346,7 @@ else
             <div class="help-section">
                 <h3>トラブル時の導線</h3>
                 <ul>
-                    <li>画面上の通知で直近メッセージを確認</li>
+                    <li>状態や通知を選ぶと詳細を確認できます。</li>
                     <li>エラーの詳細は <strong>設定 → ログ</strong> で確認</li>
                 </ul>
             </div>
@@ -381,9 +366,9 @@ else
 {
     <div class="editor-overlay settings-overlay" @onclick="RequestCloseSettings">
         <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabindex="-1" @onclick:stopPropagation="true">
-            <h2 id="settings-title" class="dialog-heading" tabindex="-1" data-dialog-initial>設定</h2>
-            <div class="dialog-notification" aria-live="polite" aria-atomic="true">
-                @if (!string.IsNullOrWhiteSpace(_message) && !_isEditorOpen && !_isDeleteConfirmOpen)
+            <div class="dialog-heading home-dialog-heading">
+                <h2 id="settings-title" tabindex="-1" data-dialog-initial>設定</h2>
+                @if (HasFeedback && !_isEditorOpen && !_isDeleteConfirmOpen)
                 {
                     @notificationContent
                 }
@@ -531,7 +516,8 @@ else
                                             @GetNotificationHistoryTypeLabel(entry.IsSuccess)
                                         </span>
                                     </div>
-                                    <p class="notification-center-message">@entry.Message</p>
+                                    <button type="button" class="home-history-result" aria-haspopup="dialog"
+                                            @onclick="() => OpenResultDetails(entry.Summary, entry.Message)">@entry.Summary</button>
                                 </article>
                             }
                         }
@@ -582,7 +568,7 @@ else
                                 class="launch-button"
                                 @onclick="LoadLogEntriesAsync"
                                 disabled="@(_isSettingsLoading || _isLogLoading)">
-                            @(_isLogLoading ? "読込中…" : _logViewerError is null ? "更新" : "再試行")
+                            @(_logViewerError is null ? "更新" : "再試行")
                         </button>
                         <button type="button"
                                 class="secondary-button"
@@ -591,10 +577,6 @@ else
                             コピー
                         </button>
                     </div>
-                    @if (!string.IsNullOrWhiteSpace(_logViewerError))
-                    {
-                        <p class="settings-log-error" role="alert">@_logViewerError</p>
-                    }
                     <div class="settings-log-list" role="log">
                         @if (_isLogLoading)
                         {
@@ -675,7 +657,7 @@ else
                         class="launch-button"
                         @onclick="SaveAppSettingsAsync"
                         disabled="@(_isSettingsLoading || _isAppSettingsSaving)">
-                    @(_isAppSettingsSaving ? "保存中…" : "保存")
+                    保存
                 </button>
                 <button type="button"
                         class="secondary-button"
@@ -692,9 +674,9 @@ else
 {
     <div class="editor-overlay delete-confirm-overlay" @onclick="() => CloseDeleteConfirm()">
         <section class="delete-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title delete-game-name" aria-describedby="delete-impact" tabindex="-1" @onclick:stopPropagation="true">
-            <h2 id="delete-title">ゲーム登録を削除</h2>
-            <div class="dialog-notification" aria-live="polite" aria-atomic="true">
-                @if (!string.IsNullOrWhiteSpace(_message))
+            <div class="dialog-heading home-dialog-heading">
+                <h2 id="delete-title">ゲーム登録を削除</h2>
+                @if (HasFeedback)
                 {
                     @notificationContent
                 }
@@ -713,7 +695,7 @@ else
                         class="danger-button"
                         @onclick="DeleteGameAsync"
                         disabled="@_isDeleting">
-                    @(_isDeleting ? "削除中…" : "登録を削除")
+                    登録を削除
                 </button>
                 <button type="button"
                         class="secondary-button"
@@ -744,9 +726,9 @@ else
 {
     <div class="editor-overlay" @onclick="RequestCloseEditor">
         <section class="editor-modal" role="dialog" aria-modal="true" aria-labelledby="editor-title-heading" tabindex="-1" @onclick:stopPropagation="true">
-            <h2 id="editor-title-heading" class="dialog-heading" tabindex="-1" data-dialog-initial>@(_isEditMode ? $"ゲーム編集：{_editorSavedTitle}" : "ゲーム追加")</h2>
-            <div class="dialog-notification" aria-live="polite" aria-atomic="true">
-                @if (!string.IsNullOrWhiteSpace(_message) && !_isDeleteConfirmOpen)
+            <div class="dialog-heading home-dialog-heading">
+                <h2 id="editor-title-heading" tabindex="-1" data-dialog-initial>@(_isEditMode ? $"ゲーム編集：{_editorSavedTitle}" : "ゲーム追加")</h2>
+                @if (HasFeedback && !_isDeleteConfirmOpen)
                 {
                     @notificationContent
                 }
@@ -761,7 +743,8 @@ else
                 @if (_isEditMode && _editingGameId is not null)
                 {
                     <div class="editor-field">
-                        <CapturePreference @ref="_capturePreference" GameId="@_editingGameId" Disabled="@_isSaving" />
+                        <CapturePreference @ref="_capturePreference" GameId="@_editingGameId" Disabled="@_isSaving"
+                                           ShowError="OpenCapturePreferenceError" />
                     </div>
                 }
 
@@ -951,7 +934,7 @@ else
             </div>
             <div class="editor-actions dialog-footer">
                 <button type="button" class="launch-button" @onclick="SaveEditorAsync" disabled="@_isSaving">
-                    @(_isSaving ? "保存中…" : "保存")
+                    保存
                 </button>
                 <button type="button" class="secondary-button" @onclick="RequestCloseEditor" disabled="@_isSaving" data-dialog-dismiss>キャンセル</button>
                 @if (_isEditMode && !string.IsNullOrWhiteSpace(_editingGameId))
@@ -969,14 +952,14 @@ else
 }
 
 @code {
-    private const int SyncHistoryTimelineLimit = 3;
-    private const int SyncHistoryRefreshIntervalSeconds = 5;
     private const int NotificationHistoryMaxEntries = 200;
 
     private IReadOnlyList<GameCardItem>? _games;
-    private string? _message;
-    private bool? _isLastActionSuccess;
-    private CancellationTokenSource? _notificationDismissCts;
+    private NotificationHistoryEntry? _notification;
+    private ResultDetails? _openResult;
+    private string? _selectedGameId;
+    private bool _selectedFromProblem;
+    private string? _focusCardId;
     private bool _isEditorOpen;
     private bool _isEditMode;
     private bool _isSaving;
@@ -1033,7 +1016,6 @@ else
     private bool _isGitReady = true;
     private string? _startupError;
     private string? _libraryLoadError;
-    private bool _syncHistoryLoadFailed;
     private DraftKind? _discardChanges;
     private ElementReference _libraryHeading;
     private ElementReference _notificationHeading;
@@ -1044,7 +1026,6 @@ else
     private readonly Dictionary<string, ThumbnailSource> _thumbnailCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, IReadOnlyList<GameSaveLinkItem>> _saveLinksByGame = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _saveLinkLoadFailedGameIds = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, IReadOnlyList<RepositorySyncHistoryItem>> _syncHistoryByRepository = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, GitRepositoryVisualState> _gitVisualStateByRepository = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<NotificationHistoryEntry> _notificationHistoryEntries = [];
     private bool _showSuccessNotifications = true;
@@ -1067,6 +1048,11 @@ else
         {
             _focusLibraryHeading = false;
             await _libraryHeading.FocusAsync();
+        }
+        else if (_focusCardId is { } gameId)
+        {
+            _focusCardId = null;
+            await JS.InvokeVoidAsync("gameLauncherFocusHomeGame", gameId);
         }
     }
 
@@ -1123,7 +1109,6 @@ else
             "起動前同期を実行しています...",
             async () =>
             {
-                SetNotification("起動前同期を実行中です...", null);
                 var result = await LauncherService.LaunchAsync(gameId);
                 if (result.ShowCapture)
                 {
@@ -1131,7 +1116,7 @@ else
                     return;
                 }
 
-                SetNotification(result.Message, result.IsSuccess);
+                SetNotification(result.Message, result.IsSuccess, summary: result.IsSuccess ? "起動済み" : "起動エラー");
                 try
                 {
                     if (await ReloadGamesAsync())
@@ -1144,13 +1129,8 @@ else
                     _libraryLoadError = ex.Message;
                 }
 
-                SetNotification($"{result.Message} 一覧の再読込に失敗しました。", false, addToHistory: false);
+                SetNotification($"{result.Message} 一覧の再読込に失敗しました。", false, addToHistory: false, summary: result.IsSuccess ? "起動済み・一覧エラー" : "起動・一覧エラー");
             });
-    }
-
-    private Task LaunchFromThumbnailAsync(GameCardItem game)
-    {
-        return IsLaunchDisabled(game) ? Task.CompletedTask : LaunchAsync(game.Id);
     }
 
     private async Task OpenSettingsAsync()
@@ -1254,6 +1234,7 @@ else
     }
 
     private bool IsUserOperationLoading => _userOperationLoadingMessages.Count > 0;
+    private bool HasFeedback => IsUserOperationLoading || _notification is not null;
 
     private string GetUserOperationLoadingMessage()
     {
@@ -1274,7 +1255,7 @@ else
         }
         catch (Exception ex)
         {
-            SetNotification($"設定の読み込みに失敗しました: {ex.Message}", false);
+            SetNotification($"設定の読み込みに失敗しました: {ex.Message}", false, summary: "設定読込エラー");
         }
         finally
         {
@@ -1295,11 +1276,11 @@ else
                 {
                     await AutoStartService.SetEnabledAsync(enabled);
                     _autoStartEnabled = enabled;
-                    SetNotification(enabled ? "自動起動を有効化しました。" : "自動起動を無効化しました。", true);
+                    SetNotification(enabled ? "自動起動を有効化しました。" : "自動起動を無効化しました。", true, summary: "自動起動設定");
                 }
                 catch (Exception ex)
                 {
-                    SetNotification($"自動起動設定の更新に失敗しました: {ex.Message}", false);
+                    SetNotification($"自動起動設定の更新に失敗しました: {ex.Message}", false, summary: "自動起動設定");
                     try
                     {
                         _autoStartEnabled = await AutoStartService.IsEnabledAsync();
@@ -1326,11 +1307,11 @@ else
                 try
                 {
                     await SaveCurrentAppSettingsAsync();
-                    SetNotification("設定を保存しました。", true);
+                    SetNotification("設定を保存しました。", true, summary: "設定保存");
                 }
                 catch (Exception ex)
                 {
-                    SetNotification($"アプリ設定の保存に失敗しました: {ex.Message}", false);
+                    SetNotification($"アプリ設定の保存に失敗しました: {ex.Message}", false, summary: "設定保存エラー");
                 }
                 finally
                 {
@@ -1402,7 +1383,7 @@ else
                         isSuccess
                             ? "Git状態を更新しました。"
                             : "Git状態を取得できないゲームがあります。関連リポジトリとログを確認し、再試行してください。",
-                        isSuccess);
+                        isSuccess, summary: isSuccess ? "Git状態を更新" : "Git状態エラー");
                 }
                 catch (OperationCanceledException)
                 {
@@ -1448,7 +1429,7 @@ else
         catch (Exception ex)
         {
             _gameCardSizePercent = previous;
-            SetNotification($"カードサイズ設定の保存に失敗しました: {ex.Message}", false);
+            SetNotification($"カードサイズ設定の保存に失敗しました: {ex.Message}", false, summary: "カードサイズ保存エラー");
         }
         finally
         {
@@ -1472,11 +1453,11 @@ else
                 try
                 {
                     await LogAccessService.OpenLatestErrorLogAsync();
-                    SetNotification("最新エラーログを開きました。", true);
+                    SetNotification("最新エラーログを開きました。", true, summary: "最新エラーログ");
                 }
                 catch (Exception ex)
                 {
-                    SetNotification(ex.Message, false);
+                    SetNotification(ex.Message, false, summary: "最新エラーログ");
                 }
             });
     }
@@ -1490,11 +1471,11 @@ else
                 try
                 {
                     await LogAccessService.OpenLogDirectoryAsync();
-                    SetNotification("ログフォルダを開きました。", true);
+                    SetNotification("ログフォルダを開きました。", true, summary: "ログフォルダ");
                 }
                 catch (Exception ex)
                 {
-                    SetNotification(ex.Message, false);
+                    SetNotification(ex.Message, false, summary: "ログフォルダ");
                 }
             });
     }
@@ -1507,7 +1488,7 @@ else
         }
         catch (Exception ex)
         {
-            SetNotification($"ログメンテナンスに失敗しました: {ex.Message}", false);
+            SetNotification($"ログメンテナンスに失敗しました: {ex.Message}", false, summary: "ログ整理エラー");
         }
     }
 
@@ -1534,7 +1515,7 @@ else
                 _logViewerLimit,
                 severity,
                 _logViewerKeyword);
-            if (previousError is not null && _message == previousError)
+            if (previousError is not null && _notification?.Message == previousError)
             {
                 DismissNotification();
             }
@@ -1543,7 +1524,7 @@ else
         {
             _logViewerEntries = Array.Empty<LogViewerEntry>();
             _logViewerError = $"ログ読み込みに失敗しました。詳細: {ex.Message}";
-            SetNotification(_logViewerError, false);
+            SetNotification(_logViewerError, false, summary: "ログ読込エラー");
         }
         finally
         {
@@ -1555,7 +1536,7 @@ else
     {
         if (_logViewerEntries.Count == 0)
         {
-            SetNotification("コピー対象のログがありません。", false);
+            SetNotification("コピー対象のログがありません。", false, summary: "ログコピー");
             return;
         }
 
@@ -1590,11 +1571,11 @@ else
                 try
                 {
                     await Clipboard.Default.SetTextAsync(string.Join(Environment.NewLine, lines));
-                    SetNotification("ログをクリップボードにコピーしました。", true);
+                    SetNotification("ログをクリップボードにコピーしました。", true, summary: "ログコピー");
                 }
                 catch (Exception ex)
                 {
-                    SetNotification($"ログコピーに失敗しました: {ex.Message}", false);
+                    SetNotification($"ログコピーに失敗しました: {ex.Message}", false, summary: "ログコピー");
                 }
             });
     }
@@ -1661,7 +1642,7 @@ else
     {
         if (!_isEditMode || string.IsNullOrWhiteSpace(_editingGameId))
         {
-            SetNotification("削除対象が不正です。", false);
+            SetNotification("削除対象が不正です。", false, summary: "削除対象エラー");
             return;
         }
 
@@ -1686,7 +1667,7 @@ else
         {
             SetNotification(
                 $"「{game.Title}」のセーブリンクを読み込めません。ゲーム一覧を再読込してから編集してください。",
-                false);
+                false, summary: "リンク読込エラー");
             return;
         }
 
@@ -1729,7 +1710,7 @@ else
 
         if (string.IsNullOrWhiteSpace(_deleteTargetGameId))
         {
-            SetNotification("削除対象が不正です。", false);
+            SetNotification("削除対象が不正です。", false, summary: "登録削除エラー");
             return;
         }
 
@@ -1746,7 +1727,7 @@ else
                     var deleted = await GameLibraryService.DeleteAsync(targetGameId);
                     if (!deleted)
                     {
-                        SetNotification("削除対象のゲームが見つかりません。", false);
+                        SetNotification("削除対象のゲームが見つかりません。", false, summary: "登録削除エラー");
                         return;
                     }
                     registrationDeleted = true;
@@ -1759,6 +1740,10 @@ else
                     }
 
                     CloseDeleteConfirm(force: true);
+                    if (string.Equals(_selectedGameId, targetGameId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _selectedGameId = null;
+                    }
                     _focusLibraryHeading = true;
                     if (_games is not null)
                     {
@@ -1771,13 +1756,13 @@ else
                         : AppendError("一覧の再読込に失敗しました。", removalError);
                     SetNotification(reloadError is null
                         ? $"ゲーム登録を削除しました: {targetTitle}"
-                        : $"「{targetTitle}」の登録は削除しました。{reloadError}", reloadError is null);
+                        : $"「{targetTitle}」の登録は削除しました。{reloadError}", reloadError is null, summary: reloadError is null ? "登録削除" : "削除済み・更新エラー");
                 }
                 catch (Exception ex)
                 {
                     SetNotification(registrationDeleted
                         ? $"「{targetTitle}」の登録は削除しました。削除後の更新に失敗しました: {ex.Message}"
-                        : $"ゲーム削除に失敗しました: {ex.Message}", false);
+                        : $"ゲーム削除に失敗しました: {ex.Message}", false, summary: registrationDeleted ? "削除済み・更新エラー" : "登録削除エラー");
                 }
                 finally
                 {
@@ -1841,7 +1826,7 @@ else
 
         if (string.IsNullOrWhiteSpace(_editorTitle))
         {
-            SetNotification("タイトルは必須です。", false);
+            SetNotification("タイトルは必須です。", false, summary: "タイトル未入力");
             return;
         }
 
@@ -1865,7 +1850,7 @@ else
                     {
                         if (string.IsNullOrWhiteSpace(_editingGameId))
                         {
-                            SetNotification("編集対象が不正です。", false);
+                            SetNotification("編集対象が不正です。", false, summary: _isEditMode ? "編集保存エラー" : "登録エラー");
                             return;
                         }
 
@@ -1873,14 +1858,14 @@ else
                         {
                             SetNotification(
                                 "セーブリンクを読み込めないため保存できません。ゲーム一覧を再読込してから編集してください。",
-                                false);
+                                false, summary: "リンク読込エラー");
                             return;
                         }
 
                         var updated = await GameLibraryService.UpdateWithSaveLinksAsync(_editingGameId, input, saveLinkInputs);
                         if (updated is null)
                         {
-                            SetNotification("編集対象のゲームが見つかりません。", false);
+                            SetNotification("編集対象のゲームが見つかりません。", false, summary: _isEditMode ? "編集保存エラー" : "登録エラー");
                             return;
                         }
 
@@ -1904,7 +1889,7 @@ else
                                     : "一覧の再読込に失敗しました。";
                                 SetNotification(AppendError(
                                     $"ゲーム設定は保存しました。シナリオ抽出設定は保存できませんでした。開き直して確認してください: {ex.Message}",
-                                    refreshError), false);
+                                    refreshError), false, summary: "保存済み・抽出設定エラー");
                                 return;
                             }
                         }
@@ -1919,19 +1904,19 @@ else
                     if (await ReloadGamesAsync())
                     {
                         RefreshRepositoryWatchers();
-                        SetNotification($"{(_isEditMode ? "ゲーム設定を更新しました" : "ゲームを登録しました")}: {savedTitle}", true);
+                        SetNotification($"{(_isEditMode ? "ゲーム設定を更新しました" : "ゲームを登録しました")}: {savedTitle}", true, summary: _isEditMode ? "編集保存" : "ゲーム登録");
                     }
                     else
                     {
                         _focusLibraryHeading = true;
-                        SetNotification($"「{savedTitle}」は保存しました。一覧の再読込に失敗しました。", false);
+                        SetNotification($"「{savedTitle}」は保存しました。一覧の再読込に失敗しました。", false, summary: "保存済み・一覧エラー");
                     }
                 }
                 catch (Exception ex)
                 {
                     SetNotification(savedTitle is null
                         ? $"保存に失敗しました: {ex.Message}"
-                        : $"「{savedTitle}」は保存しました。監視の更新に失敗しました: {ex.Message}", false);
+                        : $"「{savedTitle}」は保存しました。監視の更新に失敗しました: {ex.Message}", false, summary: savedTitle is null ? (_isEditMode ? "編集保存エラー" : "登録エラー") : "保存済み・監視エラー");
                 }
                 finally
                 {
@@ -1959,11 +1944,11 @@ else
                         return;
                     }
 
-                    SetNotification("実行ファイルが選択されませんでした。", false);
+                    SetNotification("実行ファイルが選択されませんでした。", false, summary: "実行ファイル選択");
                 }
                 catch (Exception ex)
                 {
-                    SetNotification(ex.Message, false);
+                    SetNotification(ex.Message, false, summary: "実行ファイル選択");
                 }
             });
     }
@@ -1984,11 +1969,11 @@ else
                         return;
                     }
 
-                    SetNotification("サムネイル画像が選択されませんでした。", false);
+                    SetNotification("サムネイル画像が選択されませんでした。", false, summary: "画像選択");
                 }
                 catch (Exception ex)
                 {
-                    SetNotification(ex.Message, false);
+                    SetNotification(ex.Message, false, summary: "画像選択");
                 }
             });
     }
@@ -2036,11 +2021,11 @@ else
                         return;
                     }
 
-                    SetNotification("リポジトリフォルダが選択されませんでした。", false);
+                    SetNotification("リポジトリフォルダが選択されませんでした。", false, summary: "リポジトリ選択");
                 }
                 catch (Exception ex)
                 {
-                    SetNotification(ex.Message, false);
+                    SetNotification(ex.Message, false, summary: "リポジトリ選択");
                 }
             });
     }
@@ -2061,7 +2046,7 @@ else
                 {
                     if (!await RefreshGitStatusesAsync())
                     {
-                        SetNotification("リモート更新後、一部の Git ステータス取得に失敗しました。ログを確認してください。", false);
+                        SetNotification("リモート更新後、一部の Git ステータス取得に失敗しました。ログを確認してください。", false, summary: "Git状態エラー");
                     }
                 }
             });
@@ -2072,14 +2057,14 @@ else
         var repositoryPath = NormalizeRepositoryPath(_editorRepositoryPath);
         if (repositoryPath is null)
         {
-            SetNotification("関連リポジトリが未設定または不正です。", false);
+            SetNotification("関連リポジトリが未設定または不正です。", false, summary: "ブランチ切替");
             return;
         }
 
         var selectedBranch = NormalizeBranchName(_editorSelectedBranch);
         if (string.IsNullOrWhiteSpace(selectedBranch))
         {
-            SetNotification("切り替え先ブランチを選択してください。", false);
+            SetNotification("切り替え先ブランチを選択してください。", false, summary: "ブランチ切替");
             return;
         }
 
@@ -2090,7 +2075,7 @@ else
         {
             if (string.Equals(selectedBranch, _editorCurrentBranch, StringComparison.OrdinalIgnoreCase))
             {
-                SetNotification($"既に選択ブランチです: {selectedBranch}", true);
+                SetNotification($"既に選択ブランチです: {selectedBranch}", true, summary: "ブランチ切替");
                 return;
             }
 
@@ -2102,13 +2087,13 @@ else
             if (!_editorRemoteBranchLocalNames.TryGetValue(selectedBranch, out var localBranchName)
                 || string.IsNullOrWhiteSpace(localBranchName))
             {
-                SetNotification($"リモートブランチ名の形式が不正です: {selectedBranch}", false);
+                SetNotification($"リモートブランチ名の形式が不正です: {selectedBranch}", false, summary: "ブランチ切替");
                 return;
             }
 
             if (string.Equals(localBranchName, _editorCurrentBranch, StringComparison.OrdinalIgnoreCase))
             {
-                SetNotification($"既に選択ブランチです: {localBranchName}", true);
+                SetNotification($"既に選択ブランチです: {localBranchName}", true, summary: "ブランチ切替");
                 return;
             }
 
@@ -2118,7 +2103,7 @@ else
         }
         else
         {
-            SetNotification($"切り替え対象ブランチが見つかりません: {selectedBranch}", false);
+            SetNotification($"切り替え対象ブランチが見つかりません: {selectedBranch}", false, summary: "ブランチ切替");
             return;
         }
 
@@ -2136,7 +2121,7 @@ else
                     {
                         SetNotification(
                             $"ブランチ切り替えに失敗しました: {BuildGitFailureReason(result)}",
-                            false);
+                            false, summary: "ブランチ切替");
                         return;
                     }
 
@@ -2157,11 +2142,11 @@ else
                         switchedFromRemote
                             ? $"リモート追跡ブランチを作成して切り替えました: {switchTargetLabel}"
                             : $"ブランチを切り替えました: {switchTargetLabel}",
-                        true);
+                        true, summary: "ブランチ切替");
                 }
                 catch (Exception ex)
                 {
-                    SetNotification($"ブランチ切り替えに失敗しました: {ex.Message}", false);
+                    SetNotification($"ブランチ切り替えに失敗しました: {ex.Message}", false, summary: "ブランチ切替");
                 }
                 finally
                 {
@@ -2175,20 +2160,20 @@ else
         var repositoryPath = NormalizeRepositoryPath(_editorRepositoryPath);
         if (repositoryPath is null)
         {
-            SetNotification("関連リポジトリが未設定または不正です。", false);
+            SetNotification("関連リポジトリが未設定または不正です。", false, summary: "ブランチ作成");
             return;
         }
 
         var newBranchName = NormalizeBranchName(_editorNewBranchName);
         if (string.IsNullOrWhiteSpace(newBranchName))
         {
-            SetNotification("新規ブランチ名を入力してください。", false);
+            SetNotification("新規ブランチ名を入力してください。", false, summary: "ブランチ作成");
             return;
         }
 
         if (_editorLocalBranches.Contains(newBranchName))
         {
-            SetNotification($"既に存在するブランチ名です: {newBranchName}", false);
+            SetNotification($"既に存在するブランチ名です: {newBranchName}", false, summary: "ブランチ作成");
             return;
         }
 
@@ -2206,7 +2191,7 @@ else
                     {
                         SetNotification(
                             $"ブランチ名が不正です: {BuildGitFailureReason(validateResult)}",
-                            false);
+                            false, summary: "ブランチ作成");
                         return;
                     }
 
@@ -2217,18 +2202,18 @@ else
                     {
                         SetNotification(
                             $"ブランチ作成に失敗しました: {BuildGitFailureReason(createResult)}",
-                            false);
+                            false, summary: "ブランチ作成");
                         return;
                     }
 
                     _editorNewBranchName = string.Empty;
                     await LoadEditorBranchesAsync(showNotificationOnFailure: false, preserveSelection: false);
                     await RefreshGitStatusesAsync();
-                    SetNotification($"ブランチを作成して切り替えました: {newBranchName}", true);
+                    SetNotification($"ブランチを作成して切り替えました: {newBranchName}", true, summary: "ブランチ作成");
                 }
                 catch (Exception ex)
                 {
-                    SetNotification($"ブランチ作成に失敗しました: {ex.Message}", false);
+                    SetNotification($"ブランチ作成に失敗しました: {ex.Message}", false, summary: "ブランチ作成");
                 }
                 finally
                 {
@@ -2256,7 +2241,7 @@ else
                 {
                     SetNotification(
                         $"ブランチ一覧取得に失敗しました: {BuildGitFailureReason(gitCheck)}",
-                        false);
+                        false, summary: "ブランチ読込エラー");
                 }
 
                 ResetEditorBranchState(clearNewBranchName: false);
@@ -2272,7 +2257,7 @@ else
                 {
                     SetNotification(
                         $"リモートブランチの更新に失敗しました。以前の情報を表示します: {BuildGitFailureReason(fetchResult)}",
-                        false);
+                        false, summary: "ブランチ読込エラー");
                 }
             }
 
@@ -2283,7 +2268,7 @@ else
                 {
                     SetNotification(
                         $"現在ブランチ取得に失敗しました: {BuildGitFailureReason(currentBranchResult)}",
-                        false);
+                        false, summary: "ブランチ読込エラー");
                 }
 
                 ResetEditorBranchState(clearNewBranchName: false);
@@ -2299,7 +2284,7 @@ else
                 {
                     SetNotification(
                         $"ブランチ一覧取得に失敗しました: {BuildGitFailureReason(localBranchesResult)}",
-                        false);
+                        false, summary: "ブランチ読込エラー");
                 }
 
                 ResetEditorBranchState(clearNewBranchName: false);
@@ -2315,7 +2300,7 @@ else
                 {
                     SetNotification(
                         $"リモートブランチ一覧取得に失敗しました: {BuildGitFailureReason(remoteBranchesResult)}",
-                        false);
+                        false, summary: "ブランチ読込エラー");
                 }
 
                 ResetEditorBranchState(clearNewBranchName: false);
@@ -2329,7 +2314,7 @@ else
                 {
                     SetNotification(
                         $"リモート名一覧取得に失敗しました: {BuildGitFailureReason(remoteNamesResult)}",
-                        false);
+                        false, summary: "ブランチ読込エラー");
                 }
 
                 ResetEditorBranchState(clearNewBranchName: false);
@@ -2443,7 +2428,7 @@ else
         {
             if (showNotificationOnFailure)
             {
-                SetNotification($"ブランチ一覧取得に失敗しました: {ex.Message}", false);
+                SetNotification($"ブランチ一覧取得に失敗しました: {ex.Message}", false, summary: "ブランチ読込エラー");
             }
 
             ResetEditorBranchState(clearNewBranchName: false);
@@ -2727,11 +2712,11 @@ else
                         return;
                     }
 
-                    SetNotification(emptySelectionMessage, false);
+                    SetNotification(emptySelectionMessage, false, summary: "セーブ先フォルダ選択");
                 }
                 catch (Exception ex)
                 {
-                    SetNotification(ex.Message, false);
+                    SetNotification(ex.Message, false, summary: "セーブ先フォルダ選択");
                 }
             });
     }
@@ -2800,12 +2785,13 @@ else
             if (await ReloadGamesAsync())
             {
                 var watcherError = TryRefreshRepositoryWatchers();
-                SetNotification(watcherError ?? (_saveLinkLoadFailedGameIds.Count == 0
-                    ? "ゲーム一覧を読み込みました。"
-                    : "読み込めないセーブリンクがあります。対象ゲームの編集はできません。"),
-                    watcherError is null && _saveLinkLoadFailedGameIds.Count == 0);
+                var linkError = _saveLinkLoadFailedGameIds.Count == 0
+                    ? null : "読み込めないセーブリンクがあります。対象ゲームの編集はできません。";
+                var error = watcherError is not null ? AppendError(watcherError, linkError) : linkError;
+                SetNotification(error ?? "ゲーム一覧を読み込みました。", error is null,
+                    summary: error is null ? "一覧更新" : "一覧更新エラー");
             }
-            _focusLibraryHeading = true;
+            _focusLibraryHeading = GetSelectedGame() is null;
         });
     }
 
@@ -2824,7 +2810,6 @@ else
 
         await RefreshSaveLinksAsync();
         SyncThumbnailCache();
-        await RefreshRepositorySyncHistoriesAsync();
         await RefreshGitStatusesAsync();
         return true;
     }
@@ -3005,11 +2990,11 @@ else
                         !loaded ? $"「{game.Title}」のピン留め設定は保存しました。一覧の再読込に失敗しました。" : nextPinned
                             ? $"ピン留めしました: {game.Title}"
                             : $"ピン留めを解除しました: {game.Title}",
-                        loaded);
+                        loaded, summary: "ピン留め更新");
                 }
                 catch (Exception ex)
                 {
-                    SetNotification($"ピン留め更新に失敗しました: {ex.Message}", false);
+                    SetNotification($"ピン留め更新に失敗しました: {ex.Message}", false, summary: "ピン留め更新");
                 }
                 finally
                 {
@@ -3056,8 +3041,6 @@ else
     public void Dispose()
     {
         SettingsPanelService.OpenRequested -= OnSettingsOpenRequested;
-        _notificationDismissCts?.Cancel();
-        _notificationDismissCts?.Dispose();
         _stateRefreshCts.Cancel();
         _stateRefreshCts.Dispose();
         UnregisterAllWatchers();
@@ -3065,7 +3048,6 @@ else
         _thumbnailCache.Clear();
         _editorSaveLinks.Clear();
         _saveLinksByGame.Clear();
-        _syncHistoryByRepository.Clear();
         _gitVisualStateByRepository.Clear();
     }
 
@@ -3078,21 +3060,13 @@ else
 
         _stateRefreshTask = Task.Run(async () =>
         {
-            var syncHistoryElapsedSeconds = 0;
             var gitStatusElapsedSeconds = 0;
             while (!_stateRefreshCts.IsCancellationRequested)
             {
                 try
                 {
                     await Task.Delay(TimeSpan.FromSeconds(1), _stateRefreshCts.Token);
-                    syncHistoryElapsedSeconds++;
                     gitStatusElapsedSeconds++;
-
-                    if (syncHistoryElapsedSeconds >= SyncHistoryRefreshIntervalSeconds)
-                    {
-                        syncHistoryElapsedSeconds = 0;
-                        await InvokeAsync(async () => await RefreshRepositorySyncHistoriesAsync(_stateRefreshCts.Token));
-                    }
 
                     var gitStatusRefreshIntervalSeconds = Math.Max(1, _syncDebounceSeconds);
                     if (gitStatusElapsedSeconds >= gitStatusRefreshIntervalSeconds)
@@ -3113,51 +3087,6 @@ else
                 }
             }
         });
-    }
-
-    private async Task RefreshRepositorySyncHistoriesAsync(CancellationToken cancellationToken = default)
-    {
-        if (_games is null || _games.Count == 0)
-        {
-            _syncHistoryByRepository.Clear();
-            _syncHistoryLoadFailed = false;
-            return;
-        }
-
-        var repositoryIds = _games
-            .Select(game => NormalizeRepositoryKey(game.RelatedRepositoryPath))
-            .Where(static repositoryId => !string.IsNullOrWhiteSpace(repositoryId))
-            .Select(static repositoryId => repositoryId!)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        if (repositoryIds.Length == 0)
-        {
-            _syncHistoryByRepository.Clear();
-            _syncHistoryLoadFailed = false;
-            return;
-        }
-
-        try
-        {
-            var histories = await RepositorySyncHistoryStore.GetLatestByRepositoryIdsAsync(
-                repositoryIds,
-                SyncHistoryTimelineLimit,
-                cancellationToken);
-            _syncHistoryByRepository.Clear();
-            foreach (var pair in histories)
-            {
-                _syncHistoryByRepository[pair.Key] = pair.Value;
-            }
-            _syncHistoryLoadFailed = false;
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch
-        {
-            _syncHistoryLoadFailed = true;
-        }
     }
 
     private RepositorySyncState GetRepositorySyncState(GameCardItem game)
@@ -3192,19 +3121,6 @@ else
     {
         var state = GetRepositorySyncState(game);
         return state is RepositorySyncState.Debouncing or RepositorySyncState.Syncing;
-    }
-
-    private IReadOnlyList<RepositorySyncHistoryItem> GetSyncHistoryTimeline(GameCardItem game)
-    {
-        var repositoryKey = NormalizeRepositoryKey(game.RelatedRepositoryPath);
-        if (repositoryKey is null)
-        {
-            return Array.Empty<RepositorySyncHistoryItem>();
-        }
-
-        return _syncHistoryByRepository.TryGetValue(repositoryKey, out var entries)
-            ? entries
-            : Array.Empty<RepositorySyncHistoryItem>();
     }
 
     private async Task<bool> RefreshGitStatusesAsync(CancellationToken cancellationToken = default)
@@ -3373,23 +3289,6 @@ else
         return _gitVisualStateByRepository.GetValueOrDefault(repositoryPath, GitRepositoryVisualState.Unknown);
     }
 
-    private static string GetGameCardClass(GitRepositoryVisualState gitVisualState)
-    {
-        var gitStateClass = gitVisualState switch
-        {
-            GitRepositoryVisualState.Clean => "git-state-clean",
-            GitRepositoryVisualState.Dirty => "git-state-dirty",
-            GitRepositoryVisualState.Ahead => "git-state-ahead",
-            GitRepositoryVisualState.Behind => "git-state-behind",
-            GitRepositoryVisualState.Diverged => "git-state-diverged",
-            GitRepositoryVisualState.Error => "git-state-error",
-            GitRepositoryVisualState.NotConfigured => "git-state-not-configured",
-            _ => "git-state-unknown"
-        };
-
-        return $"game-card {gitStateClass}";
-    }
-
     private static bool HasThumbnail(GameCardItem game)
     {
         return !string.IsNullOrWhiteSpace(game.ThumbnailPath);
@@ -3493,7 +3392,7 @@ else
         var repositoryKey = NormalizeRepositoryKey(game.RelatedRepositoryPath);
         if (repositoryKey is null)
         {
-            SetNotification("関連リポジトリのパスが無効です。", false);
+            SetNotification("関連リポジトリのパスが無効です。", false, summary: "同期再開エラー");
             return;
         }
 
@@ -3504,11 +3403,11 @@ else
                 try
                 {
                     await SyncOrchestrator.ResumeRepositorySyncAsync(repositoryKey);
-                    SetNotification($"同期再開を受け付けました: {game.Title}", null);
+                    SetNotification($"同期再開を受け付けました: {game.Title}", null, summary: "同期再開受付");
                 }
                 catch (Exception ex)
                 {
-                    SetNotification($"同期再開に失敗しました: {ex.Message}", false);
+                    SetNotification($"同期再開に失敗しました: {ex.Message}", false, summary: "同期再開エラー");
                 }
             });
     }
@@ -3516,42 +3415,6 @@ else
     private static string FormatLastPlayed(DateTimeOffset? value)
     {
         return value?.LocalDateTime.ToString("yyyy-MM-dd HH:mm") ?? "未プレイ";
-    }
-
-    private static string FormatSyncHistoryTimestamp(DateTimeOffset value)
-    {
-        return value.LocalDateTime.ToString("MM-dd HH:mm:ss");
-    }
-
-    private static string FormatSyncHistoryDuration(long durationMs)
-    {
-        if (durationMs < 1_000)
-        {
-            return $"{durationMs}ms";
-        }
-
-        var seconds = durationMs / 1000d;
-        return $"{seconds:0.0}s";
-    }
-
-    private static string GetSyncHistoryStatusLabel(RepositorySyncHistoryStatus status)
-    {
-        return status switch
-        {
-            RepositorySyncHistoryStatus.Succeeded => "成功",
-            RepositorySyncHistoryStatus.Paused => "停止",
-            _ => "失敗"
-        };
-    }
-
-    private static string GetSyncHistoryStatusClass(RepositorySyncHistoryStatus status)
-    {
-        return status switch
-        {
-            RepositorySyncHistoryStatus.Succeeded => "sync-timeline-success",
-            RepositorySyncHistoryStatus.Paused => "sync-timeline-paused",
-            _ => "sync-timeline-failed"
-        };
     }
 
     private static string GetStatusLabel(GameCardStatus status)
@@ -3576,21 +3439,11 @@ else
         };
     }
 
-    private string GetMessageClass()
-    {
-        return _isLastActionSuccess switch
-        {
-            true => "notification-success",
-            false => "notification-error",
-            _ => "notification-info"
-        };
-    }
-
     private async Task CopyNotificationHistoryAsync()
     {
         if (_notificationHistoryEntries.Count == 0)
         {
-            SetNotification("コピー対象の通知履歴がありません。", false, addToHistory: false);
+            SetNotification("コピー対象の通知履歴がありません。", false, addToHistory: false, summary: "通知コピー");
             return;
         }
 
@@ -3606,11 +3459,11 @@ else
                 try
                 {
                     await Clipboard.Default.SetTextAsync(string.Join(Environment.NewLine, lines));
-                    SetNotification("通知履歴をコピーしました。", true, addToHistory: false);
+                    SetNotification("通知履歴をコピーしました。", true, addToHistory: false, summary: "通知コピー");
                 }
                 catch (Exception ex)
                 {
-                    SetNotification($"通知履歴のコピーに失敗しました: {ex.Message}", false, addToHistory: false);
+                    SetNotification($"通知履歴のコピーに失敗しました: {ex.Message}", false, addToHistory: false, summary: "通知コピー");
                 }
             });
     }
@@ -3618,7 +3471,7 @@ else
     private void ClearNotificationHistory()
     {
         _notificationHistoryEntries.Clear();
-        SetNotification("通知履歴をクリアしました。", true, addToHistory: false);
+        SetNotification("通知履歴をクリアしました。", true, addToHistory: false, summary: "通知履歴消去");
     }
 
     private static string FormatNotificationHistoryTimestamp(DateTimeOffset value)
@@ -3655,23 +3508,19 @@ else
             .ToArray();
     }
 
-    private void SetNotification(string message, bool? isSuccess, bool addToHistory = true)
+    private void SetNotification(string message, bool? isSuccess, bool addToHistory = true, string? summary = null)
     {
-        _notificationDismissCts?.Cancel();
-        _notificationDismissCts?.Dispose();
-        _notificationDismissCts = null;
-        _message = message;
-        _isLastActionSuccess = isSuccess;
+        var entry = new NotificationHistoryEntry(DateTimeOffset.Now, isSuccess,
+            summary ?? (isSuccess == false ? "操作エラー" : "操作結果"), message.Trim());
+        _notification = isSuccess == true ? null : entry;
 
-        if (isSuccess != false)
+        if (addToHistory && !string.IsNullOrWhiteSpace(message))
         {
-            _notificationDismissCts = new CancellationTokenSource();
-            _ = DismissNotificationAfterDelayAsync(_notificationDismissCts.Token);
-        }
-
-        if (addToHistory)
-        {
-            AddNotificationHistory(message, isSuccess);
+            _notificationHistoryEntries.Insert(0, entry);
+            if (_notificationHistoryEntries.Count > NotificationHistoryMaxEntries)
+            {
+                _notificationHistoryEntries.RemoveAt(_notificationHistoryEntries.Count - 1);
+            }
         }
 
         if (isSuccess == false)
@@ -3680,49 +3529,55 @@ else
         }
     }
 
-    private void DismissNotification()
+    private void DismissNotification() => _notification = null;
+
+    private void OpenResultDetails(string summary, string? detail)
     {
-        _notificationDismissCts?.Cancel();
-        _notificationDismissCts?.Dispose();
-        _notificationDismissCts = null;
-        _message = null;
+        if (!string.IsNullOrWhiteSpace(detail)) _openResult = new ResultDetails(summary, detail);
     }
 
-    private async Task DismissNotificationAfterDelayAsync(CancellationToken cancellationToken)
+    private void CloseResultDetails() => _openResult = null;
+
+    private void OpenCapturePreferenceError(string detail) => OpenResultDetails("抽出設定エラー", detail);
+
+    private void OpenGameDetails(GameCardItem game, bool fromProblem = false)
     {
-        try
-        {
-            await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
-            await InvokeAsync(() =>
-            {
-                if (!cancellationToken.IsCancellationRequested)
-                {
-                    _message = null;
-                    StateHasChanged();
-                }
-            });
-        }
-        catch (OperationCanceledException)
-        {
-        }
+        DismissNotification();
+        _selectedGameId = game.Id;
+        _selectedFromProblem = fromProblem;
     }
 
-    private void AddNotificationHistory(string message, bool? isSuccess)
+    private GameCardItem? GetSelectedGame() => _selectedGameId is null
+        ? null
+        : _games?.FirstOrDefault(game => game.Id == _selectedGameId);
+
+    private void CloseGameDetails()
     {
-        if (string.IsNullOrWhiteSpace(message))
+        if (_libraryLoadError is not null)
         {
-            return;
+            _focusLibraryHeading = true;
         }
-
-        _notificationHistoryEntries.Insert(0, new NotificationHistoryEntry(DateTimeOffset.Now, isSuccess, message.Trim()));
-        if (_notificationHistoryEntries.Count <= NotificationHistoryMaxEntries)
+        else if (_selectedFromProblem && GetSelectedGame() is { } game
+            && GetCardProblem(game, HasThumbnail(game) && GetThumbnailSource(game) is not { DecodeFailed: false }) is null)
         {
-            return;
+            _focusCardId = game.Id;
         }
+        DismissNotification();
+        _selectedGameId = null;
+    }
 
-        _notificationHistoryEntries.RemoveRange(
-            NotificationHistoryMaxEntries,
-            _notificationHistoryEntries.Count - NotificationHistoryMaxEntries);
+    private string? GetCardProblem(GameCardItem game, bool imageFailed)
+    {
+        var gitFailed = GetGitVisualState(game) == GitRepositoryVisualState.Error;
+        var syncFailed = !CanResumeRepositorySync(game) && GetEffectiveStatus(game) == GameCardStatus.Error;
+        var linksFailed = _saveLinkLoadFailedGameIds.Contains(game.Id);
+        var count = (imageFailed ? 1 : 0) + (gitFailed ? 1 : 0) + (syncFailed ? 1 : 0) + (linksFailed ? 1 : 0);
+        return count > 1 ? "要確認"
+            : imageFailed ? "画像エラー"
+            : gitFailed ? "Gitエラー"
+            : syncFailed ? "同期エラー"
+            : linksFailed ? "リンクエラー"
+            : null;
     }
 
     private async Task WriteErrorLogSafeAsync(string message)
@@ -3786,7 +3641,10 @@ else
     private sealed record NotificationHistoryEntry(
         DateTimeOffset Timestamp,
         bool? IsSuccess,
+        string Summary,
         string Message);
+
+    private sealed record ResultDetails(string Summary, string Detail);
 
     private enum GitRepositoryVisualState
     {
