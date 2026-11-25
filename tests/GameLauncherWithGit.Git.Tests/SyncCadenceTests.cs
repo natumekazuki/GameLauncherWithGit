@@ -617,6 +617,31 @@ public sealed class SyncCadenceTests
 
     // @test-value v2
     // kind = "invariant"
+    // claim = "確定送信後の追跡取得だけが失敗しても成功履歴を残し、再送も追跡更新だけの再試行もしない"
+    // oracle = { type = "contract", ref = "Session Graph game-sync-cadence-tracking-after-push" }
+    // fault = "追跡用のエラーを送信の失敗や自動再試行として扱う"
+    // observable = "送信・追跡取得各一回、成功履歴、仮想時計で再試行期限を過ぎても追加Gitなし"
+    // observation_boundary = "public-boundary"
+    // scope = "cadence queue after a best-effort tracking fetch fails"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public void FailedTrackingRefreshDoesNotRetryAnAlreadyConfirmedPush()
+    {
+        using var f = new Fixture(commit: 1, push: 1, retry: 5) { Ahead = true, FailTrackingFetch = true };
+        f.Watch();
+        f.Advance(seconds: 60);
+        Assert.Equal(1, f.Pushes);
+        Assert.Single(f.Commands, command => command == "fetch tracking");
+        Assert.Equal(RepositorySyncHistoryStatus.Succeeded, Assert.Single(f.History).Status);
+        var before = f.Commands.Count;
+        f.Advance(seconds: 180);
+        Assert.Equal(before, f.Commands.Count);
+        Assert.Single(f.History);
+    }
+
+    // @test-value v2
+    // kind = "invariant"
     // claim = "旧枝の期限を過ぎても非選択中は送信せず、戻ったときはGitに残る未送信を再検出する"
     // oracle = { type = "contract", ref = "Session Graph game-sync-cadence-independent-review CAD-CORE-03" }
     // fault = "非選択の枝を送信する、または再選択時に古いコミットを検出せず期限を初めから待つ"
@@ -743,6 +768,7 @@ public sealed class SyncCadenceTests
         public bool TargetKnown { get; set; } = true;
         public bool PushReportsBranch { get; set; } = true;
         public bool FailLibraryRead { get; set; }
+        public bool FailTrackingFetch { get; set; }
         public int LibraryReads { get; private set; }
         public CancellationTokenSource? CancelOnFetch { get; set; }
         public TaskCompletionSource<GitCommandResult>? FetchGate { get; set; }
@@ -821,8 +847,13 @@ public sealed class SyncCadenceTests
                     new(0, PushRemote + "\0", ""),
                 var c when c == $"config --null --get-all remote.{PushRemote}.push" =>
                     new(0, $"refs/heads/{Branch}:refs/heads/{Destination}\0", ""),
+                var c when c == $"config --null --get-all branch.{Branch}.merge" =>
+                    new(0, $"refs/heads/{Branch}\0", ""),
+                "config --null --get-all remote.origin.fetch" => new(0, "+refs/heads/*:refs/remotes/origin/*\0", ""),
                 var c when c.StartsWith("config --null ", StringComparison.Ordinal) => new(1, "", ""),
                 var c when c == $"check-ref-format refs/heads/{Destination}" => new(0, "", ""),
+                "check-ref-format refs/remotes/origin/sample" => new(0, "", ""),
+                "symbolic-ref --quiet --no-recurse refs/remotes/origin/sample" => new(1, "", ""),
                 var c when c.StartsWith("rev-parse --verify --quiet ", StringComparison.Ordinal) && c.EndsWith("^{commit}", StringComparison.Ordinal)
                     => new(0, "", ""),
                 var c when c.StartsWith("log --format=%ct ", StringComparison.Ordinal) =>
@@ -848,6 +879,19 @@ public sealed class SyncCadenceTests
             Assert.Equal(Repository, repositoryPath);
             Assert.Equal(PushRemote, remote);
             return Task.FromResult(new GitCommandResult(0, PushUrl + "\n", ""));
+        }
+
+        Task<GitCommandResult> IGitService.ReadCadenceFetchUrlsAsync(string repositoryPath, string remote, CancellationToken token) =>
+            Task.FromResult(FailTrackingFetch ? new GitCommandResult(0, PushUrl + "\n", "") : new(-1, "", ""));
+
+        Task<GitCommandResult> IGitService.FetchCadenceTrackingAsync(string repositoryPath, string resolvedUrl,
+            string remoteRef, string trackingRef, CancellationToken token)
+        {
+            Assert.True(FailTrackingFetch);
+            Assert.Equal("refs/heads/sample", remoteRef);
+            Assert.Equal("refs/remotes/origin/sample", trackingRef);
+            Commands.Add("fetch tracking");
+            return Task.FromResult(new GitCommandResult(1, "", "", "Fixture tracking fetch failed"));
         }
 
         Task<GitCommandResult> IGitService.RunCadenceEndpointAsync(string repositoryPath, string resolvedUrl,
