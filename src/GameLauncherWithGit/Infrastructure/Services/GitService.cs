@@ -120,7 +120,7 @@ public sealed class GitService : IGitService
 		return await RecordFailureAsync(repositoryPath, arguments, result);
 	}
 
-	private static string ResolveDirectoryPath(string path)
+	internal static string ResolveDirectoryPath(string path)
 	{
 		var fullPath = Path.GetFullPath(path);
 		var pathRoot = Path.GetPathRoot(fullPath) ?? throw new ArgumentException("パスのルートを確認できません。", nameof(path));
