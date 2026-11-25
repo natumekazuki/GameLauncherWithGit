@@ -1153,16 +1153,16 @@ else
                     }
 
                     var message = $"「{game.Title}」: {result.Message}";
+                    var launchEntry = !result.IsSuccess
+                        ? SetNotification(message, false, summary: "起動エラー", launchGameId: game.Id)
+                        : result.HasWarnings
+                            ? SetNotification(message, null, summary: "起動済み・警告", launchGameId: game.Id, retainWarning: true)
+                            : SetNotification(result.Message, true, summary: "起動済み", launchGameId: game.Id);
+                    StateHasChanged();
                     try
                     {
                         if (await ReloadGamesAsync())
                         {
-                            if (!result.IsSuccess)
-                                SetNotification(message, false, summary: "起動エラー", launchGameId: game.Id);
-                            else if (result.HasWarnings)
-                                SetNotification(message, null, summary: "起動済み・警告", launchGameId: game.Id, retainWarning: true);
-                            else
-                                SetNotification(result.Message, true, summary: "起動済み", launchGameId: game.Id);
                             return;
                         }
                     }
@@ -1173,7 +1173,7 @@ else
 
                     SetNotification($"{message} 一覧の再読込に失敗しました。", false,
                         summary: result.IsSuccess ? "起動済み・一覧エラー" : "起動・一覧エラー",
-                        launchGameId: game.Id);
+                        launchGameId: game.Id, replaceHistory: launchEntry);
                 });
         }
         finally
@@ -3588,9 +3588,9 @@ else
             .ToArray();
     }
 
-    private void SetNotification(string message, bool? isSuccess, bool addToHistory = true, string? summary = null,
+    private NotificationHistoryEntry SetNotification(string message, bool? isSuccess, bool addToHistory = true, string? summary = null,
         string? launchGameId = null, string? targetId = null, string? repositoryPath = null, bool retainWarning = false,
-        [CallerMemberName] string operation = "")
+        NotificationHistoryEntry? replaceHistory = null, [CallerMemberName] string operation = "")
     {
         var entry = new NotificationHistoryEntry(DateTimeOffset.Now, isSuccess,
             summary ?? (isSuccess == false ? "操作エラー" : "操作結果"), message.Trim());
@@ -3606,6 +3606,10 @@ else
 
         if (addToHistory && !string.IsNullOrWhiteSpace(message))
         {
+            if (replaceHistory is not null)
+            {
+                _notificationHistoryEntries.Remove(replaceHistory);
+            }
             _notificationHistoryEntries.Insert(0, entry);
             if (_notificationHistoryEntries.Count > NotificationHistoryMaxEntries)
             {
@@ -3617,6 +3621,7 @@ else
         {
             _ = WriteErrorLogSafeAsync(message);
         }
+        return entry;
     }
 
     private void DismissNotification()
