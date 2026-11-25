@@ -15,11 +15,17 @@
                    aria-invalid="@(InvalidCode ? "true" : null)"
                    aria-describedby="@(InvalidCode ? "play-web-code-error" : null)" />
         </div>
-        <button class="play-web-action play-web-action-primary" type="submit">接続</button>
-        @if (InvalidCode)
-        {
-            <p id="play-web-code-error" class="play-web-error" role="alert">接続コードが無効です。PCで接続コードを発行し直してください。</p>
-        }
+        <div class="play-web-actions">
+            <button class="play-web-action play-web-action-primary" type="submit">接続</button>
+            @if (InvalidCode)
+            {
+                <span id="play-web-code-error" class="play-web-sr-only" role="alert">接続コードが無効です。</span>
+                <details class="play-web-error-details">
+                    <summary class="play-web-action">コード無効</summary>
+                    <p class="play-web-error-body">PCで接続コードを発行し直してください。</p>
+                </details>
+            }
+        </div>
     </form>
 </main>
 

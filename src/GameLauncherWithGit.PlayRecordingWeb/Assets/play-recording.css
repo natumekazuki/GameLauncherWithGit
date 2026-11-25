@@ -50,7 +50,14 @@ body { margin: 0; }
     border-color: #596d8a;
 }
 .play-web-entry input[aria-invalid="true"] { border-color: var(--play-web-error); }
-.play-web-error { color: var(--play-web-error); }
+
+.play-web-actions {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .5rem;
+}
 
 .play-web-action {
     display: inline-flex;
@@ -67,7 +74,31 @@ body { margin: 0; }
     font-weight: 650;
 }
 
-#play-web-reconnect-status {
+.play-web-error-details > summary { color: var(--play-web-error); }
+.play-web-error-details > summary::after {
+    content: "";
+    inline-size: .45rem;
+    block-size: .45rem;
+    margin-inline-start: .6rem;
+    border-inline-end: 2px solid currentColor;
+    border-block-end: 2px solid currentColor;
+    transform: rotate(45deg) translate(-1px, -1px);
+}
+.play-web-error-details[open] > summary::after { transform: rotate(225deg); }
+
+.play-web-entry .play-web-error-body {
+    position: absolute;
+    z-index: 1;
+    inset-inline: 0;
+    inset-block-start: calc(100% + .5rem);
+    padding: .75rem;
+    background: var(--play-web-input);
+    border: 1px solid var(--play-web-line);
+    border-radius: .45rem;
+    overflow-wrap: anywhere;
+}
+
+.play-web-sr-only {
     position: absolute;
     inset-block-start: 0;
     inset-inline-start: 0;
@@ -82,4 +113,5 @@ body { margin: 0; }
 .play-web-reconnecting, .play-web-reconnect-error { display: none; }
 .components-reconnect-show .play-web-reconnecting,
 :is(.components-reconnect-failed, .components-reconnect-rejected) .play-web-reconnect-error { display: block; }
-body:has(#components-reconnect-modal:not(.components-reconnect-hide)) #play-recording-content { display: none; }
+body:has(#components-reconnect-modal:not(.components-reconnect-hide)) #play-recording-content,
+#play-recording-content [data-play-recording-stale] { display: none; }
