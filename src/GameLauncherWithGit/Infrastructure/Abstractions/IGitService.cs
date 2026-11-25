@@ -26,4 +26,13 @@ public interface IGitService
 	internal Task<GitCommandResult> FetchCadenceTrackingAsync(string repositoryPath, string resolvedUrl,
 		string remoteRef, string trackingRef, CancellationToken token) =>
 		Task.FromResult(new GitCommandResult(-1, "", ""));
+
+	internal async Task<GitCommandResult> RunCadenceIncomingAsync(string repositoryPath, string? remote, string? mergeTarget,
+		Func<bool>? mayStart, CancellationToken token)
+	{
+		if (mayStart?.Invoke() == false) return new(0, "", "");
+		var result = await RunAsync(repositoryPath, mergeTarget is null ? ["fetch"]
+			: ["pull", "--rebase", "--autostash", remote!, mergeTarget], token);
+		return result.ProtectCadenceIncoming(mergeTarget is not null);
+	}
 }

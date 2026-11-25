@@ -563,7 +563,16 @@ public sealed partial class SyncOrchestrator : ISyncOrchestrator, IDisposable
 	private async Task<bool> PrepareIncomingAsync(string repositoryPath, DateTimeOffset startedAt, CancellationToken cancellationToken,
 		Func<bool>? mayAcquireWorktree = null)
 	{
-		await EnsureCommandSuccessAsync(repositoryPath, ["fetch"], startedAt, shouldPauseRepository: false, cancellationToken);
+		if (mayAcquireWorktree is null)
+		{
+			await EnsureCommandSuccessAsync(repositoryPath, ["fetch"], startedAt, shouldPauseRepository: false, cancellationToken);
+		}
+		else
+		{
+			var fetch = await RunCadenceIncomingAsync(repositoryPath, null, null, null, cancellationToken);
+			if (!fetch.IsSuccess)
+				throw new SyncCommandException(repositoryPath, "fetch", BuildFailureReason(fetch), startedAt, shouldPauseRepository: false);
+		}
 
 		var tracking = await TryGetTrackingInfoAsync(repositoryPath, startedAt, cancellationToken);
 		if (tracking is not null)
@@ -571,15 +580,17 @@ public sealed partial class SyncOrchestrator : ISyncOrchestrator, IDisposable
 			// A new change may have arrived while awaiting fetch or the upstream lookup.
 			if (mayAcquireWorktree?.Invoke() == false) return true;
 			string[] pullCommand = ["pull", "--rebase", "--autostash", tracking.RemoteName, tracking.MergeTarget];
-			var pullResult = await RunGitAsync(repositoryPath, pullCommand, cancellationToken);
+			var pullResult = mayAcquireWorktree is null
+				? await RunGitAsync(repositoryPath, pullCommand, cancellationToken)
+				: await RunCadenceIncomingAsync(repositoryPath, tracking.RemoteName, tracking.MergeTarget, mayAcquireWorktree, cancellationToken);
 			if (!pullResult.IsSuccess)
 			{
 				throw new SyncCommandException(
 					repositoryPath,
-					string.Join(' ', pullCommand),
+					mayAcquireWorktree is null ? string.Join(' ', pullCommand) : "pull --rebase --autostash",
 					BuildFailureReason(pullResult),
 					startedAt,
-					shouldPauseRepository: IsPullConflict(pullResult) || IsPullConfigurationError(pullResult));
+					shouldPauseRepository: pullResult.HasPullConflict() || pullResult.HasPullConfigurationError());
 			}
 		}
 		else
@@ -590,6 +601,26 @@ public sealed partial class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		}
 
 		return tracking is not null;
+	}
+
+	private async Task<GitCommandResult> RunCadenceIncomingAsync(string repositoryPath, string? remote, string? mergeTarget,
+		Func<bool>? mayStart, CancellationToken token)
+	{
+		try
+		{
+			token.ThrowIfCancellationRequested();
+			var result = await _gitService.RunCadenceIncomingAsync(repositoryPath, remote, mergeTarget, mayStart, token);
+			token.ThrowIfCancellationRequested();
+			return result;
+		}
+		catch (OperationCanceledException) when (token.IsCancellationRequested)
+		{
+			throw;
+		}
+		catch (Exception)
+		{
+			return new GitCommandResult(-1, "", "").ProtectCadenceIncoming(mergeTarget is not null);
+		}
 	}
 
 	private async Task CommitChangesAsync(string repositoryPath, DateTimeOffset startedAt, CancellationToken cancellationToken)
@@ -653,37 +684,6 @@ public sealed partial class SyncOrchestrator : ISyncOrchestrator, IDisposable
 			BuildFailureReason(result),
 			startedAt,
 			shouldPauseRepository);
-	}
-
-	private static bool IsPullConflict(GitCommandResult result)
-	{
-		var text = $"{result.StandardError}\n{result.StandardOutput}";
-		if (string.IsNullOrWhiteSpace(text))
-		{
-			return false;
-		}
-
-		return text.Contains("CONFLICT", StringComparison.OrdinalIgnoreCase)
-			|| text.Contains("Resolve all conflicts manually", StringComparison.OrdinalIgnoreCase)
-			|| text.Contains("could not apply", StringComparison.OrdinalIgnoreCase)
-			|| text.Contains("fix conflicts and then run", StringComparison.OrdinalIgnoreCase)
-			|| text.Contains("競合", StringComparison.OrdinalIgnoreCase);
-	}
-
-	private static bool IsPullConfigurationError(GitCommandResult result)
-	{
-		var text = $"{result.StandardError}\n{result.StandardOutput}";
-		if (string.IsNullOrWhiteSpace(text))
-		{
-			return false;
-		}
-
-		return text.Contains("Cannot rebase onto multiple branches", StringComparison.OrdinalIgnoreCase)
-			|| text.Contains("There is no tracking information for the current branch", StringComparison.OrdinalIgnoreCase)
-			|| text.Contains("no upstream configured", StringComparison.OrdinalIgnoreCase)
-			|| text.Contains("upstream branch", StringComparison.OrdinalIgnoreCase)
-			|| text.Contains("Please specify which branch you want to rebase against", StringComparison.OrdinalIgnoreCase)
-			|| text.Contains("Updating an unborn branch with changes added to the index", StringComparison.OrdinalIgnoreCase);
 	}
 
 	private static bool IsNothingToCommit(GitCommandResult result)

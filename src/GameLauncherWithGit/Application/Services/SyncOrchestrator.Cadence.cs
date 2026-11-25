@@ -3,6 +3,7 @@ using GameLauncherWithGit.Application.Models;
 using GameLauncherWithGit.Domain.Models;
 using GameLauncherWithGit.Infrastructure.Abstractions;
 using GameLauncherWithGit.Infrastructure.Models;
+using GameLauncherWithGit.Infrastructure.Services;
 using Microsoft.Extensions.Logging;
 
 namespace GameLauncherWithGit.Application.Services;
@@ -332,6 +333,8 @@ public sealed partial class SyncOrchestrator
 		token.ThrowIfCancellationRequested();
 		if (!urls.IsSuccess || ReadLines(urls.StandardOutput) is not [var url] || string.IsNullOrWhiteSpace(url))
 			return identity with { BlockedReason = ambiguous };
+		if (GitService.HasCadenceEmbeddedHttpCredentials(url))
+			return identity with { BlockedReason = GitService.CadenceEmbeddedCredentialsMessage };
 		identity = identity with { PushUrl = url };
 
 		var mirror = await ReadConfigAsync(repositoryId, $"remote.{remote}.mirror", startedAt, token, boolean: true);

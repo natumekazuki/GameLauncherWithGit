@@ -282,7 +282,7 @@ public sealed class GitServiceTests : IDisposable
 	// kind = "invariant"
 	// claim = "送信範囲を安全に一枝へ限定できない設定は、隔離bareを変更せず失敗として返す"
 	// oracle = { type = "contract", ref = "Session Graph game-sync-cadence-push-scope CAD-CORE-01" }
-	// fault = "force・複数・matching・mirrorを実pushへ渡し、実行後にだけ結果を判定する"
+	// fault = "force・複数refspec/pushurl・matching・mirrorを実pushへ渡し、実行後にだけ結果を判定する"
 	// observable = "新送信経路での失敗履歴の理由、隔離bareの全ref先端および存在が不変"
 	// observation_boundary = "public-boundary"
 	// scope = "preflight refusal through SyncOrchestrator with real Git"
@@ -293,9 +293,11 @@ public sealed class GitServiceTests : IDisposable
 	[InlineData("multiple")]
 	[InlineData("matching")]
 	[InlineData("mirror")]
+	[InlineData("multiple-pushurls")]
 	public async Task UnsafePushConfigurationCannotChangeAnyRemoteRef(string kind)
 	{
 		var (root, bare) = CreateCadenceRepositories();
+		var extra = CreateBare("extra-push.git");
 		MakeOutgoingCommit(root);
 		RunGit(root, "branch", "-f", "other", "HEAD");
 		RunGit(root, "tag", "-a", "-m", "unsent tag", "local-only");
@@ -314,6 +316,10 @@ public sealed class GitServiceTests : IDisposable
 			case "mirror":
 				RunGit(root, "config", "--local", "remote.origin.mirror", "true");
 				break;
+			case "multiple-pushurls":
+				RunGit(root, "config", "--local", "--add", "remote.origin.pushurl", bare);
+				RunGit(root, "config", "--local", "--add", "remote.origin.pushurl", extra);
+				break;
 		}
 		var before = Refs(bare);
 		var git = new RecordingGit(_service);
@@ -325,6 +331,7 @@ public sealed class GitServiceTests : IDisposable
 		Assert.Contains("送信先設定", history.Reason);
 		Assert.DoesNotContain("push", git.Commands);
 		Assert.Equal(before, Refs(bare));
+		Assert.Empty(Refs(extra));
 	}
 
 	// @test-value v2
@@ -567,6 +574,87 @@ public sealed class GitServiceTests : IDisposable
 
 	// @test-value v2
 	// kind = "invariant"
+	// claim = "正値の送信・取得で埋込HTTP(S)認証をhelper起動前に拒否し、値を出さずCredential Helperへ案内する"
+	// oracle = { type = "contract", ref = "Session Graph game-sync-cadence-push-scope CAD-CORE-01" }
+	// fault = "アプリ内の引数だけを隠し、HTTP helperへ認証付きURLを渡す"
+	// observable = "合成userinfo付きURLでの送信と取得の拒否理由、transport開始ログと生の値の不在"
+	// observation_boundary = "public-boundary"
+	// scope = "cadence Git execution boundary before HTTP transport"
+	// lifecycle = "permanent"
+	// @end-test-value
+	[Theory]
+	[InlineData("http")]
+	[InlineData("https")]
+	public async Task EmbeddedHttpCredentialsAreRejectedBeforeTransport(string scheme)
+	{
+		var (root, _) = CreateCadenceRepositories();
+		const string marker = "synthetic-http-auth";
+		var url = $"{scheme}://fixture:{marker}@127.0.0.1:9/fixture.git";
+		RunGit(root, "remote", "set-url", "origin", url);
+		var logger = new CapturedGitLogger();
+		var errorLog = new TestLog();
+		IGitService git = new GitService(errorLog, logger);
+		var head = RunGit(root, "rev-parse", "HEAD").Trim();
+		var results = new[]
+		{
+			await git.RunCadenceEndpointAsync(root, url, "refs/heads/sample", head, CancellationToken.None),
+			await git.RunCadenceIncomingAsync(root, null, null, null, CancellationToken.None),
+			await git.RunCadenceIncomingAsync(root, "origin", "sample", null, CancellationToken.None)
+		};
+		Assert.All(results, result =>
+		{
+			Assert.False(result.IsSuccess);
+			Assert.Contains("Credential Helper", result.GetFailureReason());
+			Assert.DoesNotContain(marker, result.GetFailureReason());
+		});
+		Assert.DoesNotContain(logger.Lines, line => line is "push (cadence)" or "fetch (cadence)" or "pull (cadence)");
+		Assert.DoesNotContain(logger.Lines, line => line.Contains(marker, StringComparison.Ordinal));
+		Assert.Empty(errorLog.Results);
+	}
+
+	// @test-value v2
+	// kind = "invariant"
+	// claim = "正値の通常fetch/pull失敗は、生のendpointを同期履歴・通知・Git詳細ログへ渡さない"
+	// oracle = { type = "contract", ref = "Session Graph game-sync-cadence-push-scope CAD-CORE-01" }
+	// fault = "確定pushは保護しても、先行する実fetch/pullの標準エラーや例外を同期エラーとして露出する"
+	// observable = "合成パスの実Git失敗、同期履歴と通知、Gitログ入力、pushなし"
+	// observation_boundary = "public-boundary"
+	// scope = "ordinary incoming cadence failures with real Git"
+	// lifecycle = "permanent"
+	// @end-test-value
+	[Theory]
+	[InlineData(false)]
+	[InlineData(true)]
+	public async Task CadenceIncomingFailuresDoNotExposeRawTransportDetails(bool onPull)
+	{
+		var (root, bare) = CreateCadenceRepositories();
+		const string marker = "synthetic-incoming-marker";
+		var missing = Path.Combine(_directory, marker + ".git");
+		RunGit(root, "remote", "set-url", "--push", "origin", bare);
+		void ReplaceFetchUrl() => RunGit(root, "remote", "set-url", "origin", missing);
+		if (!onPull) ReplaceFetchUrl();
+		var logger = new CapturedGitLogger();
+		var errorLog = new TestLog();
+		var git = new RecordingGit(new GitService(errorLog, logger)) { BeforeIncomingPull = onPull ? ReplaceFetchUrl : null };
+		using var f = new SyncCadenceTests.Fixture(commit: 1, push: 1, repository: root, git: git);
+		Assert.True(f.Sync.TryQueueRepositorySyncNow(root));
+		var history = await f.FirstHistory.Task.WaitAsync(TimeSpan.FromSeconds(20));
+		var notification = await f.FirstNotification.Task.WaitAsync(TimeSpan.FromSeconds(20));
+		var name = onPull ? "pull" : "fetch";
+		Assert.Equal(RepositorySyncHistoryStatus.Failed, history.Status);
+		Assert.StartsWith(name, history.Command);
+		Assert.NotNull(history.Reason);
+		Assert.DoesNotContain(marker, history.Reason);
+		Assert.DoesNotContain(marker, notification);
+		Assert.Contains($"{name} (cadence)", logger.Lines);
+		Assert.DoesNotContain(logger.Lines, line => line.Contains(marker, StringComparison.Ordinal));
+		Assert.Contains(errorLog.Results, result => !result.IsSuccess);
+		Assert.DoesNotContain(errorLog.Results, result => result.ToString().Contains(marker, StringComparison.Ordinal));
+		Assert.DoesNotContain("push", git.Commands);
+	}
+
+	// @test-value v2
+	// kind = "invariant"
 	// claim = "Tray一括の対象集計は物理先の別名を一件にまとめ、同じobject庫の別worktreeを別件にする"
 	// oracle = { type = "contract", ref = "Session Graph game-git-repository-identity-boundary" }
 	// fault = "Trayが別名を重複計上する、またはリンクされた別worktreeを同一件として落とす"
@@ -695,6 +783,7 @@ public sealed class GitServiceTests : IDisposable
 		public ConcurrentQueue<GitCommandResult> TrackingResults { get; } = new();
 		public Action? BeforeEndpointSend { get; init; }
 		public Action? AfterEndpointSend { get; init; }
+		public Action? BeforeIncomingPull { get; init; }
 		public Task<GitCommandResult> CheckAvailabilityAsync(CancellationToken cancellationToken = default) =>
 			git.CheckAvailabilityAsync(cancellationToken);
 		public Task<GitCommandResult> RunAsync(string repositoryPath, IReadOnlyList<string> arguments,
@@ -707,6 +796,13 @@ public sealed class GitServiceTests : IDisposable
 			git.ReadCadencePushUrlsAsync(repositoryPath, remote, token);
 		Task<GitCommandResult> IGitService.ReadCadenceFetchUrlsAsync(string repositoryPath, string remote, CancellationToken token) =>
 			git.ReadCadenceFetchUrlsAsync(repositoryPath, remote, token);
+		Task<GitCommandResult> IGitService.RunCadenceIncomingAsync(string repositoryPath, string? remote, string? mergeTarget,
+			Func<bool>? mayStart, CancellationToken token)
+		{
+			Commands.Enqueue(mergeTarget is null ? "fetch" : "pull");
+			if (mergeTarget is not null) BeforeIncomingPull?.Invoke();
+			return git.RunCadenceIncomingAsync(repositoryPath, remote, mergeTarget, mayStart, token);
+		}
 		async Task<GitCommandResult> IGitService.RunCadenceEndpointAsync(string repositoryPath, string resolvedUrl,
 			string destinationRef, string? commit, CancellationToken token)
 		{

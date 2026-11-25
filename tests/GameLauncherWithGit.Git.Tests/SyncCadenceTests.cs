@@ -176,7 +176,7 @@ public sealed class SyncCadenceTests
     // kind = "invariant"
     // claim = "旧コミットの送信期限は、新しい書込のデバウンスを破らず、既存コミットだけを送信する"
     // oracle = { type = "contract", ref = "Session Graph game-sync-cadence-independent-review CAD-CORE-06" }
-    // fault = "期限起床前またはDB照合・Git statusのawait中に届いた書込を未成熟のままステージ・autostashする"
+    // fault = "期限起床前またはDB照合・status・fetch・upstream照合のawait中に届いた書込を未成熟のままステージ・autostashする"
     // observable = "送信期限ではpushのみ、後続の10秒満了で初めてcommit"
     // observation_boundary = "public-boundary"
     // scope = "outgoing deadline while a fresh change is debouncing"
@@ -186,6 +186,8 @@ public sealed class SyncCadenceTests
     [InlineData("before")]
     [InlineData("database")]
     [InlineData("status")]
+    [InlineData("fetch")]
+    [InlineData("upstream")]
     public void OutgoingDeadlineDoesNotBypassChangeDebounce(string changeTiming)
     {
         using var f = new Fixture(commit: 0, push: 1) { Ahead = true };
@@ -208,17 +210,28 @@ public sealed class SyncCadenceTests
             f.Advance(seconds: 1);
             Assert.Equal("status --porcelain", Assert.Single(f.Commands.Skip(checkpoint)));
         }
+        else if (changeTiming is "fetch" or "upstream")
+        {
+            if (changeTiming == "fetch") f.FetchGate = statusGate;
+            else f.UpstreamGate = statusGate;
+            f.Advance(seconds: 1);
+            Assert.Equal(changeTiming == "fetch" ? "fetch" : "config --get branch.sample.merge", f.Commands.Last());
+        }
         f.Dirty = true;
         f.Change();
         if (changeTiming == "database")
             gate.SetResult(f.Games);
         else if (changeTiming == "status")
             statusGate.SetResult(new(0, " M save.dat\n", ""));
+        else if (changeTiming is "fetch" or "upstream")
+            statusGate.SetResult(new(0, changeTiming == "upstream" ? "refs/heads/sample" : "", ""));
         else
             f.Advance(seconds: 1);
         Assert.Equal((0, 1), (f.Commits, f.Pushes));
         Assert.DoesNotContain(f.Commands.Skip(checkpoint), command =>
-            command is "add -A" or "fetch" || command.StartsWith("pull ", StringComparison.Ordinal));
+            command == "add -A" || command.StartsWith("pull ", StringComparison.Ordinal));
+        if (changeTiming is not ("fetch" or "upstream"))
+            Assert.DoesNotContain("fetch", f.Commands.Skip(checkpoint));
         Assert.True(f.Dirty);
         Assert.Empty(f.History);
         f.Advance(seconds: changeTiming == "before" ? 8 : 9);
@@ -734,6 +747,7 @@ public sealed class SyncCadenceTests
         public CancellationTokenSource? CancelOnFetch { get; set; }
         public TaskCompletionSource<GitCommandResult>? FetchGate { get; set; }
         public TaskCompletionSource<GitCommandResult>? StatusGate { get; set; }
+        public TaskCompletionSource<GitCommandResult>? UpstreamGate { get; set; }
         public TaskCompletionSource<IReadOnlyList<GameCardItem>>? LibraryReadGate { get; set; }
         public TaskCompletionSource<RepositorySyncHistoryItem> FirstHistory { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<string> FirstNotification { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -791,6 +805,11 @@ public sealed class SyncCadenceTests
             {
                 StatusGate = null;
                 return statusGate.Task;
+            }
+            if (command == $"config --get branch.{Branch}.merge" && UpstreamGate is { } upstreamGate)
+            {
+                UpstreamGate = null;
+                return upstreamGate.Task;
             }
             GitCommandResult result = command switch
             {

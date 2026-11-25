@@ -89,22 +89,110 @@ public sealed class GitService : IGitService
 			"fetch tracking (cadence)", token, requirePhysicalRoot: true);
 	}
 
+	internal const string CadenceEmbeddedCredentialsMessage =
+		"HTTP(S) URL に認証情報を含めたまま自動同期できません。URL から認証情報を外し、Git Credential Helper などを設定してください。";
+
+	internal static bool HasCadenceEmbeddedHttpCredentials(string url)
+	{
+		if (!IsCadenceHttpUrl(url)) return false;
+		var authority = url.AsSpan(url.IndexOf("://", StringComparison.Ordinal) + 3);
+		var end = authority.IndexOfAny("/?#".AsSpan());
+		return (end < 0 ? authority : authority[..end]).Contains('@')
+			|| (Uri.TryCreate(url, UriKind.Absolute, out var parsed) && !string.IsNullOrEmpty(parsed.UserInfo));
+	}
+
+	private static bool IsCadenceHttpUrl(string url) => url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+		|| url.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+
+	async Task<GitCommandResult> IGitService.RunCadenceIncomingAsync(string repositoryPath, string? remote, string? mergeTarget,
+		Func<bool>? mayStart, CancellationToken token)
+	{
+		var isPull = mergeTarget is not null;
+		var commandName = isPull ? "pull (cadence)" : "fetch (cadence)";
+		Task<GitCommandResult> Read(string[] arguments) => RunInternalAsync(repositoryPath, arguments, token,
+			protectedResult: value => value.IsSuccess ? new(0, value.StandardOutput, "") : new(value.ExitCode, "", ""),
+			safeArguments: ["read incoming Git configuration (cadence)"]);
+
+		if (remote is null)
+		{
+			var selected = await Read(["symbolic-ref", "--quiet", "--short", "HEAD"]);
+			token.ThrowIfCancellationRequested();
+			var branch = selected.StandardOutput.Trim();
+			if (selected.IsSuccess && branch.Length > 0)
+			{
+				var configured = await Read(["config", "--get", $"branch.{branch}.remote"]);
+				token.ThrowIfCancellationRequested();
+				if (configured.IsSuccess) remote = configured.StandardOutput.TrimEnd('\r', '\n');
+			}
+			remote = string.IsNullOrEmpty(remote) ? "origin" : remote;
+		}
+
+		// git fetch/pull may use the HTTP helper too. For a verified HTTP URL use a
+		// one-shot alias, and never let the ordinary named path start an HTTP helper.
+		var urls = IsCadenceHttpUrl(remote) ? new GitCommandResult(0, remote, "")
+			: await ReadCadenceUrlsAsync(repositoryPath, remote, push: false, token);
+		token.ThrowIfCancellationRequested();
+		var candidates = urls.IsSuccess ? urls.StandardOutput.TrimEnd('\r', '\n').Split('\n') : [];
+		if (candidates.Any(HasCadenceEmbeddedHttpCredentials))
+			return new(-1, "", "", CadenceEmbeddedCredentialsMessage);
+
+		if (candidates is [var verified] && IsCadenceHttpUrl(verified))
+		{
+			// Retain the named remote's ordinary fetch mapping so pull can still
+			// find the upstream for rebase, without using its mutable URL.
+			var options = new List<(string Key, string Value)>();
+			if (!IsCadenceHttpUrl(remote))
+			{
+				foreach (var key in new[] { "fetch", "tagOpt", "prune", "pruneTags" })
+				{
+					var configured = await Read(["config", "--null", "--get-all", $"remote.{remote}.{key}"]);
+					if (!configured.IsSuccess && configured.ExitCode != 1)
+						return configured.ProtectCadenceIncoming(isPull);
+					if (configured.StandardOutput.EndsWith('\0'))
+						options.AddRange(configured.StandardOutput[..^1].Split('\0').Select(value => (key, value)));
+				}
+			}
+			return await RunAtCadenceEndpointAsync(repositoryPath, verified, alias => isPull
+				? ["-c", "http.followRedirects=false", "pull", "--rebase", "--autostash", "--", alias, mergeTarget!]
+				: ["-c", "http.followRedirects=false", "fetch", "--", alias],
+				result => result.ProtectCadenceIncoming(isPull), commandName, token,
+				remoteOptions: options, mayStart: mayStart);
+		}
+
+		string[] command = isPull
+			? ["-c", "protocol.http.allow=never", "-c", "protocol.https.allow=never", "pull", "--rebase", "--autostash", "--", remote, mergeTarget!]
+			: ["-c", "protocol.http.allow=never", "-c", "protocol.https.allow=never", "fetch"];
+		return await RunInternalAsync(repositoryPath, command, token,
+			configure: start =>
+			{
+				if (start.Environment.TryGetValue("GIT_ALLOW_PROTOCOL", out var protocols) && protocols is not null)
+				{
+					start.Environment["GIT_ALLOW_PROTOCOL"] = string.Join(':', protocols.Split(':')
+						.Where(protocol => protocol is not ("http" or "https")));
+				}
+			},
+			protectedResult: result => result.ProtectCadenceIncoming(isPull), safeArguments: [commandName], mayStart: mayStart);
+	}
+
 	private static bool IsCadenceRef(string name, string prefix) =>
 		name.StartsWith(prefix, StringComparison.Ordinal) && name.Length > prefix.Length
 		&& name.IndexOfAny([':', '*', '?', '[', '\r', '\n', '\t', '\0']) < 0;
 
 	private Task<GitCommandResult> RunAtCadenceEndpointAsync(string repositoryPath, string resolvedUrl,
 		Func<string, string[]> buildCommand, Func<GitCommandResult, GitCommandResult> protectedResult,
-		string safeCommand, CancellationToken token, bool requirePhysicalRoot = false)
+		string safeCommand, CancellationToken token, bool requirePhysicalRoot = false,
+		IReadOnlyList<(string Key, string Value)>? remoteOptions = null, Func<bool>? mayStart = null)
 	{
 		if (string.IsNullOrWhiteSpace(resolvedUrl) || resolvedUrl.IndexOfAny(['\r', '\n', '\t', '\0']) >= 0
 			|| !IsSupportedCadenceTransport(resolvedUrl))
 			return Task.FromResult(CadenceEndpointFailure(new(-1, "", "")));
+		if (HasCadenceEmbeddedHttpCredentials(resolvedUrl))
+			return Task.FromResult(new GitCommandResult(-1, "", "", CadenceEmbeddedCredentialsMessage));
 		var alias = $"cadence-{Guid.NewGuid():N}";
 		var marker = $"{alias}.invalid";
 		return RunInternalAsync(repositoryPath, buildCommand(alias), token,
-			configure: start => ConfigureCadenceEndpoint(start, alias, marker, resolvedUrl),
-			protectedResult: protectedResult, safeArguments: [safeCommand], requirePhysicalRoot: requirePhysicalRoot);
+			configure: start => ConfigureCadenceEndpoint(start, alias, marker, resolvedUrl, remoteOptions),
+			protectedResult: protectedResult, safeArguments: [safeCommand], requirePhysicalRoot: requirePhysicalRoot, mayStart: mayStart);
 	}
 
 	private static bool IsSupportedCadenceTransport(string url)
@@ -115,13 +203,14 @@ public sealed class GitService : IGitService
 			"file" or "http" or "https" or "ssh" or "git" or "git+ssh" or "ssh+git";
 	}
 
-	private static void ConfigureCadenceEndpoint(ProcessStartInfo start, string alias, string marker, string url)
+	private static void ConfigureCadenceEndpoint(ProcessStartInfo start, string alias, string marker, string url,
+		IReadOnlyList<(string Key, string Value)>? remoteOptions)
 	{
 		// Git rewrites the one-shot marker once. The resolved URL is never re-entered as a named remote or URL argument.
 		var env = start.Environment;
 		var count = env.TryGetValue("GIT_CONFIG_COUNT", out var configured) && !string.IsNullOrEmpty(configured)
 			? int.Parse(configured, NumberStyles.None, CultureInfo.InvariantCulture) : 0;
-		if (count < 0 || count > int.MaxValue - 3) throw new InvalidOperationException();
+		if (count < 0 || count > int.MaxValue - 3 - (remoteOptions?.Count ?? 0)) throw new InvalidOperationException();
 		void Add(string key, string value)
 		{
 			var index = count++.ToString(CultureInfo.InvariantCulture);
@@ -131,6 +220,8 @@ public sealed class GitService : IGitService
 		Add($"remote.{alias}.url", marker);
 		Add($"remote.{alias}.pushurl", marker);
 		Add($"url.{url}.insteadOf", marker);
+		if (remoteOptions is not null)
+			foreach (var option in remoteOptions) Add($"remote.{alias}.{option.Key}", option.Value);
 		env["GIT_CONFIG_COUNT"] = count.ToString(CultureInfo.InvariantCulture);
 	}
 
@@ -163,7 +254,7 @@ public sealed class GitService : IGitService
 	private async Task<GitCommandResult> RunInternalAsync(
 		string repositoryPath, IReadOnlyList<string> arguments, CancellationToken cancellationToken,
 		Action<ProcessStartInfo>? configure = null, Func<GitCommandResult, GitCommandResult>? protectedResult = null,
-		IReadOnlyList<string>? safeArguments = null, bool requirePhysicalRoot = false)
+		IReadOnlyList<string>? safeArguments = null, bool requirePhysicalRoot = false, Func<bool>? mayStart = null)
 	{
 		var loggedArguments = safeArguments ?? arguments;
 		string root;
@@ -239,8 +330,10 @@ public sealed class GitService : IGitService
 				"Git の作業ツリーのルートを確認できません。フォルダとアクセス権を確認してください。"));
 		}
 
-		var result = await ExecuteAsync(root, root, arguments, cancellationToken, configure, safeArguments);
-		return await RecordFailureAsync(repositoryPath, loggedArguments, protectedResult?.Invoke(result) ?? result);
+		var result = await ExecuteAsync(root, root, arguments, cancellationToken, configure, safeArguments, mayStart);
+		var reported = protectedResult?.Invoke(result) ?? result;
+		return await RecordFailureAsync(repositoryPath, loggedArguments, reported,
+			recordEmptyFailure: protectedResult is not null && reported.UserMessage is not null);
 	}
 
 	internal static string ResolveDirectoryPath(string path)
@@ -268,7 +361,7 @@ public sealed class GitService : IGitService
 		IReadOnlyList<string> arguments,
 		CancellationToken cancellationToken,
 		Action<ProcessStartInfo>? configure = null,
-		IReadOnlyList<string>? safeArguments = null)
+		IReadOnlyList<string>? safeArguments = null, Func<bool>? mayStart = null)
 	{
 		var startInfo = new ProcessStartInfo
 		{
@@ -297,6 +390,7 @@ public sealed class GitService : IGitService
 		{
 			cancellationToken.ThrowIfCancellationRequested();
 			configure?.Invoke(startInfo);
+			if (mayStart?.Invoke() == false) return new(0, "", "");
 			_logger.LogInformation("Git command start. cwd={RepositoryPath}, args={Arguments}", workingDirectory, safeArguments ?? arguments);
 			process.Start();
 			var readStdOutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
@@ -336,10 +430,12 @@ public sealed class GitService : IGitService
 	private async Task<GitCommandResult> RecordFailureAsync(
 		string? repositoryPath,
 		IReadOnlyList<string> arguments,
-		GitCommandResult result)
+		GitCommandResult result,
+		bool recordEmptyFailure = false)
 	{
 		if (result.IsSuccess || result.ExitCode == -2
-			|| (result.ExitCode == 1 && string.IsNullOrWhiteSpace(result.StandardError) && string.IsNullOrWhiteSpace(result.StandardOutput)))
+			|| (!recordEmptyFailure && result.ExitCode == 1
+				&& string.IsNullOrWhiteSpace(result.StandardError) && string.IsNullOrWhiteSpace(result.StandardOutput)))
 		{
 			return result;
 		}
