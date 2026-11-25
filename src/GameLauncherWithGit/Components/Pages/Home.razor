@@ -1047,6 +1047,7 @@ else
     private readonly HashSet<string> _saveLinkLoadFailedGameIds = new(StringComparer.OrdinalIgnoreCase);
     private int _saveLinkLoadVersion;
     private Dictionary<string, GitRepositoryIdentity> _gitIdentitiesByConfiguredPath = new(StringComparer.OrdinalIgnoreCase);
+    private int _gitRegistrationVersion;
     private readonly Dictionary<string, GitRepositoryVisualState> _gitVisualStateByRepository = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, GitStatusRead> _gitStatusReads = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<NotificationHistoryEntry> _notificationHistoryEntries = [];
@@ -1425,13 +1426,15 @@ else
             || !string.Equals(GetConfiguredGitPath(game), repositoryPath, StringComparison.OrdinalIgnoreCase)) return;
 
         var identity = ResolveGitRepositoryIdentity(repositoryPath);
-        _gitIdentitiesByConfiguredPath[repositoryPath] = identity;
+        SetRegisteredGitIdentity(repositoryPath, identity);
         if (identity.Root is not { } repositoryRoot)
         {
             ReportSelectedGitStatus(game.Title, repositoryPath, null, new(GitRepositoryVisualState.Error, identity.Error));
             return;
         }
         if (IsTargetedGitStatusReadPending(repositoryRoot)) return;
+        RefreshGitAliases(repositoryRoot, discoverAliases: true);
+        if (!HasSameGitRoot(GetRegisteredGitIdentity(game)?.Root, repositoryRoot)) return;
 
         await RunWithUserOperationLoadingAsync(
             "Git状態を更新しています…",
@@ -1440,7 +1443,10 @@ else
                 try
                 {
                     var result = await RefreshRepositoryGitStatusAsync(repositoryRoot, targeted: true, _stateRefreshCts.Token);
-                    if (result is not null)
+                    if (result is not null
+                        && _games?.Any(current => current.Id == game.Id
+                            && string.Equals(GetConfiguredGitPath(current), repositoryPath, StringComparison.OrdinalIgnoreCase)
+                            && HasSameGitRoot(GetRegisteredGitIdentity(current)?.Root, repositoryRoot)) == true)
                     {
                         ReportSelectedGitStatus(game.Title, repositoryPath, repositoryRoot, result);
                     }
@@ -1800,6 +1806,7 @@ else
                     {
                         _games = _games.Where(game => !string.Equals(game.Id, targetGameId, StringComparison.OrdinalIgnoreCase)).ToArray();
                     }
+                    OnGitRegistrationsCommitted();
 
                     var removalError = TryRefreshRepositoryWatchers(removeOnly: true);
                     var reloadError = await ReloadGamesAsync()
@@ -1928,6 +1935,8 @@ else
                             return;
                         }
 
+                        _games = (_games ?? []).Select(game => game.Id == updated.Id ? updated : game).ToArray();
+                        OnGitRegistrationsCommitted();
                         savedTitle = updated.Title;
                         _editorSavedTitle = updated.Title;
                         _editorTitle = updated.Title;
@@ -1956,6 +1965,8 @@ else
                     else
                     {
                         var created = await GameLibraryService.CreateWithSaveLinksAsync(input, saveLinkInputs);
+                        _games = (_games ?? []).Append(created).ToArray();
+                        OnGitRegistrationsCommitted();
                         savedTitle = created.Title;
                     }
 
@@ -2873,16 +2884,24 @@ else
 
     private async Task<bool> ReloadGamesAsync()
     {
-        try
+        while (true)
         {
-            _games = await GameLibraryService.GetGamesAsync();
-            RebuildRegisteredGitIdentities();
-            _libraryLoadError = null;
-        }
-        catch (Exception ex)
-        {
-            _libraryLoadError = ex.Message;
-            return false;
+            var registrationVersion = _gitRegistrationVersion;
+            try
+            {
+                var games = await GameLibraryService.GetGamesAsync();
+                if (registrationVersion != _gitRegistrationVersion) continue;
+                _games = games;
+                RebuildRegisteredGitIdentities();
+                _libraryLoadError = null;
+                break;
+            }
+            catch (Exception ex)
+            {
+                if (registrationVersion != _gitRegistrationVersion) continue;
+                _libraryLoadError = ex.Message;
+                return false;
+            }
         }
 
         await RefreshSaveLinksAsync();
@@ -3157,11 +3176,7 @@ else
                     if (gitStatusElapsedSeconds >= gitStatusRefreshIntervalSeconds)
                     {
                         gitStatusElapsedSeconds = 0;
-                        await InvokeAsync(async () =>
-                        {
-                            RebuildRegisteredGitIdentities();
-                            await RefreshGitStatusesAsync(_stateRefreshCts.Token);
-                        });
+                        await InvokeAsync(async () => await RefreshGitStatusesAsync(_stateRefreshCts.Token));
                     }
 
                     await InvokeAsync(StateHasChanged);
@@ -3215,13 +3230,59 @@ else
     private GitRepositoryIdentity? GetRegisteredGitIdentity(GameCardItem game) =>
         GetConfiguredGitPath(game) is { } path ? _gitIdentitiesByConfiguredPath.GetValueOrDefault(path) : null;
 
+    private void OnGitRegistrationsCommitted()
+    {
+        ++_gitRegistrationVersion;
+        RebuildRegisteredGitIdentities();
+    }
+
     private void RebuildRegisteredGitIdentities()
     {
+        var previousRoots = _gitIdentitiesByConfiguredPath.Values.Select(identity => identity.Root).OfType<string>().ToArray();
         _gitIdentitiesByConfiguredPath = (_games ?? [])
             .Select(GetConfiguredGitPath)
             .OfType<string>()
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToDictionary(path => path, ResolveGitRepositoryIdentity, StringComparer.OrdinalIgnoreCase);
+        foreach (var previousRoot in previousRoots)
+        {
+            ForgetUnregisteredGitRoot(previousRoot);
+        }
+    }
+
+    private void SetRegisteredGitIdentity(string path, GitRepositoryIdentity identity)
+    {
+        if (!_gitIdentitiesByConfiguredPath.TryGetValue(path, out var previous)) return;
+        _gitIdentitiesByConfiguredPath[path] = identity;
+        if (previous.Root is { } previousRoot && !HasSameGitRoot(previousRoot, identity.Root))
+        {
+            ForgetUnregisteredGitRoot(previousRoot);
+        }
+    }
+
+    private void ForgetUnregisteredGitRoot(string root)
+    {
+        if (IsRegisteredGitRepositoryRoot(root)) return;
+        _gitStatusReads.Remove(root);
+        _gitVisualStateByRepository.Remove(root);
+    }
+
+    private static bool HasSameGitRoot(string? left, string? right) =>
+        string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
+
+    private void RefreshGitAliases(string repositoryRoot, bool discoverAliases = false)
+    {
+        foreach (var (path, identity) in _gitIdentitiesByConfiguredPath.ToArray())
+        {
+            var wasMember = HasSameGitRoot(identity.Root, repositoryRoot);
+            if (!wasMember && !discoverAliases) continue;
+
+            var latest = ResolveGitRepositoryIdentity(path);
+            if (wasMember || HasSameGitRoot(latest.Root, repositoryRoot))
+            {
+                SetRegisteredGitIdentity(path, latest);
+            }
+        }
     }
 
     private static GitRepositoryIdentity ResolveGitRepositoryIdentity(string path)
@@ -3247,19 +3308,16 @@ else
         _isGitStatusSweepRunning = true;
         try
         {
-            var repositoryRoots = _gitIdentitiesByConfiguredPath.Values
-                .Select(identity => identity.Root)
-                .OfType<string>()
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            foreach (var staleRoot in _gitVisualStateByRepository.Keys.Where(root => !repositoryRoots.Contains(root)).ToArray())
-            {
-                _gitVisualStateByRepository.Remove(staleRoot);
-            }
-
-            foreach (var repositoryRoot in repositoryRoots)
+            var readRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var path in _gitIdentitiesByConfiguredPath.Keys.ToArray())
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (IsRegisteredGitRepositoryRoot(repositoryRoot))
+                if (!_gitIdentitiesByConfiguredPath.ContainsKey(path)) continue;
+
+                // Earlier status commands may have yielded while this configured path changed.
+                var identity = ResolveGitRepositoryIdentity(path);
+                SetRegisteredGitIdentity(path, identity);
+                if (identity.Root is { } repositoryRoot && readRoots.Add(repositoryRoot))
                 {
                     await RefreshRepositoryGitStatusAsync(repositoryRoot, targeted: false, cancellationToken);
                 }
@@ -3276,7 +3334,7 @@ else
 
     private bool IsRegisteredGitRepositoryRoot(string repositoryRoot) =>
         _gitIdentitiesByConfiguredPath.Values.Any(identity =>
-            string.Equals(identity.Root, repositoryRoot, StringComparison.OrdinalIgnoreCase));
+            HasSameGitRoot(identity.Root, repositoryRoot));
 
     private async Task<GitStatusResult?> RefreshRepositoryGitStatusAsync(
         string repositoryRoot, bool targeted, CancellationToken cancellationToken)
@@ -3305,6 +3363,8 @@ else
 
             cancellationToken.ThrowIfCancellationRequested();
             if (!IsLatestRead()) return null;
+            RefreshGitAliases(repositoryRoot);
+            if (!IsLatestRead()) return null;
             if (IsRegisteredGitRepositoryRoot(repositoryRoot))
             {
                 _gitVisualStateByRepository[repositoryRoot] = status.State;
@@ -3320,10 +3380,7 @@ else
     private async Task RefreshEditorGitStatusAsync(string repositoryPath, string? reportFailureForGame = null)
     {
         var identity = ResolveGitRepositoryIdentity(repositoryPath);
-        if (_gitIdentitiesByConfiguredPath.ContainsKey(repositoryPath))
-        {
-            _gitIdentitiesByConfiguredPath[repositoryPath] = identity;
-        }
+        SetRegisteredGitIdentity(repositoryPath, identity);
         var result = identity.Root is { } repositoryRoot
             ? await RefreshRepositoryGitStatusAsync(repositoryRoot, targeted: true, _stateRefreshCts.Token)
             : new GitStatusResult(GitRepositoryVisualState.Error, identity.Error);
@@ -3337,17 +3394,20 @@ else
     {
         const string operation = nameof(RefreshSelectedGitStatusAsync);
         var isSuccess = result.State != GitRepositoryVisualState.Error;
-        if (isSuccess)
+        if (isSuccess && repositoryRoot is not null
+            && _notificationFailure is { Operation: operation, Target: { } failedPath, Repository: null }
+            && HasSameGitRoot(_gitIdentitiesByConfiguredPath.GetValueOrDefault(failedPath)?.Root, repositoryRoot))
         {
             // A failed directory resolution has only the configured path as its key.
-            ClearRecoveredNotification(operation, repositoryPath: repositoryPath);
+            ClearRecoveredNotification(operation, failedPath);
         }
         SetNotification(
             isSuccess
                 ? $"「{gameTitle}」のGit状態を更新しました。"
                 : $"「{gameTitle}」のGit状態を取得できません。関連リポジトリとログを確認し、再試行してください。\n関連リポジトリ: {repositoryPath}\n{result.Error}",
             isSuccess, summary: isSuccess ? "Git状態を更新" : "Git状態エラー",
-            repositoryPath: repositoryRoot ?? repositoryPath, operation: operation);
+            targetId: repositoryRoot is null ? repositoryPath.ToUpperInvariant() : null,
+            repositoryPath: repositoryRoot, operation: operation);
     }
 
     private sealed record GitRepositoryIdentity(string? Root, string? Error);
@@ -3712,9 +3772,10 @@ else
         if (_notificationFailure is null) _notification = null;
     }
 
-    private void ClearRecoveredNotification(string operation, string? targetId = null, string? repositoryPath = null)
+    private void ClearRecoveredNotification(string operation, string? targetId = null)
     {
-        if (_notificationFailure == (operation, targetId, repositoryPath?.ToUpperInvariant()))
+        if (_notificationFailure is { } failure
+            && failure.Operation == operation && failure.Target == targetId && failure.Repository is null)
         {
             if (_operationAnnouncement == _notification?.Summary)
             {
