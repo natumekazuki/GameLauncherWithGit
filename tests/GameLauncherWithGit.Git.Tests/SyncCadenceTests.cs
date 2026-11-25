@@ -77,6 +77,40 @@ public sealed class SyncCadenceTests
 
     // @test-value v2
     // kind = "invariant"
+    // claim = "枝切替通知だけでは0/0・競合停止・未登録リポジトリのいずれもGitを開始しない"
+    // oracle = { type = "contract", ref = "Session Graph game-sync-cadence-branch-change-contract" }
+    // fault = "枝切替通知を手動同期や停止解除として扱い、設定・現在の登録状態を無視する"
+    // observable = "各条件での枝切替受付後のGitコマンド不在と停止状態の維持"
+    // observation_boundary = "public-boundary"
+    // scope = "branch change notification while cadence cannot run"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Theory]
+    [InlineData("disabled")]
+    [InlineData("paused")]
+    [InlineData("unregistered")]
+    public async Task BranchChangeNoticeDoesNotEnableCadenceOrResumeOrSyncAnUnregisteredRepository(string condition)
+    {
+        using var f = new Fixture(commit: condition == "disabled" ? 0 : 1, push: 0);
+        if (condition == "paused")
+        {
+            f.ConflictedIndex = true;
+            Assert.True(f.Sync.TryQueueRepositorySyncNow(f.Repository));
+            Assert.Equal(RepositorySyncState.ErrorPaused, f.State);
+        }
+        else if (condition == "unregistered")
+        {
+            f.Games = [];
+        }
+        var before = f.Commands.Count;
+        await f.Sync.NotifyRepositoryBranchChangedAsync(f.Repository).WaitAsync(TimeSpan.FromSeconds(5));
+        f.Advance(seconds: 120);
+        Assert.Equal(before, f.Commands.Count);
+        Assert.Equal(condition == "paused" ? RepositorySyncState.ErrorPaused : RepositorySyncState.Idle, f.State);
+    }
+
+    // @test-value v2
+    // kind = "invariant"
     // claim = "保留を見つけなかった正値照会の後に0/0にすると、次の変更は従来経路から始まる"
     // oracle = { type = "contract", ref = "Session Graph game-sync-cadence-independent-review CAD-CORE-02" }
     // fault = "最後の正値実行を理由に、保留がなくても新しい0/0設定で旧経路に戻らない"
@@ -142,28 +176,52 @@ public sealed class SyncCadenceTests
     // kind = "invariant"
     // claim = "旧コミットの送信期限は、新しい書込のデバウンスを破らず、既存コミットだけを送信する"
     // oracle = { type = "contract", ref = "Session Graph game-sync-cadence-independent-review CAD-CORE-06" }
-    // fault = "期限起床が未成熟な書込をステージまたはautostashし、デバウンスを短縮する"
+    // fault = "期限起床前またはDB照合・Git statusのawait中に届いた書込を未成熟のままステージ・autostashする"
     // observable = "送信期限ではpushのみ、後続の10秒満了で初めてcommit"
     // observation_boundary = "public-boundary"
     // scope = "outgoing deadline while a fresh change is debouncing"
     // lifecycle = "permanent"
     // @end-test-value
-    [Fact]
-    public void OutgoingDeadlineDoesNotBypassChangeDebounce()
+    [Theory]
+    [InlineData("before")]
+    [InlineData("database")]
+    [InlineData("status")]
+    public void OutgoingDeadlineDoesNotBypassChangeDebounce(string changeTiming)
     {
         using var f = new Fixture(commit: 0, push: 1) { Ahead = true };
         f.Watch();
         f.Advance(seconds: 59);
+        var checkpoint = f.Commands.Count;
+        var gate = new TaskCompletionSource<IReadOnlyList<GameCardItem>>();
+        var statusGate = new TaskCompletionSource<GitCommandResult>();
+        if (changeTiming == "database")
+        {
+            var reads = f.LibraryReads;
+            f.LibraryReadGate = gate;
+            f.Advance(seconds: 1);
+            Assert.Equal(reads + 1, f.LibraryReads);
+            Assert.Equal(checkpoint, f.Commands.Count); // Due claimed and waiting on the DB; no status yet.
+        }
+        else if (changeTiming == "status")
+        {
+            f.StatusGate = statusGate;
+            f.Advance(seconds: 1);
+            Assert.Equal("status --porcelain", Assert.Single(f.Commands.Skip(checkpoint)));
+        }
         f.Dirty = true;
         f.Change();
-        var checkpoint = f.Commands.Count;
-        f.Advance(seconds: 1);
+        if (changeTiming == "database")
+            gate.SetResult(f.Games);
+        else if (changeTiming == "status")
+            statusGate.SetResult(new(0, " M save.dat\n", ""));
+        else
+            f.Advance(seconds: 1);
         Assert.Equal((0, 1), (f.Commits, f.Pushes));
         Assert.DoesNotContain(f.Commands.Skip(checkpoint), command =>
             command is "add -A" or "fetch" || command.StartsWith("pull ", StringComparison.Ordinal));
         Assert.True(f.Dirty);
         Assert.Empty(f.History);
-        f.Advance(seconds: 8);
+        f.Advance(seconds: changeTiming == "before" ? 8 : 9);
         Assert.Equal(0, f.Commits);
         f.Advance(seconds: 1);
         Assert.Equal((1, 1), (f.Commits, f.Pushes));
@@ -478,7 +536,7 @@ public sealed class SyncCadenceTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void ChangingBranchOrDestinationDoesNotInheritTheFailedPushDeadline(bool changeSource)
+    public async Task ChangingBranchOrDestinationDoesNotInheritTheFailedPushDeadline(bool changeSource)
     {
         using var f = new Fixture(commit: 0, push: 1, retry: 30) { Ahead = true, PushReportsBranch = false };
         f.Watch();
@@ -487,9 +545,15 @@ public sealed class SyncCadenceTests
         f.Advance(seconds: 1);
         if (changeSource) f.Branch = "another";
         else f.Destination = "different-destination";
-        f.Oldest = f.Clock.GetUtcNow();
+        f.Oldest = f.Clock.GetUtcNow().AddDays(-1);
         f.PushReportsBranch = true;
-        f.Change();
+        if (changeSource)
+            await f.Sync.NotifyRepositoryBranchChangedAsync(f.Repository).WaitAsync(TimeSpan.FromSeconds(5));
+        else
+        {
+            f.Change();
+            f.Advance(seconds: 10);
+        }
         f.Advance(seconds: 59);
         Assert.Equal(1, f.Pushes);
         Assert.Single(f.History);
@@ -504,32 +568,41 @@ public sealed class SyncCadenceTests
     // claim = "旧枝の期限を過ぎても非選択中は送信せず、戻ったときはGitに残る未送信を再検出する"
     // oracle = { type = "contract", ref = "Session Graph game-sync-cadence-independent-review CAD-CORE-03" }
     // fault = "非選択の枝を送信する、または再選択時に古いコミットを検出せず期限を初めから待つ"
-    // observable = "枝を戻す前後のpush回数、送信した宛先と成功履歴"
+    // observable = "追跡情報なし、ファイル通知なしでの枝切替受付と復帰前後のpush回数、宛先、成功履歴"
     // observation_boundary = "public-boundary"
     // scope = "reselecting a branch with previously unsent commits"
     // lifecycle = "permanent"
     // @end-test-value
-    [Fact]
-    public void ReselectingABranchRecoversItsUnsentCommitTimes()
+    [Theory]
+    [InlineData(20)]
+    [InlineData(75)]
+    public async Task ReselectingABranchChecksItsPendingWorkWithoutFileEvents(int timeAway)
     {
-        using var f = new Fixture(commit: 0, push: 1) { Ahead = true };
+        using var f = new Fixture(commit: 0, push: 1) { Ahead = true, TargetKnown = false };
         var originalCommit = f.Oldest;
         f.Watch();
         f.Branch = f.Destination = "another";
         f.Ahead = false;
-        f.Change();
-        f.Advance(seconds: 75);
+        f.TargetKnown = true;
+        await f.Sync.NotifyRepositoryBranchChangedAsync(f.Repository).WaitAsync(TimeSpan.FromSeconds(5));
+        f.Advance(seconds: timeAway);
         Assert.Equal(0, f.Pushes);
         Assert.Empty(f.History);
 
         f.Branch = f.Destination = "sample";
         f.Ahead = true;
         f.Oldest = originalCommit;
-        f.Change();
-        f.Advance(seconds: 10);
+        await f.Sync.NotifyRepositoryBranchChangedAsync(f.Repository).WaitAsync(TimeSpan.FromSeconds(5));
+        if (timeAway < 60)
+        {
+            f.Advance(seconds: 59 - timeAway);
+            Assert.Equal(0, f.Pushes);
+            f.Advance(seconds: 1);
+        }
         Assert.Equal(1, f.Pushes);
         Assert.EndsWith(":refs/heads/sample", f.Commands.Last());
         Assert.Equal(RepositorySyncHistoryStatus.Succeeded, Assert.Single(f.History).Status);
+        Assert.Equal(2, f.Commands.Count(command => command.StartsWith("ls-remote ", StringComparison.Ordinal)));
     }
 
     // @test-value v2
@@ -594,7 +667,7 @@ public sealed class SyncCadenceTests
         IAppSettingsService, INotificationService, ITrayService, ILogAccessService, IRepositorySyncHistoryStore
     {
         private string Head => (Commits + 1).ToString("x40", CultureInfo.InvariantCulture);
-        private string TrackingRef => "refs/remotes/origin/" + Destination;
+        private static readonly string RemoteTip = new('a', 40);
         public string Branch { get; set; } = "sample";
         public string Destination { get; set; } = "sample";
         private readonly RepositoryStateStore _states = new();
@@ -618,7 +691,10 @@ public sealed class SyncCadenceTests
         public int LibraryReads { get; private set; }
         public CancellationTokenSource? CancelOnFetch { get; set; }
         public TaskCompletionSource<GitCommandResult>? FetchGate { get; set; }
+        public TaskCompletionSource<GitCommandResult>? StatusGate { get; set; }
+        public TaskCompletionSource<IReadOnlyList<GameCardItem>>? LibraryReadGate { get; set; }
         public TaskCompletionSource<RepositorySyncHistoryItem> FirstHistory { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource<string> FirstNotification { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int Commits { get; private set; }
         public int Pushes { get; private set; }
         public RepositorySyncState State => _states.GetStateOrDefault(Repository);
@@ -669,6 +745,11 @@ public sealed class SyncCadenceTests
                 FetchGate = null;
                 return gate.Task;
             }
+            if (command == "status --porcelain" && StatusGate is { } statusGate)
+            {
+                StatusGate = null;
+                return statusGate.Task;
+            }
             GitCommandResult result = command switch
             {
                 "status --porcelain" => new(0, ConflictedIndex ? "UU save.dat\n" : Dirty ? " M save.dat\n" : "", ""),
@@ -676,15 +757,13 @@ public sealed class SyncCadenceTests
                 "symbolic-ref --quiet HEAD" => new(0, $"refs/heads/{Branch}\n", ""),
                 var c when c == $"config --null --get-all branch.{Branch}.remote" => new(0, "origin\0", ""),
                 "config --null --get-all remote.origin.push" => new(0, $"refs/heads/{Branch}:refs/heads/{Destination}\0", ""),
-                "config --null --get-all remote.origin.fetch" => new(0, "+refs/heads/*:refs/remotes/origin/*\0", ""),
                 var c when c.StartsWith("config --null ", StringComparison.Ordinal) => new(1, "", ""),
-                "remote get-url --all -- origin" => new(0, TargetKnown ? "fixture-remote\n" : "other-url\n", ""),
-                "remote get-url --push --all -- origin" => new(0, "fixture-remote\n", ""),
                 var c when c == $"check-ref-format refs/heads/{Destination}" => new(0, "", ""),
-                var c when c == "show-ref --verify --quiet " + TrackingRef => new(0, "", ""),
-                var c when c == "log --format=%ct " + TrackingRef + ".." + Head =>
+                var c when c.StartsWith("rev-parse --verify --quiet ", StringComparison.Ordinal) && c.EndsWith("^{commit}", StringComparison.Ordinal)
+                    => new(0, "", ""),
+                var c when c.StartsWith("log --format=%ct ", StringComparison.Ordinal) =>
                     new(0, Ahead ? Oldest.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture) + "\n" : "", ""),
-                var c when c == "rev-list --count " + TrackingRef + ".." + Head => new(0, Ahead ? "1\n" : "0\n", ""),
+                var c when c.StartsWith("rev-list --count ", StringComparison.Ordinal) => new(0, Ahead ? "1\n" : "0\n", ""),
                 "branch --show-current" => new(0, Branch, ""),
                 var c when c == $"config --get branch.{Branch}.remote" => new(0, "origin", ""),
                 var c when c == $"config --get branch.{Branch}.merge" => new(0, $"refs/heads/{Branch}", ""),
@@ -695,10 +774,35 @@ public sealed class SyncCadenceTests
                 var c when c == $"pull --rebase --autostash origin {Branch}" => new(0, "", ""),
                 "commit" => Commit(),
                 "push" => Push(),
-                var c when c == $"push --porcelain --no-force --no-mirror --no-tags --no-follow-tags --recurse-submodules=no -- origin {Head}:refs/heads/{Destination}" => Push(),
                 _ => throw new NotSupportedException(command)
             };
             return Task.FromResult(result);
+        }
+
+        Task<GitCommandResult> IGitService.ReadCadencePushUrlsAsync(string repositoryPath, string remote, CancellationToken token)
+        {
+            Assert.Equal(Repository, repositoryPath);
+            Assert.Equal("origin", remote);
+            return Task.FromResult(new GitCommandResult(0, "fixture-remote\n", ""));
+        }
+
+        Task<GitCommandResult> IGitService.RunCadenceEndpointAsync(string repositoryPath, string resolvedUrl,
+            string destinationRef, string? commit, CancellationToken token)
+        {
+            Assert.Equal(Repository, repositoryPath);
+            Assert.Equal("fixture-remote", resolvedUrl);
+            Assert.Equal($"refs/heads/{Destination}", destinationRef);
+            if (commit is null)
+            {
+                Commands.Add($"ls-remote {destinationRef}");
+                return Task.FromResult(TargetKnown
+                    ? new GitCommandResult(0, RemoteTip, "") : new GitCommandResult(1, "", "", "Remote unavailable"));
+            }
+            Assert.Equal(Head, commit);
+            Commands.Add($"push {commit}:{destinationRef}");
+            Push();
+            return Task.FromResult(PushReportsBranch
+                ? new GitCommandResult(0, "", "") : new GitCommandResult(1, "", "", "Unconfirmed"));
         }
 
         private GitCommandResult ApplyConflictingAutostash()
@@ -734,6 +838,11 @@ public sealed class SyncCadenceTests
         public Task<IReadOnlyList<GameCardItem>> GetAllAsync(CancellationToken cancellationToken = default)
         {
             LibraryReads++;
+            if (LibraryReadGate is { } gate)
+            {
+                LibraryReadGate = null;
+                return gate.Task;
+            }
             return FailLibraryRead ? Task.FromException<IReadOnlyList<GameCardItem>>(new IOException("fixture read failed"))
                 : Task.FromResult(Games);
         }
@@ -747,6 +856,7 @@ public sealed class SyncCadenceTests
         public Task NotifyAsync(string title, string message, CancellationToken cancellationToken = default)
         {
             Notifications.Add(title);
+            FirstNotification.TrySetResult($"{title}: {message}");
             return Task.CompletedTask;
         }
         public Task AppendErrorAsync(string message, CancellationToken cancellationToken = default) => Task.CompletedTask;

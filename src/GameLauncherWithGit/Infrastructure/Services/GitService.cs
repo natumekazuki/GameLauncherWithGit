@@ -2,6 +2,7 @@ using GameLauncherWithGit.Infrastructure.Abstractions;
 using GameLauncherWithGit.Infrastructure.Models;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -41,11 +42,98 @@ public sealed class GitService : IGitService
 		return await RecordFailureAsync(null, arguments, result);
 	}
 
-	public async Task<GitCommandResult> RunAsync(
+	public Task<GitCommandResult> RunAsync(
 		string repositoryPath,
 		IReadOnlyList<string> arguments,
-		CancellationToken cancellationToken = default)
+		CancellationToken cancellationToken = default) =>
+		RunInternalAsync(repositoryPath, arguments, cancellationToken);
+
+	Task<GitCommandResult> IGitService.ReadCadencePushUrlsAsync(string repositoryPath, string remote, CancellationToken token) =>
+		RunInternalAsync(repositoryPath, ["remote", "get-url", "--push", "--all", "--", remote], token,
+			protectedResult: result => result.IsSuccess ? new(0, result.StandardOutput, "") : CadenceEndpointFailure(result),
+			safeArguments: ["remote get-url (cadence)"]);
+
+	Task<GitCommandResult> IGitService.RunCadenceEndpointAsync(string repositoryPath, string resolvedUrl,
+		string destinationRef, string? commit, CancellationToken token)
 	{
+		if (string.IsNullOrWhiteSpace(resolvedUrl) || resolvedUrl.IndexOfAny(['\r', '\n', '\t', '\0']) >= 0
+			|| !IsSupportedCadenceTransport(resolvedUrl)
+			|| !destinationRef.StartsWith("refs/heads/", StringComparison.Ordinal)
+			|| destinationRef.IndexOfAny([':', '*', '\r', '\n', '\0']) >= 0
+			|| (commit is not null && !IsObjectName(commit)))
+			return Task.FromResult(CadenceEndpointFailure(new(-1, "", "")));
+
+		var alias = $"cadence-{Guid.NewGuid():N}";
+		var marker = $"{alias}.invalid";
+		string[] command = commit is null
+			? ["-c", "http.followRedirects=false", "ls-remote", "--refs", "--", alias, destinationRef]
+			: ["-c", "http.followRedirects=false", "push", "--porcelain", "--no-force", "--no-mirror", "--no-tags",
+				"--no-follow-tags", "--recurse-submodules=no", "--", alias, $"{commit}:{destinationRef}"];
+		return RunInternalAsync(repositoryPath, command, token,
+			configure: start => ConfigureCadenceEndpoint(start, alias, marker, resolvedUrl),
+			protectedResult: result => ReadCadenceEndpointResult(result, destinationRef, commit),
+			safeArguments: [commit is null ? "ls-remote (cadence)" : "push (cadence)"]);
+	}
+
+	private static bool IsSupportedCadenceTransport(string url)
+	{
+		if (Regex.IsMatch(url, @"^[\w+.-]+::")) return false; // Do not start an arbitrary remote helper.
+		var scheme = Regex.Match(url, @"^([A-Za-z][A-Za-z0-9+.-]*)://");
+		return !scheme.Success || scheme.Groups[1].Value.ToLowerInvariant() is
+			"file" or "http" or "https" or "ssh" or "git" or "git+ssh" or "ssh+git";
+	}
+
+	private static void ConfigureCadenceEndpoint(ProcessStartInfo start, string alias, string marker, string url)
+	{
+		// Git rewrites the one-shot marker once. The resolved URL is never re-entered as a named remote or URL argument.
+		var env = start.Environment;
+		var count = env.TryGetValue("GIT_CONFIG_COUNT", out var configured) && !string.IsNullOrEmpty(configured)
+			? int.Parse(configured, NumberStyles.None, CultureInfo.InvariantCulture) : 0;
+		if (count < 0 || count > int.MaxValue - 3) throw new InvalidOperationException();
+		void Add(string key, string value)
+		{
+			var index = count++.ToString(CultureInfo.InvariantCulture);
+			env["GIT_CONFIG_KEY_" + index] = key;
+			env["GIT_CONFIG_VALUE_" + index] = value;
+		}
+		Add($"remote.{alias}.url", marker);
+		Add($"remote.{alias}.pushurl", marker);
+		Add($"url.{url}.insteadOf", marker);
+		env["GIT_CONFIG_COUNT"] = count.ToString(CultureInfo.InvariantCulture);
+	}
+
+	private static GitCommandResult ReadCadenceEndpointResult(GitCommandResult result, string destination, string? commit)
+	{
+		if (!result.IsSuccess) return CadenceEndpointFailure(result);
+		var lines = result.StandardOutput.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+		if (commit is null)
+		{
+			if (lines.Length == 0) return new(0, "", "");
+			if (lines is [var line] && line.Split('\t') is [var tip, var target] && target == destination && IsObjectName(tip))
+				return new(0, tip, "");
+		}
+		else
+		{
+			var statuses = lines.Where(line => line.Length > 1 && line[1] == '\t').ToArray();
+			if (statuses is [var line] && line.Split('\t') is [var status, var refs, _]
+				&& status is " " or "*" or "=" && refs == $"{commit}:{destination}")
+				return new(0, "", "");
+		}
+		return CadenceEndpointFailure(new(-1, "", ""));
+	}
+
+	private static bool IsObjectName(string value) => value.Length is 40 or 64 && value.All(Uri.IsHexDigit);
+
+	private static GitCommandResult CadenceEndpointFailure(GitCommandResult result) =>
+		new(result.ExitCode, "", "", result.ExitCode == -2 ? "Git 実行がキャンセルされました。"
+			: "送信先へのアクセスまたは反映を確認できません。Git の送信先設定・認証・リモートのブランチを確認してください。");
+
+	private async Task<GitCommandResult> RunInternalAsync(
+		string repositoryPath, IReadOnlyList<string> arguments, CancellationToken cancellationToken,
+		Action<ProcessStartInfo>? configure = null, Func<GitCommandResult, GitCommandResult>? protectedResult = null,
+		IReadOnlyList<string>? safeArguments = null)
+	{
+		var loggedArguments = safeArguments ?? arguments;
 		string root;
 		try
 		{
@@ -64,17 +152,17 @@ public sealed class GitService : IGitService
 		}
 		catch (UnauthorizedAccessException ex)
 		{
-			return await RecordFailureAsync(repositoryPath, arguments, new GitCommandResult(-1, string.Empty, ex.ToString(),
+			return await RecordFailureAsync(repositoryPath, loggedArguments, new GitCommandResult(-1, string.Empty, ex.ToString(),
 				"リポジトリへのアクセスが拒否されました。アクセス権を確認してください。"));
 		}
 		catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
 		{
-			return await RecordFailureAsync(repositoryPath, arguments, new GitCommandResult(-1, string.Empty, ex.ToString(),
+			return await RecordFailureAsync(repositoryPath, loggedArguments, new GitCommandResult(-1, string.Empty, ex.ToString(),
 				"Git リポジトリを確認できません。.git のある作業ツリーのルートを選択してください。"));
 		}
 		catch (Exception ex) when (ex is IOException or ArgumentException or NotSupportedException)
 		{
-			return await RecordFailureAsync(repositoryPath, arguments, new GitCommandResult(-1, string.Empty, ex.ToString(),
+			return await RecordFailureAsync(repositoryPath, loggedArguments, new GitCommandResult(-1, string.Empty, ex.ToString(),
 				"リポジトリのパスを確認できません。フォルダとアクセス権を確認してください。"));
 		}
 
@@ -116,8 +204,8 @@ public sealed class GitService : IGitService
 				"Git の作業ツリーのルートを確認できません。フォルダとアクセス権を確認してください。"));
 		}
 
-		var result = await ExecuteAsync(root, root, arguments, cancellationToken);
-		return await RecordFailureAsync(repositoryPath, arguments, result);
+		var result = await ExecuteAsync(root, root, arguments, cancellationToken, configure, safeArguments);
+		return await RecordFailureAsync(repositoryPath, loggedArguments, protectedResult?.Invoke(result) ?? result);
 	}
 
 	internal static string ResolveDirectoryPath(string path)
@@ -143,7 +231,9 @@ public sealed class GitService : IGitService
 		string? workingDirectory,
 		string? safeDirectory,
 		IReadOnlyList<string> arguments,
-		CancellationToken cancellationToken)
+		CancellationToken cancellationToken,
+		Action<ProcessStartInfo>? configure = null,
+		IReadOnlyList<string>? safeArguments = null)
 	{
 		var startInfo = new ProcessStartInfo
 		{
@@ -171,7 +261,8 @@ public sealed class GitService : IGitService
 		try
 		{
 			cancellationToken.ThrowIfCancellationRequested();
-			_logger.LogInformation("Git command start. cwd={RepositoryPath}, args={Arguments}", workingDirectory, arguments);
+			configure?.Invoke(startInfo);
+			_logger.LogInformation("Git command start. cwd={RepositoryPath}, args={Arguments}", workingDirectory, safeArguments ?? arguments);
 			process.Start();
 			var readStdOutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
 			var readStdErrTask = process.StandardError.ReadToEndAsync(cancellationToken);
@@ -179,7 +270,7 @@ public sealed class GitService : IGitService
 			var standardOutput = await readStdOutTask;
 			var standardError = await readStdErrTask;
 			_logger.LogInformation("Git command end. cwd={RepositoryPath}, args={Arguments}, exitCode={ExitCode}",
-				workingDirectory, arguments, process.ExitCode);
+				workingDirectory, safeArguments ?? arguments, process.ExitCode);
 			return new GitCommandResult(process.ExitCode, standardOutput, standardError);
 		}
 		catch (OperationCanceledException)
@@ -199,6 +290,8 @@ public sealed class GitService : IGitService
 		}
 		catch (Exception ex)
 		{
+			if (safeArguments is not null)
+				return new(-1, "", "");
 			_logger.LogError(ex, "Git command failed. cwd={RepositoryPath}, args={Arguments}", workingDirectory, arguments);
 			return new GitCommandResult(-1, string.Empty, ex.ToString(),
 				"Git の起動または実行に失敗しました。Git のインストールとアクセス権を確認してください。");

@@ -357,20 +357,68 @@ public sealed class GitServiceTests : IDisposable
 
 	// @test-value v2
 	// kind = "invariant"
-	// claim = "同一remote名でもfetch URLとpush URLが違うなら、fetch側の一致だけで送信済みとしない"
+	// claim = "検証後に名前付きremoteのpushurlが置換・追加されても、解決済みの単一宛先にだけ送信する"
 	// oracle = { type = "contract", ref = "Session Graph game-sync-cadence-push-scope CAD-CORE-01" }
-	// fault = "fetch側のtracking refがHEADと等しいだけで、別のpush側の宛先を調べず取り残す"
+	// fault = "送信時にremote名を再解決する、または検証済みURLにinsteadOfを再適用する"
+	// observable = "送信呼出し直前の合成config変更、元bareの対象枝更新、置換bare・追加bareの全ref不変"
+	// observation_boundary = "public-boundary"
+	// scope = "real pinned Git transport after preflight, including chained URL rewrite"
+	// lifecycle = "permanent"
+	// @end-test-value
+	[Fact]
+	public async Task VerifiedEndpointSurvivesConcurrentPushUrlReplacementAndAddition()
+	{
+		var (root, original) = CreateCadenceRepositories();
+		var replacement = CreateBare("replacement.git");
+		var additional = CreateBare("additional.git");
+		MakeOutgoingCommit(root);
+		var head = RunGit(root, "rev-parse", "HEAD").Trim();
+		const string unresolved = "fixture-remote-alias";
+		RunGit(root, "remote", "set-url", "origin", unresolved);
+		RunGit(root, "config", "--local", "remote.origin.pushurl", unresolved);
+		RunGit(root, "config", "--local", $"url.{original}.insteadOf", unresolved);
+		RunGit(root, "config", "--local", $"url.{additional}.insteadOf", original);
+		Assert.Equal(original, RunGit(root, "remote", "get-url", "--push", "origin").Trim());
+		var git = new RecordingGit(_service)
+		{
+			BeforeEndpointSend = () =>
+			{
+				RunGit(root, "config", "--local", "--replace-all", "remote.origin.pushurl", replacement);
+				RunGit(root, "config", "--local", "--add", "remote.origin.pushurl", additional);
+			}
+		};
+		var originalRefs = Refs(original);
+		var replacementRefs = Refs(replacement);
+		var additionalRefs = Refs(additional);
+		using var f = new SyncCadenceTests.Fixture(commit: 1, push: 1, repository: root, git: git);
+		Assert.True(f.Sync.TryQueueRepositorySyncNow(root));
+		var history = await f.FirstHistory.Task.WaitAsync(TimeSpan.FromSeconds(20));
+
+		Assert.Single(git.Commands, command => command == "push");
+		Assert.Equal(RepositorySyncHistoryStatus.Succeeded, history.Status);
+		Assert.Equal(originalRefs.Select(line => line.StartsWith("refs/heads/sample ") ? $"refs/heads/sample {head}" : line), Refs(original));
+		Assert.Equal(replacementRefs, Refs(replacement));
+		Assert.Equal(additionalRefs, Refs(additional));
+	}
+
+	// @test-value v2
+	// kind = "invariant"
+	// claim = "同一remote名の送信先を移すと、取得先も一緒に移した場合を含め古いtrackingの一致で送信済みとしない"
+	// oracle = { type = "contract", ref = "Session Graph game-sync-cadence-push-scope CAD-CORE-01" }
+	// fault = "tracking refがHEADと等しいか新しいfetch/push URL同士が一致するだけで、新宛先の未送信を取り残す"
 	// observable = "監視登録後の成功履歴、fetch側の全ref不変とpush側の宛先枝新設"
 	// observation_boundary = "public-boundary"
 	// scope = "separate Git fetch and push endpoints"
 	// lifecycle = "permanent"
 	// @end-test-value
-	[Fact]
-	public async Task EqualFetchTrackingDoesNotHideADifferentPushEndpoint()
+	[Theory]
+	[InlineData(false)]
+	[InlineData(true)]
+	public async Task EqualFetchTrackingDoesNotHideADifferentPushEndpoint(bool moveFetchUrlToo)
 	{
 		var (root, fetch) = CreateCadenceRepositories();
-		var push = Directory.CreateDirectory(Path.Combine(_directory, "separate-push.git")).FullName;
-		RunGit(push, "init", "--bare", "--quiet");
+		var push = CreateBare("separate-push.git");
+		if (moveFetchUrlToo) RunGit(root, "remote", "set-url", "origin", push);
 		RunGit(root, "remote", "set-url", "--push", "origin", push);
 		var head = RunGit(root, "rev-parse", "HEAD").Trim();
 		Assert.Equal(head, RunGit(root, "rev-parse", "refs/remotes/origin/sample").Trim());
@@ -383,6 +431,63 @@ public sealed class GitServiceTests : IDisposable
 		Assert.Equal(RepositorySyncHistoryStatus.Succeeded, history.Status);
 		Assert.Equal(fetchRefs, Refs(fetch));
 		Assert.Equal(new[] { $"refs/heads/sample {head}" }, Refs(push));
+	}
+
+	// @test-value v2
+	// kind = "invariant"
+	// claim = "確定宛先の照会・送信失敗は、Gitの機械的な原因だけを返して生のendpoint値をログへ渡さない"
+	// oracle = { type = "contract", ref = "Session Graph game-sync-cadence-push-scope Turn 9093" }
+	// fault = "URLをコマンド引数に入れる、または失敗の生出力・リモート名をログや利用者向け失敗へ流す"
+	// observable = "合成ローカルパス・remote名での実Git失敗結果、引数ログ、詳細ログ、同期失敗履歴と通知"
+	// observation_boundary = "public-boundary"
+	// scope = "protected Git endpoint output and diagnostics"
+	// lifecycle = "permanent"
+	// @end-test-value
+	[Fact]
+	public async Task EndpointFailuresDoNotExposeRawGitArgumentsOrOutput()
+	{
+		var (root, _) = CreateCadenceRepositories();
+		const string marker = "synthetic-auth-marker";
+		var missing = Path.Combine(_directory, marker + ".git");
+		SetEnvironment("GIT_CONFIG_COUNT", "1");
+		SetEnvironment("GIT_CONFIG_KEY_0", "user.name");
+		SetEnvironment("GIT_CONFIG_VALUE_0", "Fixture");
+		var logger = new CapturedGitLogger();
+		var errorLog = new TestLog();
+		IGitService git = new GitService(errorLog, logger);
+		var head = RunGit(root, "rev-parse", "HEAD").Trim();
+		const string destination = "refs/heads/sample";
+		var failures = new[]
+		{
+			await git.ReadCadencePushUrlsAsync(root, marker, CancellationToken.None),
+			await git.RunCadenceEndpointAsync(root, missing, destination, null, CancellationToken.None),
+			await git.RunCadenceEndpointAsync(root, missing, destination, head, CancellationToken.None)
+		};
+		Assert.Equal(3, errorLog.Results.Count);
+		Assert.All(failures.Concat(errorLog.Results), failure =>
+		{
+			Assert.False(failure.IsSuccess);
+			Assert.Empty(failure.StandardOutput);
+			Assert.Empty(failure.StandardError);
+			Assert.DoesNotContain(marker, failure.GetFailureReason());
+		});
+		Assert.DoesNotContain(logger.Lines, line => line.Contains(marker, StringComparison.Ordinal));
+		Assert.DoesNotContain(errorLog.Arguments.SelectMany(args => args), arg => arg.Contains(marker, StringComparison.Ordinal));
+		Assert.Equal("1", Environment.GetEnvironmentVariable("GIT_CONFIG_COUNT"));
+		Assert.Equal("user.name", Environment.GetEnvironmentVariable("GIT_CONFIG_KEY_0"));
+		Assert.Equal("Fixture", Environment.GetEnvironmentVariable("GIT_CONFIG_VALUE_0"));
+
+		RunGit(root, "remote", "set-url", "--push", "origin", missing);
+		using var f = new SyncCadenceTests.Fixture(commit: 1, push: 0, repository: root, git: git);
+		f.Watch();
+		var history = await f.FirstHistory.Task.WaitAsync(TimeSpan.FromSeconds(15));
+		var notification = await f.FirstNotification.Task.WaitAsync(TimeSpan.FromSeconds(15));
+		Assert.Equal(RepositorySyncHistoryStatus.Failed, history.Status);
+		Assert.NotNull(history.Reason);
+		Assert.DoesNotContain(marker, history.Reason);
+		Assert.DoesNotContain(marker, notification);
+		Assert.DoesNotContain(logger.Lines, line => line.Contains(marker, StringComparison.Ordinal));
+		Assert.DoesNotContain(errorLog.Results, result => result.GetFailureReason().Contains(marker, StringComparison.Ordinal));
 	}
 
 	// @test-value v2
@@ -412,8 +517,7 @@ public sealed class GitServiceTests : IDisposable
 	private (string Root, string Bare) CreateCadenceRepositories()
 	{
 		var root = CreateRepository("cadence");
-		var bare = Directory.CreateDirectory(Path.Combine(_directory, "cadence.git")).FullName;
-		RunGit(bare, "init", "--bare", "--quiet");
+		var bare = CreateBare("cadence.git");
 		RunGit(root, "symbolic-ref", "HEAD", "refs/heads/sample");
 		RunGit(root, "config", "--local", "user.name", "Fixture");
 		RunGit(root, "config", "--local", "user.email", "fixture@example.invalid");
@@ -423,6 +527,13 @@ public sealed class GitServiceTests : IDisposable
 		RunGit(root, "push", "--set-upstream", "origin", "sample");
 		RunGit(root, "push", "origin", "sample:refs/heads/destination", "other");
 		return (root, bare);
+	}
+
+	private string CreateBare(string name)
+	{
+		var bare = Directory.CreateDirectory(Path.Combine(_directory, name)).FullName;
+		RunGit(bare, "init", "--bare", "--quiet");
+		return bare;
 	}
 
 	private void MakeOutgoingCommit(string root)
@@ -474,9 +585,11 @@ public sealed class GitServiceTests : IDisposable
 	private sealed class TestLog : ILogAccessService
 	{
 		public ConcurrentQueue<GitCommandResult> Results { get; } = new();
+		public ConcurrentQueue<IReadOnlyList<string>> Arguments { get; } = new();
 		public Task AppendGitErrorAsync(string? repositoryPath, IReadOnlyList<string> arguments, GitCommandResult result, CancellationToken cancellationToken = default)
 		{
 			Results.Enqueue(result);
+			Arguments.Enqueue(arguments);
 			return Task.CompletedTask;
 		}
 		public Task AppendErrorAsync(string message, CancellationToken cancellationToken = default) => throw new NotSupportedException();
@@ -486,9 +599,25 @@ public sealed class GitServiceTests : IDisposable
 		public Task OpenLogDirectoryAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
 	}
 
+	private sealed class CapturedGitLogger : ILogger<GitService>
+	{
+		public List<string> Lines { get; } = [];
+		public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+		public bool IsEnabled(LogLevel logLevel) => true;
+		public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+			Func<TState, Exception?, string> formatter)
+		{
+			Lines.Add(formatter(state, exception));
+			if (state is IEnumerable<KeyValuePair<string, object?>> fields)
+				foreach (var values in fields.Select(field => field.Value).OfType<IReadOnlyList<string>>())
+					Lines.AddRange(values);
+		}
+	}
+
 	private sealed class RecordingGit(IGitService git) : IGitService
 	{
 		public ConcurrentQueue<string> Commands { get; } = new();
+		public Action? BeforeEndpointSend { get; init; }
 		public Task<GitCommandResult> CheckAvailabilityAsync(CancellationToken cancellationToken = default) =>
 			git.CheckAvailabilityAsync(cancellationToken);
 		public Task<GitCommandResult> RunAsync(string repositoryPath, IReadOnlyList<string> arguments,
@@ -496,6 +625,18 @@ public sealed class GitServiceTests : IDisposable
 		{
 			Commands.Enqueue(arguments[0]);
 			return git.RunAsync(repositoryPath, arguments, cancellationToken);
+		}
+		Task<GitCommandResult> IGitService.ReadCadencePushUrlsAsync(string repositoryPath, string remote, CancellationToken token) =>
+			git.ReadCadencePushUrlsAsync(repositoryPath, remote, token);
+		Task<GitCommandResult> IGitService.RunCadenceEndpointAsync(string repositoryPath, string resolvedUrl,
+			string destinationRef, string? commit, CancellationToken token)
+		{
+			if (commit is not null)
+			{
+				Commands.Enqueue("push");
+				BeforeEndpointSend?.Invoke();
+			}
+			return git.RunCadenceEndpointAsync(repositoryPath, resolvedUrl, destinationRef, commit, token);
 		}
 	}
 }

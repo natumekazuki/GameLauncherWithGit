@@ -65,14 +65,23 @@ public sealed partial class SyncOrchestrator
 	// Only the current repository runner changes the work; the scheduler reads it after the runner finishes.
 	private sealed class CadenceWork
 	{
+		private readonly Dictionary<PushIdentity, PushWork> _selections = [];
 		public DateTimeOffset? CommitSince { get; set; }
-		public DateTimeOffset? PushSince { get; set; }
-		public DateTimeOffset? PushRetryAt { get; set; }
-		public PushIdentity? PushIdentity { get; set; }
-		public string? ConfirmedHead { get; set; }
-		public int PushFailures { get; set; }
-		public bool ReportPushRecovery { get; set; }
-		public bool HasPending => CommitSince is not null || PushSince is not null;
+		public PushWork? SelectedPush { get; private set; }
+		public bool HasPending => CommitSince is not null || SelectedPush?.Since is not null;
+
+		public PushWork? Select(PushIdentity? identity)
+		{
+			if (identity is null) return SelectedPush = null;
+			if (!_selections.TryGetValue(identity, out var push))
+			{
+				// Only the first selection can reconstruct a pre-startup interval. A different
+				// selection starts when observed; returning to a known one uses its existing deadline.
+				push = new PushWork { RestoreCommitAge = _selections.Count == 0 };
+				_selections.Add(identity, push);
+			}
+			return SelectedPush = push;
+		}
 
 		public DateTimeOffset? Next(AppSettings settings, DateTimeOffset? changeReadyAt)
 		{
@@ -82,8 +91,8 @@ public sealed partial class SyncOrchestrator
 			{
 				commit = ready;
 			}
-			var push = PushSince?.AddMinutes(settings.AutoPushIntervalMinutes);
-			if (push is { } pushDue && PushRetryAt is { } retry && retry > pushDue)
+			var push = SelectedPush?.Since?.AddMinutes(settings.AutoPushIntervalMinutes);
+			if (push is { } pushDue && SelectedPush?.RetryAt is { } retry && retry > pushDue)
 			{
 				push = retry;
 			}
@@ -92,33 +101,47 @@ public sealed partial class SyncOrchestrator
 		}
 	}
 
+	private sealed class PushWork
+	{
+		public bool RestoreCommitAge { get; set; }
+		public bool EndpointInspected { get; set; }
+		public bool EndpointKnown { get; set; }
+		public string? EndpointTip { get; set; }
+		public DateTimeOffset? Since { get; set; }
+		public DateTimeOffset? RetryAt { get; set; }
+		public int Failures { get; set; }
+		public bool ReportRecovery { get; set; }
+	}
+
 	private async Task<bool> ExecuteCadenceAsync(string repositoryId, CadenceWork work, AppSettings settings,
-		bool force, DateTimeOffset? firstChangeAt, DateTimeOffset? commitNotBefore,
+		bool force, DateTimeOffset? firstChangeAt, Func<bool> mayAcquireWorktree,
 		DateTimeOffset startedAt, CancellationToken token)
 	{
-		var now = _clock.GetUtcNow();
 		var dirty = await IsWorktreeDirtyAsync(repositoryId, startedAt, token);
+		var now = _clock.GetUtcNow();
 		work.CommitSince = dirty ? work.CommitSince ?? firstChangeAt ?? now : null;
 
 		var outgoing = await InspectOutgoingAsync(repositoryId, work, startedAt, token);
-		UpdatePushWork(work, outgoing, now);
+		now = _clock.GetUtcNow();
+		UpdatePushWork(work.SelectedPush, outgoing, now);
 
 		var commitDue = work.CommitSince is { } commitSince
-			&& (force || (commitSince.AddMinutes(settings.AutoCommitIntervalMinutes) <= now
-				&& (settings.AutoCommitIntervalMinutes > 0 || commitNotBefore is null || commitNotBefore <= now)));
-		var pushDue = IsPushDue(work, settings, force, now);
+			&& (force || (commitSince.AddMinutes(settings.AutoCommitIntervalMinutes) <= now && mayAcquireWorktree()));
+		var pushDue = IsPushDue(work.SelectedPush, settings, force, now);
 		if (!force && !commitDue && !pushDue)
 		{
 			return false;
 		}
 
-		if (force || commitDue || !dirty)
+		// With no advertised branch to pull, an outgoing-only sync can create it using
+		// the verified, non-force endpoint command. Local commits still use the incoming path.
+		if ((force || commitDue || (!dirty && work.SelectedPush?.EndpointTip is not null)) && mayAcquireWorktree())
 		{
-			await PrepareIncomingAsync(repositoryId, startedAt, token);
+			await PrepareIncomingAsync(repositoryId, startedAt, token, mayAcquireWorktree);
 			dirty = await IsWorktreeDirtyAsync(repositoryId, startedAt, token);
 		}
 		// An outgoing-only deadline must not stash/rebase new, still-debouncing worktree content.
-		if ((force || commitDue) && dirty)
+		if ((force || commitDue) && dirty && mayAcquireWorktree())
 		{
 			await CommitChangesAsync(repositoryId, startedAt, token);
 			now = _clock.GetUtcNow();
@@ -133,45 +156,39 @@ public sealed partial class SyncOrchestrator
 		// Pull/rebase or a new commit can change which commits still need pushing.
 		outgoing = await InspectOutgoingAsync(repositoryId, work, startedAt, token);
 		now = _clock.GetUtcNow();
-		UpdatePushWork(work, outgoing, now);
-		if (IsPushDue(work, settings, force, now) || (force && outgoing.Identity is not null))
+		var push = work.SelectedPush;
+		UpdatePushWork(push, outgoing, now);
+		if (push is not null && (IsPushDue(push, settings, force, now) || force))
 		{
-			work.PushSince ??= now;
+			push.Since ??= now;
 			await PushCurrentBranchAsync(repositoryId, outgoing, startedAt, token);
-			work.ConfirmedHead = outgoing.Head;
-			work.ReportPushRecovery |= work.PushFailures > 0;
-			work.PushSince = null;
-			work.PushRetryAt = null;
-			work.PushFailures = 0;
+			push.EndpointKnown = true;
+			push.EndpointTip = outgoing.Head;
+			push.ReportRecovery |= push.Failures > 0;
+			push.Since = null;
+			push.RetryAt = null;
+			push.Failures = 0;
 		}
 
-		return !work.HasPending && outgoing.Identity is not null;
+		return !work.HasPending && outgoing.Identity is not null && mayAcquireWorktree();
 	}
 
-	private static bool IsPushDue(CadenceWork work, AppSettings settings, bool force, DateTimeOffset now) =>
-		work.PushSince is { } since && (force || (since.AddMinutes(settings.AutoPushIntervalMinutes) <= now
-			&& (work.PushRetryAt is null || work.PushRetryAt <= now)));
+	private static bool IsPushDue(PushWork? push, AppSettings settings, bool force, DateTimeOffset now) =>
+		push?.Since is { } since && (force || (since.AddMinutes(settings.AutoPushIntervalMinutes) <= now
+			&& (push.RetryAt is null || push.RetryAt <= now)));
 
-	private static void UpdatePushWork(CadenceWork work, OutgoingCommits outgoing, DateTimeOffset now)
+	private static void UpdatePushWork(PushWork? push, OutgoingCommits outgoing, DateTimeOffset now)
 	{
-		if (work.PushIdentity != outgoing.Identity)
-		{
-			work.PushIdentity = outgoing.Identity;
-			work.ConfirmedHead = null;
-			work.PushSince = null;
-			work.PushRetryAt = null;
-			work.PushFailures = 0;
-			work.ReportPushRecovery = false;
-		}
+		if (push is null) return;
 		if (!outgoing.NeedsConfirmation)
 		{
-			work.PushSince = null;
-			work.PushRetryAt = null;
-			work.PushFailures = 0;
+			push.Since = null;
+			push.RetryAt = null;
+			push.Failures = 0;
 			return;
 		}
 
-		work.PushSince ??= outgoing.Oldest is { } oldest && oldest < now ? oldest : now;
+		push.Since ??= outgoing.Oldest is { } oldest && oldest < now ? oldest : now;
 	}
 
 	private async Task<bool> IsWorktreeDirtyAsync(string repositoryId, DateTimeOffset startedAt, CancellationToken token)
@@ -212,6 +229,7 @@ public sealed partial class SyncOrchestrator
 		var head = await RunGitAsync(repositoryId, headCommand, token);
 		if (IsMissingGitConfigValue(head))
 		{
+			work.Select(null);
 			return new(null, null, false);
 		}
 		RequireGitSuccess(repositoryId, headCommand, head, startedAt);
@@ -223,24 +241,35 @@ public sealed partial class SyncOrchestrator
 		}
 
 		var identity = await ResolvePushIdentityAsync(repositoryId, branch, startedAt, token);
-		var confirmed = work.PushIdentity == identity && work.ConfirmedHead == objectName;
-		var target = identity.BlockedReason is null
-			? await FindTrackingRefAsync(repositoryId, identity, startedAt, token) : null;
-		if (target is null)
+		var push = work.Select(identity)!;
+		if (!push.EndpointInspected && identity.BlockedReason is null)
 		{
-			// A tracking ref for another URL or an unmapped ref says nothing about this destination.
-			return new(identity, objectName, !confirmed);
+			// A tracking ref is not evidence for the configured URL. Read the actual destination
+			// once per selection, then use that observation and successful pushes without polling.
+			var advertised = await _gitService.RunCadenceEndpointAsync(repositoryId, identity.PushUrl!,
+				identity.DestinationRef!, commit: null, token);
+			token.ThrowIfCancellationRequested();
+			push.EndpointInspected = true;
+			push.EndpointKnown = advertised.IsSuccess;
+			push.EndpointTip = advertised.IsSuccess && advertised.StandardOutput.Length > 0
+				? advertised.StandardOutput : null;
 		}
-		string[] verifyTarget = ["show-ref", "--verify", "--quiet", target];
-		var targetExists = await RunGitAsync(repositoryId, verifyTarget, token);
-		if (IsMissingGitConfigValue(targetExists))
+		var restoreAge = push.RestoreCommitAge;
+		push.RestoreCommitAge = false;
+		if (!push.EndpointKnown)
 		{
-			return new(identity, objectName, !confirmed);
+			return new(identity, objectName, true);
 		}
-		RequireGitSuccess(repositoryId, verifyTarget, targetExists, startedAt);
+		var target = push.EndpointTip;
+		if (target == objectName) return new(identity, objectName, false);
+		if (target is not null)
+		{
+			var knownLocally = await RunGitAsync(repositoryId, ["rev-parse", "--verify", "--quiet", target + "^{commit}"], token);
+			if (!knownLocally.IsSuccess) return new(identity, objectName, true);
+		}
 
-		var range = $"{target}..{objectName}";
-		if (work.PushIdentity == identity && work.PushSince is not null)
+		var range = target is null ? objectName : $"{target}..{objectName}";
+		if (!restoreAge)
 		{
 			var ahead = await ReadRequiredGitAsync(repositoryId, ["rev-list", "--count", range], startedAt, token);
 			if (int.TryParse(ahead.StandardOutput.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var count))
@@ -281,14 +310,16 @@ public sealed partial class SyncOrchestrator
 		{
 			var names = await Read(key);
 			if (names.Length == 0) continue;
-			if (names is not [var name] || string.IsNullOrWhiteSpace(name) || name == ".")
+			if (names is not [var name] || string.IsNullOrWhiteSpace(name) || name == "."
+				|| name.IndexOfAny([':', '@', '\r', '\n', '\0']) >= 0)
 				return identity with { BlockedReason = ambiguous };
 			identity = identity with { Remote = name };
 			break;
 		}
 		var remote = identity.Remote ?? "origin";
 		identity = identity with { Remote = remote };
-		var urls = await RunGitAsync(repositoryId, ["remote", "get-url", "--push", "--all", "--", remote], token);
+		var urls = await _gitService.ReadCadencePushUrlsAsync(repositoryId, remote, token);
+		token.ThrowIfCancellationRequested();
 		if (!urls.IsSuccess || ReadLines(urls.StandardOutput) is not [var url] || string.IsNullOrWhiteSpace(url))
 			return identity with { BlockedReason = ambiguous };
 		identity = identity with { PushUrl = url };
@@ -359,31 +390,11 @@ public sealed partial class SyncOrchestrator
 		return (normalized.EndsWith('\n') ? normalized[..^1] : normalized).Split('\n');
 	}
 
-	private async Task<string?> FindTrackingRefAsync(string repositoryId, PushIdentity identity,
-		DateTimeOffset startedAt, CancellationToken token)
-	{
-		var fetch = await RunGitAsync(repositoryId, ["remote", "get-url", "--all", "--", identity.Remote!], token);
-		var fetchUrls = ReadLines(fetch.StandardOutput);
-		if (!fetch.IsSuccess || fetchUrls.Length != 1 || fetchUrls[0] != identity.PushUrl)
-		{
-			return null;
-		}
-
-		var specs = await ReadConfigAsync(repositoryId, $"remote.{identity.Remote}.fetch", startedAt, token);
-		// Only infer tracking from a single positive fetch mapping. Multiple/negative mappings are not proof.
-		if (specs is not [var spec] || spec.StartsWith('^')) return null;
-		var fields = spec.TrimStart('+').Split(':');
-		if (fields.Length != 2 || !fields[1].StartsWith("refs/remotes/", StringComparison.Ordinal)) return null;
-		if (fields[0] == identity.DestinationRef && !fields[1].Contains('*')) return fields[1];
-		if (!fields[0].EndsWith("/*", StringComparison.Ordinal) || !fields[1].EndsWith("/*", StringComparison.Ordinal)) return null;
-		var prefix = fields[0][..^1];
-		return identity.DestinationRef!.StartsWith(prefix, StringComparison.Ordinal) ? fields[1][..^1] + identity.DestinationRef[prefix.Length..] : null;
-	}
-
 	private async Task PushCurrentBranchAsync(string repositoryId, OutgoingCommits outgoing,
 		DateTimeOffset startedAt, CancellationToken token)
 	{
 		var target = outgoing.Identity!;
+		var commit = outgoing.Head ?? throw new InvalidOperationException("A push requires a selected commit.");
 		if (target.BlockedReason is { } reason)
 		{
 			throw new SyncCommandException(repositoryId, "push", reason, startedAt,
@@ -397,27 +408,11 @@ public sealed partial class SyncOrchestrator
 				shouldPauseRepository: false, isPushStep: true);
 		}
 
-		var result = await RunGitAsync(repositoryId, ["push", "--porcelain", "--no-force", "--no-mirror",
-			"--no-tags", "--no-follow-tags", "--recurse-submodules=no", "--", target.Remote!,
-			$"{outgoing.Head}:{target.DestinationRef}"], token);
-		if (result.IsSuccess && result.StandardOutput.Split('\n').Any(line =>
-		{
-			if (line.Length < 3 || line[1] != '\t' || line[0] is not (' ' or '*' or '='))
-			{
-				return false;
-			}
-			var endOfSource = line.IndexOf(':', 2);
-			var endOfRefSpec = line.IndexOf('\t', 2);
-			return endOfSource > 2 && endOfRefSpec > endOfSource
-				&& line[2..endOfSource] == outgoing.Head
-				&& line[(endOfSource + 1)..endOfRefSpec] == target.DestinationRef;
-		}))
-		{
-			return;
-		}
-
+		var result = await _gitService.RunCadenceEndpointAsync(repositoryId, target.PushUrl!, target.DestinationRef!, commit, token);
+		token.ThrowIfCancellationRequested();
+		if (result.IsSuccess) return;
 		throw new SyncCommandException(repositoryId, "push --porcelain",
-			result.IsSuccess ? "予定した送信先への反映を確認できません。Git の送信先設定を確認してください。" : BuildFailureReason(result),
+			BuildFailureReason(result),
 			startedAt, shouldPauseRepository: false, isPushStep: true);
 	}
 

@@ -83,6 +83,12 @@ public sealed partial class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		return Task.CompletedTask;
 	}
 
+	public Task NotifyRepositoryBranchChangedAsync(string repositoryId, CancellationToken cancellationToken = default)
+	{
+		TryQueueRepositorySync(repositoryId, SyncRequest.BranchChanged, cancellationToken);
+		return Task.CompletedTask;
+	}
+
 	public bool TryQueueRepositorySyncNow(string repositoryId) =>
 		TryQueueRepositorySync(repositoryId, SyncRequest.Manual, CancellationToken.None);
 
@@ -145,6 +151,10 @@ public sealed partial class SyncOrchestrator : ISyncOrchestrator, IDisposable
 
 		var settings = _appSettingsService.Get();
 		var useCadence = queue.HasCadenceWork || queue.RunningCadence || IsCadenceEnabled(settings);
+		if (request == SyncRequest.BranchChanged && !IsCadenceEnabled(settings))
+		{
+			return false;
+		}
 		if (request == SyncRequest.Registered && !useCadence)
 		{
 			return false;
@@ -280,10 +290,14 @@ public sealed partial class SyncOrchestrator : ISyncOrchestrator, IDisposable
 					return;
 				}
 
+				settings = _appSettingsService.Get().Normalize();
+				if (reservation.Request == SyncRequest.BranchChanged && !IsCadenceEnabled(settings))
+				{
+					return;
+				}
 				queue.Pending = null;
 				queue.Active = reservation;
 				queue.IsSyncRunning = true;
-				settings = _appSettingsService.Get().Normalize();
 				useCadence = queue.HasCadenceWork || IsCadenceEnabled(settings);
 				queue.RunningCadence = useCadence;
 				firstChangeAt = queue.FirstChangeAt;
@@ -356,8 +370,19 @@ public sealed partial class SyncOrchestrator : ISyncOrchestrator, IDisposable
 
 			if (useCadence)
 			{
+				bool MayAcquireWorktree()
+				{
+					if (force || settings.AutoCommitIntervalMinutes > 0) return true;
+					lock (queue.Gate)
+					{
+						var now = _clock.GetUtcNow();
+						return (commitNotBefore is null || commitNotBefore <= now)
+							&& (queue.ChangeReadyAt is null || queue.ChangeReadyAt <= now);
+					}
+				}
+
 				if (!await ExecuteCadenceAsync(repositoryId, queue.Cadence, settings, force, firstChangeAt,
-					commitNotBefore, syncStartedAt, cancellationToken))
+					MayAcquireWorktree, syncStartedAt, cancellationToken))
 				{
 					return;
 				}
@@ -373,8 +398,8 @@ public sealed partial class SyncOrchestrator : ISyncOrchestrator, IDisposable
 				DateTimeOffset.Now,
 				command: null,
 				reason: null);
-			var hadTransientFailure = ClearTransientFailureState(queue) || queue.Cadence.ReportPushRecovery;
-			queue.Cadence.ReportPushRecovery = false;
+			var hadTransientFailure = ClearTransientFailureState(queue) || queue.Cadence.SelectedPush?.ReportRecovery == true;
+			if (queue.Cadence.SelectedPush is { } recovered) recovered.ReportRecovery = false;
 			SetRepositoryState(repositoryId, RepositorySyncState.Idle);
 			if (hadTransientFailure)
 			{
@@ -416,8 +441,9 @@ public sealed partial class SyncOrchestrator : ISyncOrchestrator, IDisposable
 			}
 			else
 			{
-				var retryPlan = useCadence && ex.IsPushStep
-					? CreateRetryPlan(++queue.Cadence.PushFailures)
+				var push = useCadence && ex.IsPushStep ? queue.Cadence.SelectedPush : null;
+				var retryPlan = push is not null
+					? CreateRetryPlan(++push.Failures)
 					: RegisterTransientFailure(queue);
 				_logger.LogWarning(
 					ex,
@@ -437,9 +463,9 @@ public sealed partial class SyncOrchestrator : ISyncOrchestrator, IDisposable
 					await AppendErrorAsync($"再試行継続中: {message}");
 				}
 
-				if (useCadence && ex.IsPushStep)
+				if (push is not null)
 				{
-					queue.Cadence.PushRetryAt = _clock.GetUtcNow() + retryPlan.Delay;
+					push.RetryAt = _clock.GetUtcNow() + retryPlan.Delay;
 				}
 				else
 				{
@@ -534,13 +560,16 @@ public sealed partial class SyncOrchestrator : ISyncOrchestrator, IDisposable
 		_logger.LogInformation("Repository sync completed. repositoryId={RepositoryId}", repositoryId);
 	}
 
-	private async Task<bool> PrepareIncomingAsync(string repositoryPath, DateTimeOffset startedAt, CancellationToken cancellationToken)
+	private async Task<bool> PrepareIncomingAsync(string repositoryPath, DateTimeOffset startedAt, CancellationToken cancellationToken,
+		Func<bool>? mayAcquireWorktree = null)
 	{
 		await EnsureCommandSuccessAsync(repositoryPath, ["fetch"], startedAt, shouldPauseRepository: false, cancellationToken);
 
 		var tracking = await TryGetTrackingInfoAsync(repositoryPath, startedAt, cancellationToken);
 		if (tracking is not null)
 		{
+			// A new change may have arrived while awaiting fetch or the upstream lookup.
+			if (mayAcquireWorktree?.Invoke() == false) return true;
 			string[] pullCommand = ["pull", "--rebase", "--autostash", tracking.RemoteName, tracking.MergeTarget];
 			var pullResult = await RunGitAsync(repositoryPath, pullCommand, cancellationToken);
 			if (!pullResult.IsSuccess)
@@ -1085,5 +1114,5 @@ public sealed partial class SyncOrchestrator : ISyncOrchestrator, IDisposable
 	}
 
 	// If requests coalesce, deadlines/retries outrank ordinary detection and explicit operations outrank automation.
-	private enum SyncRequest { Changed, Registered, Due, Retry, Manual, Resume }
+	private enum SyncRequest { Changed, Registered, BranchChanged, Due, Retry, Manual, Resume }
 }
