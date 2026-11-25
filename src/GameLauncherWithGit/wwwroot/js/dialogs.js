@@ -1,6 +1,7 @@
 (() => {
     const openers = new Map();
     let layers = [];
+    let focusedHomeResume;
 
     window.gameLauncherFocusHomeGame = id => {
         const card = Array.from(document.querySelectorAll('[data-home-game]')).find(button => button.dataset.homeGame === id);
@@ -112,12 +113,22 @@
     }, true);
 
     document.addEventListener('focusin', event => {
+        focusedHomeResume = event.target.closest('[data-home-resume]');
         const layer = layers.at(-1);
         if (layer && !dialogOf(layer).contains(event.target)) {
             focusDialog(layer);
         }
     });
 
-    new MutationObserver(updateDialogs).observe(document.body, { childList: true, subtree: true });
+    new MutationObserver(() => {
+        updateDialogs();
+        if (focusedHomeResume && !focusedHomeResume.isConnected) {
+            const id = focusedHomeResume.dataset.homeResume;
+            focusedHomeResume = null;
+            if (!layers.length && document.activeElement === document.body) {
+                window.gameLauncherFocusHomeGame(id);
+            }
+        }
+    }).observe(document.body, { childList: true, subtree: true });
     updateDialogs();
 })();
