@@ -804,14 +804,14 @@ else
                                     class="secondary-button picker-button"
                                     @onclick="PickRepositoryDirectoryPathAsync"
                                     aria-label="関連リポジトリを選択"
-                                    disabled="@_isSaving">
+                                    disabled="@IsEditorOperationBusy">
                                 選択
                             </button>
                             <button type="button"
                                     class="secondary-button picker-button"
                                     @onclick="ClearRepositoryPath"
                                     aria-label="関連リポジトリを解除"
-                                    disabled="@(_isSaving || string.IsNullOrWhiteSpace(_editorRepositoryPath))">
+                                    disabled="@(IsEditorOperationBusy || string.IsNullOrWhiteSpace(_editorRepositoryPath))">
                                 解除
                             </button>
                         </div>
@@ -969,7 +969,7 @@ else
 
     private IReadOnlyList<GameCardItem>? _games;
     private NotificationHistoryEntry? _notification;
-    private (string Operation, string? Target)? _notificationFailure;
+    private (string Operation, string? Target, string? Repository)? _notificationFailure;
     private string? _operationAnnouncement;
     private UserOperation? _announcedOperation;
     private ResultDetails? _openResult;
@@ -1848,7 +1848,7 @@ else
 
     private void CloseEditor(bool force = false)
     {
-        if (_isSaving && !force)
+        if (IsEditorOperationBusy && !force)
         {
             return;
         }
@@ -2108,18 +2108,22 @@ else
 
     private async Task SwitchEditorBranchAsync()
     {
-        if (IsEditorOperationBusy || _isBranchLoading) return;
+        if (!_isEditorOpen || IsEditorOperationBusy || _isBranchLoading || _isDeleteConfirmOpen || _discardChanges is not null) return;
+        var gameId = _editingGameId;
         var repositoryPath = NormalizeRepositoryPath(_editorRepositoryPath);
+        void ReportResult(string message, bool isSuccess) => SetNotification(message, isSuccess, summary: "ブランチ切替",
+            targetId: gameId, repositoryPath: repositoryPath, operation: nameof(SwitchEditorBranchAsync));
+
         if (repositoryPath is null)
         {
-            SetNotification("関連リポジトリが未設定または不正です。", false, summary: "ブランチ切替");
+            ReportResult("関連リポジトリが未設定または不正です。", false);
             return;
         }
 
         var selectedBranch = NormalizeBranchName(_editorSelectedBranch);
         if (string.IsNullOrWhiteSpace(selectedBranch))
         {
-            SetNotification("切り替え先ブランチを選択してください。", false, summary: "ブランチ切替");
+            ReportResult("切り替え先ブランチを選択してください。", false);
             return;
         }
 
@@ -2130,7 +2134,7 @@ else
         {
             if (string.Equals(selectedBranch, _editorCurrentBranch, StringComparison.OrdinalIgnoreCase))
             {
-                SetNotification($"既に選択ブランチです: {selectedBranch}", true, summary: "ブランチ切替");
+                ReportResult($"既に選択ブランチです: {selectedBranch}", true);
                 return;
             }
 
@@ -2142,13 +2146,13 @@ else
             if (!_editorRemoteBranchLocalNames.TryGetValue(selectedBranch, out var localBranchName)
                 || string.IsNullOrWhiteSpace(localBranchName))
             {
-                SetNotification($"リモートブランチ名の形式が不正です: {selectedBranch}", false, summary: "ブランチ切替");
+                ReportResult($"リモートブランチ名の形式が不正です: {selectedBranch}", false);
                 return;
             }
 
             if (string.Equals(localBranchName, _editorCurrentBranch, StringComparison.OrdinalIgnoreCase))
             {
-                SetNotification($"既に選択ブランチです: {localBranchName}", true, summary: "ブランチ切替");
+                ReportResult($"既に選択ブランチです: {localBranchName}", true);
                 return;
             }
 
@@ -2158,7 +2162,7 @@ else
         }
         else
         {
-            SetNotification($"切り替え対象ブランチが見つかりません: {selectedBranch}", false, summary: "ブランチ切替");
+            ReportResult($"切り替え対象ブランチが見つかりません: {selectedBranch}", false);
             return;
         }
 
@@ -2174,9 +2178,7 @@ else
                         switchCommand);
                     if (!result.IsSuccess)
                     {
-                        SetNotification(
-                            $"ブランチ切り替えに失敗しました: {BuildGitFailureReason(result)}",
-                            false, summary: "ブランチ切替");
+                        ReportResult($"ブランチ切り替えに失敗しました: {BuildGitFailureReason(result)}", false);
                         return;
                     }
 
@@ -2193,15 +2195,15 @@ else
                     }
 
                     await RefreshGitStatusesAsync();
-                    SetNotification(
+                    ReportResult(
                         switchedFromRemote
                             ? $"リモート追跡ブランチを作成して切り替えました: {switchTargetLabel}"
                             : $"ブランチを切り替えました: {switchTargetLabel}",
-                        true, summary: "ブランチ切替");
+                        true);
                 }
                 catch (Exception ex)
                 {
-                    SetNotification($"ブランチ切り替えに失敗しました: {ex.Message}", false, summary: "ブランチ切替");
+                    ReportResult($"ブランチ切り替えに失敗しました: {ex.Message}", false);
                 }
                 finally
                 {
@@ -2212,24 +2214,28 @@ else
 
     private async Task CreateEditorBranchAsync()
     {
-        if (IsEditorOperationBusy || _isBranchLoading) return;
+        if (!_isEditorOpen || IsEditorOperationBusy || _isBranchLoading || _isDeleteConfirmOpen || _discardChanges is not null) return;
+        var gameId = _editingGameId;
         var repositoryPath = NormalizeRepositoryPath(_editorRepositoryPath);
+        void ReportResult(string message, bool isSuccess) => SetNotification(message, isSuccess, summary: "ブランチ作成",
+            targetId: gameId, repositoryPath: repositoryPath, operation: nameof(CreateEditorBranchAsync));
+
         if (repositoryPath is null)
         {
-            SetNotification("関連リポジトリが未設定または不正です。", false, summary: "ブランチ作成");
+            ReportResult("関連リポジトリが未設定または不正です。", false);
             return;
         }
 
         var newBranchName = NormalizeBranchName(_editorNewBranchName);
         if (string.IsNullOrWhiteSpace(newBranchName))
         {
-            SetNotification("新規ブランチ名を入力してください。", false, summary: "ブランチ作成");
+            ReportResult("新規ブランチ名を入力してください。", false);
             return;
         }
 
         if (_editorLocalBranches.Contains(newBranchName))
         {
-            SetNotification($"既に存在するブランチ名です: {newBranchName}", false, summary: "ブランチ作成");
+            ReportResult($"既に存在するブランチ名です: {newBranchName}", false);
             return;
         }
 
@@ -2245,9 +2251,7 @@ else
                         ["check-ref-format", "--branch", newBranchName]);
                     if (!validateResult.IsSuccess)
                     {
-                        SetNotification(
-                            $"ブランチ名が不正です: {BuildGitFailureReason(validateResult)}",
-                            false, summary: "ブランチ作成");
+                        ReportResult($"ブランチ名が不正です: {BuildGitFailureReason(validateResult)}", false);
                         return;
                     }
 
@@ -2256,20 +2260,18 @@ else
                         ["checkout", "-b", newBranchName]);
                     if (!createResult.IsSuccess)
                     {
-                        SetNotification(
-                            $"ブランチ作成に失敗しました: {BuildGitFailureReason(createResult)}",
-                            false, summary: "ブランチ作成");
+                        ReportResult($"ブランチ作成に失敗しました: {BuildGitFailureReason(createResult)}", false);
                         return;
                     }
 
                     _editorNewBranchName = string.Empty;
                     await LoadEditorBranchesAsync(showNotificationOnFailure: false, preserveSelection: false);
                     await RefreshGitStatusesAsync();
-                    SetNotification($"ブランチを作成して切り替えました: {newBranchName}", true, summary: "ブランチ作成");
+                    ReportResult($"ブランチを作成して切り替えました: {newBranchName}", true);
                 }
                 catch (Exception ex)
                 {
-                    SetNotification($"ブランチ作成に失敗しました: {ex.Message}", false, summary: "ブランチ作成");
+                    ReportResult($"ブランチ作成に失敗しました: {ex.Message}", false);
                 }
                 finally
                 {
@@ -2572,8 +2574,6 @@ else
     {
         ++_editorBranchLoadVersion;
         _isBranchLoading = false;
-        _isBranchSwitching = false;
-        _isBranchCreating = false;
         _editorCurrentBranch = null;
         _editorSelectedBranch = null;
         _editorBranches.Clear();
@@ -3582,11 +3582,11 @@ else
     }
 
     private void SetNotification(string message, bool? isSuccess, bool addToHistory = true, string? summary = null,
-        string? launchGameId = null, string? targetId = null, [CallerMemberName] string operation = "")
+        string? launchGameId = null, string? targetId = null, string? repositoryPath = null, [CallerMemberName] string operation = "")
     {
         var entry = new NotificationHistoryEntry(DateTimeOffset.Now, isSuccess,
             summary ?? (isSuccess == false ? "操作エラー" : "操作結果"), message.Trim());
-        var resultKey = (operation, launchGameId ?? targetId);
+        var resultKey = (operation, launchGameId ?? targetId, repositoryPath?.ToUpperInvariant());
         if (isSuccess == false || _notificationFailure is null || _notificationFailure == resultKey)
         {
             _notification = isSuccess == true ? null : entry;
@@ -3617,7 +3617,8 @@ else
 
     private void ClearRecoveredNotification(string operation, string? targetId = null)
     {
-        if (_notificationFailure == (operation, targetId))
+        if (_notificationFailure is { } failure
+            && failure.Operation == operation && failure.Target == targetId && failure.Repository is null)
         {
             if (_operationAnnouncement == _notification?.Summary)
             {
