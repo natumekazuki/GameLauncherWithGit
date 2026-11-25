@@ -54,9 +54,10 @@ public sealed class GitService : IGitService
 	Task<GitCommandResult> IGitService.ReadCadenceFetchUrlsAsync(string repositoryPath, string remote, CancellationToken token) =>
 		ReadCadenceUrlsAsync(repositoryPath, remote, push: false, token);
 
-	private Task<GitCommandResult> ReadCadenceUrlsAsync(string repositoryPath, string remote, bool push, CancellationToken token) =>
+	private Task<GitCommandResult> ReadCadenceUrlsAsync(string repositoryPath, string remote, bool push, CancellationToken token,
+		bool all = true) =>
 		RunInternalAsync(repositoryPath, push ? ["remote", "get-url", "--push", "--all", "--", remote]
-			: ["remote", "get-url", "--all", "--", remote], token,
+			: all ? ["remote", "get-url", "--all", "--", remote] : ["remote", "get-url", "--", remote], token,
 			protectedResult: result => result.IsSuccess ? new(0, result.StandardOutput, "") : CadenceEndpointFailure(result),
 			safeArguments: ["remote get-url (cadence)"]);
 
@@ -104,6 +105,9 @@ public sealed class GitService : IGitService
 	private static bool IsCadenceHttpUrl(string url) => url.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
 		|| url.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
 
+	internal static string DefaultCadenceRemote(string remotes) =>
+		remotes.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries) is [var only] ? only : "origin";
+
 	async Task<GitCommandResult> IGitService.RunCadenceIncomingAsync(string repositoryPath, string? remote, string? mergeTarget,
 		Func<bool>? mayStart, CancellationToken token)
 	{
@@ -115,28 +119,37 @@ public sealed class GitService : IGitService
 
 		if (remote is null)
 		{
-			var selected = await Read(["symbolic-ref", "--quiet", "--short", "HEAD"]);
+			var selected = await Read(["symbolic-ref", "--quiet", "HEAD"]);
 			token.ThrowIfCancellationRequested();
-			var branch = selected.StandardOutput.Trim();
-			if (selected.IsSuccess && branch.Length > 0)
+			const string headsPrefix = "refs/heads/";
+			var sourceRef = selected.StandardOutput.TrimEnd('\r', '\n');
+			if (selected.IsSuccess && sourceRef.StartsWith(headsPrefix, StringComparison.Ordinal))
 			{
+				var branch = sourceRef[headsPrefix.Length..];
 				var configured = await Read(["config", "--get", $"branch.{branch}.remote"]);
 				token.ThrowIfCancellationRequested();
 				if (configured.IsSuccess) remote = configured.StandardOutput.TrimEnd('\r', '\n');
 			}
-			remote = string.IsNullOrEmpty(remote) ? "origin" : remote;
+			if (string.IsNullOrEmpty(remote))
+			{
+				var configured = await Read(["remote"]);
+				token.ThrowIfCancellationRequested();
+				remote = DefaultCadenceRemote(configured.StandardOutput);
+			}
 		}
 
 		// git fetch/pull may use the HTTP helper too. For a verified HTTP URL use a
 		// one-shot alias, and never let the ordinary named path start an HTTP helper.
+		// Without --all Git returns the effective first fetch URL. Push and the
+		// post-push tracking check still read --all and require an unambiguous mapping.
 		var urls = IsCadenceHttpUrl(remote) ? new GitCommandResult(0, remote, "")
-			: await ReadCadenceUrlsAsync(repositoryPath, remote, push: false, token);
+			: await ReadCadenceUrlsAsync(repositoryPath, remote, push: false, token, all: false);
 		token.ThrowIfCancellationRequested();
-		var candidates = urls.IsSuccess ? urls.StandardOutput.TrimEnd('\r', '\n').Split('\n') : [];
-		if (candidates.Any(HasCadenceEmbeddedHttpCredentials))
+		var verified = urls.IsSuccess ? urls.StandardOutput.TrimEnd('\r', '\n') : "";
+		if (HasCadenceEmbeddedHttpCredentials(verified))
 			return new(-1, "", "", CadenceEmbeddedCredentialsMessage);
 
-		if (candidates is [var verified] && IsCadenceHttpUrl(verified))
+		if (IsCadenceHttpUrl(verified))
 		{
 			// Retain the named remote's ordinary fetch mapping so pull can still
 			// find the upstream for rebase, without using its mutable URL.
@@ -210,7 +223,7 @@ public sealed class GitService : IGitService
 		var env = start.Environment;
 		var count = env.TryGetValue("GIT_CONFIG_COUNT", out var configured) && !string.IsNullOrEmpty(configured)
 			? int.Parse(configured, NumberStyles.None, CultureInfo.InvariantCulture) : 0;
-		if (count < 0 || count > int.MaxValue - 3 - (remoteOptions?.Count ?? 0)) throw new InvalidOperationException();
+		if (count < 0 || count > int.MaxValue - 4 - (remoteOptions?.Count ?? 0)) throw new InvalidOperationException();
 		void Add(string key, string value)
 		{
 			var index = count++.ToString(CultureInfo.InvariantCulture);
@@ -220,6 +233,9 @@ public sealed class GitService : IGitService
 		Add($"remote.{alias}.url", marker);
 		Add($"remote.{alias}.pushurl", marker);
 		Add($"url.{url}.insteadOf", marker);
+		// URL-specific Git settings outrank the generic -c configuration. Pin the
+		// exact endpoint's setting in the child, without putting the URL in argv.
+		if (IsCadenceHttpUrl(url)) Add($"http.{url}.followRedirects", "false");
 		if (remoteOptions is not null)
 			foreach (var option in remoteOptions) Add($"remote.{alias}.{option.Key}", option.Value);
 		env["GIT_CONFIG_COUNT"] = count.ToString(CultureInfo.InvariantCulture);

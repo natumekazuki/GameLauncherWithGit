@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using GameLauncherWithGit.Application.Models;
 using GameLauncherWithGit.Infrastructure.Abstractions;
@@ -577,7 +579,7 @@ public sealed class GitServiceTests : IDisposable
 	// claim = "正値の送信・取得で埋込HTTP(S)認証をhelper起動前に拒否し、値を出さずCredential Helperへ案内する"
 	// oracle = { type = "contract", ref = "Session Graph game-sync-cadence-push-scope CAD-CORE-01" }
 	// fault = "アプリ内の引数だけを隠し、HTTP helperへ認証付きURLを渡す"
-	// observable = "合成userinfo付きURLでの送信と取得の拒否理由、transport開始ログと生の値の不在"
+	// observable = "合成userinfo付きURLでの送信・取得の拒否理由、標準出力・標準エラー・同期履歴・transport開始ログに生の値なし"
 	// observation_boundary = "public-boundary"
 	// scope = "cadence Git execution boundary before HTTP transport"
 	// lifecycle = "permanent"
@@ -606,7 +608,15 @@ public sealed class GitServiceTests : IDisposable
 			Assert.False(result.IsSuccess);
 			Assert.Contains("Credential Helper", result.GetFailureReason());
 			Assert.DoesNotContain(marker, result.GetFailureReason());
+			Assert.Empty(result.StandardOutput);
+			Assert.Empty(result.StandardError);
 		});
+		using var f = new SyncCadenceTests.Fixture(commit: 1, push: 1, repository: root, git: git);
+		Assert.True(f.Sync.TryQueueRepositorySyncNow(root));
+		var history = await f.FirstHistory.Task.WaitAsync(TimeSpan.FromSeconds(15));
+		Assert.Equal(RepositorySyncHistoryStatus.Failed, history.Status);
+		Assert.Contains("Credential Helper", history.Reason);
+		Assert.DoesNotContain(marker, history.Reason);
 		Assert.DoesNotContain(logger.Lines, line => line is "push (cadence)" or "fetch (cadence)" or "pull (cadence)");
 		Assert.DoesNotContain(logger.Lines, line => line.Contains(marker, StringComparison.Ordinal));
 		Assert.Empty(errorLog.Results);
@@ -651,6 +661,133 @@ public sealed class GitServiceTests : IDisposable
 		Assert.Contains(errorLog.Results, result => !result.IsSuccess);
 		Assert.DoesNotContain(errorLog.Results, result => result.ToString().Contains(marker, StringComparison.Ordinal));
 		Assert.DoesNotContain("push", git.Commands);
+	}
+
+	// @test-value v2
+	// kind = "invariant"
+	// claim = "正値経路の確定HTTP先は、URL固有のredirect許可があっても別先へ送受信しない"
+	// oracle = { type = "contract", ref = "Session Graph game-sync-cadence-independent-review Turn 9097" }
+	// fault = "一般設定だけをfalseにし、URL固有のtrueによってGitのHTTP helperが別先へ接続する"
+	// observable = "Git公式helperから合成ループバックの確定先までは接続し、redirect先には一度も接続しない"
+	// observation_boundary = "public-boundary"
+	// scope = "pinned endpoint query, push, tracking fetch and protected incoming"
+	// lifecycle = "permanent"
+	// @end-test-value
+	[Theory]
+	[InlineData("query")]
+	[InlineData("push")]
+	[InlineData("tracking")]
+	[InlineData("fetch")]
+	[InlineData("pull")]
+	public async Task CadenceHttpCommandsRejectRedirectsEvenForAnExplicitUrlMatch(string operation)
+	{
+		using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+		await using var http = new LoopbackGitHttp();
+		SetEnvironment("NO_PROXY", "127.0.0.1");
+		var (root, _) = CreateCadenceRepositories();
+		var url = http.Url("redirect.git");
+		RunGit(root, "remote", "set-url", "origin", url);
+		RunGit(root, "config", "--local", $"http.{url}.followRedirects", "true");
+		Assert.Equal("true", RunGit(root, "config", "--get-urlmatch", "http.followRedirects", url).Trim());
+		var head = RunGit(root, "rev-parse", "HEAD").Trim();
+		const string source = "refs/heads/sample";
+		IGitService git = _service;
+
+		if (operation == "query")
+		{
+			// Positive control: an ordinary Git invocation does try the redirect target.
+			await git.RunAsync(root, ["ls-remote", "origin"], timeout.Token);
+			Assert.Contains(http.Requests, request => request.Contains("/other.git/", StringComparison.Ordinal));
+			http.Requests.Clear();
+		}
+
+		var result = operation switch
+		{
+			"query" => await git.RunCadenceEndpointAsync(root, url, source, null, timeout.Token),
+			"push" => await git.RunCadenceEndpointAsync(root, url, source, head, timeout.Token),
+			"tracking" => await git.FetchCadenceTrackingAsync(root, url, source, "refs/remotes/origin/sample", timeout.Token),
+			"fetch" => await git.RunCadenceIncomingAsync(root, null, null, null, timeout.Token),
+			_ => await git.RunCadenceIncomingAsync(root, "origin", "sample", null, timeout.Token)
+		};
+		Assert.False(result.IsSuccess);
+		Assert.NotEqual(-2, result.ExitCode);
+		Assert.Contains("/redirect.git/", Assert.Single(http.Requests));
+	}
+
+	// @test-value v2
+	// kind = "invariant"
+	// claim = "正値の取得先選択は同名タグで変わらず、唯一の非originと取得URLの先頭を通常Gitと同様に使う"
+	// oracle = { type = "contract", ref = "Session Graph game-sync-cadence-independent-review Turn 9097" }
+	// fault = "短縮枝名・固定origin・複数URL一律拒否により、Gitが使う先頭の取得先に接続できない"
+	// observable = "実Gitの保護付き取得から合成ループバックの選択パスだけに接続"
+	// observation_boundary = "public-boundary"
+	// scope = "positive-cadence incoming remote and fetch URL selection"
+	// lifecycle = "permanent"
+	// @end-test-value
+	[Theory]
+	[InlineData("same-name-tag")]
+	[InlineData("only-remote")]
+	[InlineData("first-fetch-url")]
+	public async Task CadenceFetchUsesGitsSelectedRemoteAndFirstFetchUrl(string scenario)
+	{
+		using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+		await using var http = new LoopbackGitHttp();
+		SetEnvironment("NO_PROXY", "127.0.0.1");
+		var (root, _) = CreateCadenceRepositories();
+		const string selected = "upstream";
+		if (scenario == "same-name-tag")
+		{
+			RunGit(root, "tag", "sample", "HEAD");
+			RunGit(root, "remote", "add", selected, http.Url("selected.git"));
+			// Keep origin distinct: selecting the wrong alias must be observable.
+			RunGit(root, "remote", "set-url", "origin", http.Url("other.git"));
+			RunGit(root, "config", "--local", "branch.sample.remote", selected);
+			Assert.NotEqual("sample", RunGit(root, "symbolic-ref", "--short", "HEAD").Trim());
+		}
+		else
+		{
+			RunGit(root, "remote", "rename", "origin", selected);
+			RunGit(root, "remote", "set-url", selected, http.Url("selected.git"));
+			if (scenario == "only-remote")
+				RunGit(root, "config", "--local", "--unset", "branch.sample.remote");
+			else
+				RunGit(root, "config", "--local", "--add", $"remote.{selected}.url", http.Url("other.git"));
+		}
+
+		IGitService git = _service;
+		var result = await git.RunCadenceIncomingAsync(root, null, null, null, timeout.Token);
+		Assert.False(result.IsSuccess); // The loopback endpoint only identifies the actual request path.
+		Assert.NotEqual(-2, result.ExitCode);
+		Assert.Contains("/selected.git/", Assert.Single(http.Requests));
+	}
+
+	// @test-value v2
+	// kind = "invariant"
+	// claim = "push.default=currentで上流がない場合、唯一の非originへ正値同期で現在枝を送信する"
+	// oracle = { type = "contract", ref = "Session Graph game-sync-cadence-independent-review Turn 9097" }
+	// fault = "上流がない場合にGit既定をoriginと決め打ちし、唯一の登録先へ送信できない"
+	// observable = "隔離bareの現在枝のみ更新、正値の同期履歴成功"
+	// observation_boundary = "public-boundary"
+	// scope = "positive-cadence push with Git's single-remote default"
+	// lifecycle = "permanent"
+	// @end-test-value
+	[Fact]
+	public async Task CadenceCurrentPushDefaultsToTheOnlyConfiguredRemote()
+	{
+		var (root, bare) = CreateCadenceRepositories();
+		RunGit(root, "remote", "rename", "origin", "upstream");
+		RunGit(root, "config", "--local", "--unset", "branch.sample.remote");
+		RunGit(root, "config", "--local", "--unset", "branch.sample.merge");
+		RunGit(root, "config", "--local", "push.default", "current");
+		MakeOutgoingCommit(root);
+		var head = RunGit(root, "rev-parse", "HEAD").Trim();
+		var before = Refs(bare);
+		using var f = new SyncCadenceTests.Fixture(commit: 1, push: 1, repository: root, git: _service);
+		f.Watch();
+		var history = await f.FirstHistory.Task.WaitAsync(TimeSpan.FromSeconds(15));
+		Assert.Equal(RepositorySyncHistoryStatus.Succeeded, history.Status);
+		Assert.Equal(before.Select(reference => reference.StartsWith("refs/heads/sample ", StringComparison.Ordinal)
+			? $"refs/heads/sample {head}" : reference), Refs(bare));
 	}
 
 	// @test-value v2
@@ -774,6 +911,52 @@ public sealed class GitServiceTests : IDisposable
 			if (state is IEnumerable<KeyValuePair<string, object?>> fields)
 				foreach (var values in fields.Select(field => field.Value).OfType<IReadOnlyList<string>>())
 					Lines.AddRange(values);
+		}
+	}
+
+	private sealed class LoopbackGitHttp : IAsyncDisposable
+	{
+		private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
+		private readonly CancellationTokenSource _stop = new();
+		private readonly Task _server;
+		public ConcurrentQueue<string> Requests { get; } = new();
+
+		public LoopbackGitHttp()
+		{
+			_listener.Start();
+			_server = ListenAsync();
+		}
+
+		public string Url(string path) => $"http://127.0.0.1:{((IPEndPoint)_listener.LocalEndpoint).Port}/{path}";
+
+		private async Task ListenAsync()
+		{
+			while (!_stop.IsCancellationRequested)
+			{
+				using var client = await _listener.AcceptTcpClientAsync(_stop.Token);
+				using var stream = client.GetStream();
+				using var reader = new StreamReader(stream, Encoding.ASCII, leaveOpen: true);
+				var request = await reader.ReadLineAsync(_stop.Token);
+				if (request is null) continue;
+				while (await reader.ReadLineAsync(_stop.Token) is { Length: > 0 }) { }
+				Requests.Enqueue(request);
+				var response = request.Contains("/redirect.git/", StringComparison.Ordinal)
+					? $"HTTP/1.1 302 Found\r\nLocation: {Url("other.git/info/refs?service=git-upload-pack")}\r\n"
+					: "HTTP/1.1 404 Not Found\r\n";
+				await stream.WriteAsync(Encoding.ASCII.GetBytes(response + "Content-Length: 0\r\nConnection: close\r\n\r\n"), _stop.Token);
+			}
+		}
+
+		public async ValueTask DisposeAsync()
+		{
+			await _stop.CancelAsync();
+			try { await _server; }
+			catch (OperationCanceledException) when (_stop.IsCancellationRequested) { }
+			finally
+			{
+				_listener.Stop();
+				_stop.Dispose();
+			}
 		}
 	}
 

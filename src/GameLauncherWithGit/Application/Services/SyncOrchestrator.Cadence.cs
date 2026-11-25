@@ -327,7 +327,12 @@ public sealed partial class SyncOrchestrator
 			identity = identity with { Remote = name };
 			break;
 		}
-		var remote = identity.Remote ?? "origin";
+		var remote = identity.Remote;
+		if (remote is null)
+		{
+			var remotes = await ReadRequiredGitAsync(repositoryId, ["remote"], startedAt, token);
+			remote = GitService.DefaultCadenceRemote(remotes.StandardOutput);
+		}
 		identity = identity with { Remote = remote };
 		var urls = await _gitService.ReadCadencePushUrlsAsync(repositoryId, remote, token);
 		token.ThrowIfCancellationRequested();
