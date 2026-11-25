@@ -5,7 +5,7 @@
 <main id="play-recording-content">
     <PlayRecordingMount @rendermode="new InteractiveServerRenderMode(prerender: false)" />
 </main>
-<div id="play-web-reconnect-status" role="status" aria-atomic="true"></div>
+<div id="play-web-reconnect-status" class="play-web-sr-only" role="status" aria-atomic="true"></div>
 <link rel="stylesheet" href="/assets/capture-tags.css" />
 <link rel="stylesheet" href="/assets/scenario-flow.css" />
 @if (View.HasPanelStyle)
@@ -14,11 +14,14 @@
 }
 <section id="components-reconnect-modal" class="play-web-entry components-reconnect-hide" aria-labelledby="play-web-reconnect-title">
     <h1 id="play-web-reconnect-title">プレイ中の記録</h1>
-    <div aria-hidden="true">
-        <p class="play-web-reconnecting">再接続中…</p>
-        <p class="play-web-reconnect-error play-web-error">接続できませんでした。</p>
+    <div class="play-web-actions">
+        <a class="play-web-action" href="/" data-enhance-nav="false">もう一度接続</a>
+        <p class="play-web-reconnecting" aria-hidden="true">再接続中…</p>
+        <details class="play-web-error-details play-web-reconnect-error" data-status-message="接続できませんでした。">
+            <summary class="play-web-action">再接続失敗</summary>
+            <p class="play-web-error-body">「もう一度接続」でページを開き直してください。</p>
+        </details>
     </div>
-    <a class="play-web-action" href="/" data-enhance-nav="false">もう一度接続</a>
 </section>
 <script src="/_framework/blazor.web.js" autostart="false"></script>
 <script src="/assets/play-recording.js"></script>
