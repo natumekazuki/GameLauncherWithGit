@@ -135,10 +135,11 @@ public sealed class LauncherService : ILauncherService
 			failedSteps.Add("シナリオ記録の開始");
 		}
 
-		var message = failedSteps.Count == 0
-			? launchResult.Message
-			: $"{launchResult.Message}{string.Join("・", failedSteps)}に失敗しました。ログを確認してください。";
-		return new LaunchResult(true, message, showCapture);
+		var hasWarnings = failedSteps.Count > 0;
+		var message = hasWarnings
+			? $"{launchResult.Message}{string.Join("・", failedSteps)}に失敗しました。ログを確認してください。"
+			: launchResult.Message;
+		return new LaunchResult(true, message, showCapture) { HasWarnings = hasWarnings };
 	}
 
 	private async Task<LaunchResult> SetErrorStatusAndReturnAsync(string gameId, LaunchResult failureResult)
