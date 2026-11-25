@@ -23,10 +23,10 @@ public sealed class LauncherServiceTests : IAsyncDisposable
 
     // @test-value v2
     // kind = "invariant"
-    // claim = "ゲーム起動後の履歴保存や記録開始の失敗は、起動済みという事実や他の後処理を取り消さない"
-    // oracle = { type = "contract", ref = "Session Graph app-wide-core-review-required-fixes and app-wide-launch-result-boundary; src/GameLauncherWithGit/Application/Abstractions/ILauncherService.cs: LaunchAsync" }
-    // fault = "起動後の例外を起動失敗として返す、履歴失敗で記録開始を飛ばす、または正常な記録無効を失敗とする"
-    // observable = "起動結果の成功・警告・ShowCapture、履歴書込の試行回数、実記録サービスの選択待ちと既存boolの結果"
+    // claim = "起動後の履歴・記録の失敗は起動済みと他の後処理を保ち、表示側が通常成功と警告付き成功を文言に頼らず区別できる"
+    // oracle = { type = "contract", ref = "Session Graph ui-card-error-launch-warning-boundary（通常成功を省いても起動後警告を表示する）; app-wide-core-review-required-fixes; app-wide-launch-result-boundary" }
+    // fault = "後処理の例外を起動失敗にする、履歴失敗で記録開始を飛ばす、警告を型で返さない、または正常な記録無効にも警告を付ける"
+    // observable = "起動結果のIsSuccess・HasWarnings・Message・ShowCapture、履歴書込の試行回数、実記録サービスの選択待ちと既存boolの結果"
     // observation_boundary = "public-boundary"
     // scope = "game launch result after reported OS startup"
     // lifecycle = "permanent"
@@ -57,6 +57,7 @@ public sealed class LauncherServiceTests : IAsyncDisposable
         var result = await launcher.LaunchAsync("fixture");
 
         Assert.True(result.IsSuccess);
+        Assert.Equal(warning is not null, result.HasWarnings);
         Assert.Equal(showCapture, result.ShowCapture);
         Assert.Equal(showCapture, capture.Snapshot.NeedsProcess);
         Assert.Equal(1, deps.MarkLaunchedCalls);
