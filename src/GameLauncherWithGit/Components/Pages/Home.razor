@@ -1,5 +1,6 @@
 @page "/"
 @implements IDisposable
+@using System.Runtime.CompilerServices
 @inject IGameLibraryService GameLibraryService
 @inject ILauncherService LauncherService
 @inject IPathPickerService PathPickerService
@@ -257,7 +258,8 @@ else
                 }
             </div>
             <div class="editor-actions dialog-footer">
-                <button type="button" class="secondary-button" @onclick="() => OpenEditEditorAsync(selected)">編集</button>
+                <button type="button" class="secondary-button" @onclick="() => OpenEditEditorAsync(selected)"
+                        disabled="@(!HasLoadedSaveLinks(selected.Id))">編集</button>
                 <button type="button" class="secondary-button" @onclick="() => TogglePinnedAsync(selected)"
                         aria-pressed="@(selected.IsPinned ? "true" : "false")" disabled="@IsPinToggleBusy(selected)">@(selected.IsPinned ? "ピン留め解除" : "ピン留め")</button>
                 <button type="button" class="secondary-button" data-dialog-dismiss @onclick="CloseGameDetails">閉じる</button>
@@ -943,7 +945,8 @@ else
 
             </div>
             <div class="editor-actions dialog-footer">
-                <button type="button" class="launch-button" @onclick="SaveEditorAsync" disabled="@IsEditorOperationBusy">
+                <button type="button" class="launch-button" @onclick="SaveEditorAsync"
+                        disabled="@(IsEditorOperationBusy || (_editingGameId is { } id && !HasLoadedSaveLinks(id)))">
                     保存
                 </button>
                 <button type="button" class="secondary-button" @onclick="RequestCloseEditor" disabled="@IsEditorOperationBusy" data-dialog-dismiss>キャンセル</button>
@@ -966,7 +969,7 @@ else
 
     private IReadOnlyList<GameCardItem>? _games;
     private NotificationHistoryEntry? _notification;
-    private string? _notificationLaunchGameId;
+    private (string Operation, string? Target)? _notificationFailure;
     private string? _operationAnnouncement;
     private UserOperation? _announcedOperation;
     private ResultDetails? _openResult;
@@ -1002,6 +1005,7 @@ else
     private string _editorSnapshot = string.Empty;
     private CapturePreference? _capturePreference;
     private bool _isBranchLoading;
+    private int _editorBranchLoadVersion;
     private bool _isBranchSwitching;
     private bool _isBranchCreating;
     private bool _isHelpOpen;
@@ -1044,6 +1048,7 @@ else
     private readonly Dictionary<string, ThumbnailSource> _thumbnailCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, IReadOnlyList<GameSaveLinkItem>> _saveLinksByGame = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _saveLinkLoadFailedGameIds = new(StringComparer.OrdinalIgnoreCase);
+    private int _saveLinkLoadVersion;
     private readonly Dictionary<string, GitRepositoryVisualState> _gitVisualStateByRepository = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<NotificationHistoryEntry> _notificationHistoryEntries = [];
     private bool _showSuccessNotifications = true;
@@ -1288,6 +1293,7 @@ else
             _autoStartEnabled = await AutoStartService.IsEnabledAsync();
             ApplyAppSettings(AppSettingsService.Get());
             _settingsSnapshot = GetSettingsDraft();
+            ClearRecoveredNotification(nameof(LoadSettingsAsync));
             await LoadLogEntriesCoreAsync();
         }
         catch (Exception ex)
@@ -1464,6 +1470,7 @@ else
         {
             var requested = AppSettingsService.Get().Normalize() with { GameCardSizePercent = next };
             await AppSettingsService.SaveAsync(requested);
+            ClearRecoveredNotification(nameof(AdjustGameCardSizeAsync));
         }
         catch (Exception ex)
         {
@@ -1544,7 +1551,6 @@ else
         }
 
         _isLogLoading = true;
-        var previousError = _logViewerError;
         _logViewerError = null;
 
         try
@@ -1554,10 +1560,7 @@ else
                 _logViewerLimit,
                 severity,
                 _logViewerKeyword);
-            if (previousError is not null && _notification?.Message == previousError)
-            {
-                DismissNotification();
-            }
+            ClearRecoveredNotification(nameof(LoadLogEntriesCoreAsync));
         }
         catch (Exception ex)
         {
@@ -1705,13 +1708,7 @@ else
     private async Task OpenEditEditorAsync(GameCardItem game)
     {
         if (_isEditorOpen) return;
-        if (_saveLinkLoadFailedGameIds.Contains(game.Id))
-        {
-            SetNotification(
-                $"「{game.Title}」のセーブリンクを読み込めません。ゲーム一覧を再読込してから編集してください。",
-                false, summary: "リンク読込エラー");
-            return;
-        }
+        if (!_saveLinksByGame.TryGetValue(game.Id, out var saveLinks)) return;
 
         DismissNotification();
         _isEditMode = true;
@@ -1722,19 +1719,16 @@ else
         _editorRepositoryPath = game.RelatedRepositoryPath;
         ResetEditorBranchState(clearNewBranchName: true);
         _editorSaveLinks.Clear();
-        if (_saveLinksByGame.TryGetValue(game.Id, out var saveLinks))
-        {
-            _editorSaveLinks.AddRange(
-                saveLinks
-                    .OrderBy(static item => item.OrderNo)
-                    .Select(static item => new EditorSaveLinkEntry
-                    {
-                        Id = item.Id,
-                        LocalPath = item.LocalPath,
-                        TargetPath = item.TargetPath,
-                        EnsureOnLaunch = item.EnsureOnLaunch
-                    }));
-        }
+        _editorSaveLinks.AddRange(
+            saveLinks
+                .OrderBy(static item => item.OrderNo)
+                .Select(static item => new EditorSaveLinkEntry
+                {
+                    Id = item.Id,
+                    LocalPath = item.LocalPath,
+                    TargetPath = item.TargetPath,
+                    EnsureOnLaunch = item.EnsureOnLaunch
+                }));
         _editorThumbnailSourcePath = null;
         _editorHasThumbnail = HasThumbnail(game);
         _editorClearThumbnail = false;
@@ -1769,7 +1763,7 @@ else
                     var deleted = await GameLibraryService.DeleteAsync(targetGameId);
                     if (!deleted)
                     {
-                        SetNotification("削除対象のゲームが見つかりません。", false, summary: "登録削除エラー");
+                        SetNotification("削除対象のゲームが見つかりません。", false, summary: "登録削除エラー", targetId: targetGameId);
                         return;
                     }
                     registrationDeleted = true;
@@ -1798,13 +1792,15 @@ else
                         : AppendError("一覧の再読込に失敗しました。", removalError);
                     SetNotification(reloadError is null
                         ? $"ゲーム登録を削除しました: {targetTitle}"
-                        : $"「{targetTitle}」の登録は削除しました。{reloadError}", reloadError is null, summary: reloadError is null ? "登録削除" : "削除済み・更新エラー");
+                        : $"「{targetTitle}」の登録は削除しました。{reloadError}", reloadError is null,
+                        summary: reloadError is null ? "登録削除" : "削除済み・更新エラー", targetId: targetGameId);
                 }
                 catch (Exception ex)
                 {
                     SetNotification(registrationDeleted
                         ? $"「{targetTitle}」の登録は削除しました。削除後の更新に失敗しました: {ex.Message}"
-                        : $"ゲーム削除に失敗しました: {ex.Message}", false, summary: registrationDeleted ? "削除済み・更新エラー" : "登録削除エラー");
+                        : $"ゲーム削除に失敗しました: {ex.Message}", false,
+                        summary: registrationDeleted ? "削除済み・更新エラー" : "登録削除エラー", targetId: targetGameId);
                 }
                 finally
                 {
@@ -1858,6 +1854,7 @@ else
         }
 
         _isEditorOpen = false;
+        ResetEditorBranchState(clearNewBranchName: true);
     }
 
     private enum DraftKind { Game, Settings }
@@ -1869,10 +1866,11 @@ else
     {
         if (!_isEditorOpen || IsEditorOperationBusy || _isDeleteConfirmOpen || _discardChanges is not null) return;
         var shouldCloseEditor = false;
+        var draftTargetId = _editingGameId;
 
         if (string.IsNullOrWhiteSpace(_editorTitle))
         {
-            SetNotification("タイトルは必須です。", false, summary: "タイトル未入力");
+            SetNotification("タイトルは必須です。", false, summary: "タイトル未入力", targetId: draftTargetId);
             return;
         }
 
@@ -1896,22 +1894,22 @@ else
                     {
                         if (string.IsNullOrWhiteSpace(_editingGameId))
                         {
-                            SetNotification("編集対象が不正です。", false, summary: _isEditMode ? "編集保存エラー" : "登録エラー");
+                            SetNotification("編集対象が不正です。", false, summary: "編集保存エラー", targetId: draftTargetId);
                             return;
                         }
 
-                        if (_saveLinkLoadFailedGameIds.Contains(_editingGameId))
+                        if (!HasLoadedSaveLinks(_editingGameId))
                         {
                             SetNotification(
                                 "セーブリンクを読み込めないため保存できません。ゲーム一覧を再読込してから編集してください。",
-                                false, summary: "リンク読込エラー");
+                                false, summary: "リンク読込エラー", targetId: draftTargetId);
                             return;
                         }
 
                         var updated = await GameLibraryService.UpdateWithSaveLinksAsync(_editingGameId, input, saveLinkInputs);
                         if (updated is null)
                         {
-                            SetNotification("編集対象のゲームが見つかりません。", false, summary: _isEditMode ? "編集保存エラー" : "登録エラー");
+                            SetNotification("編集対象のゲームが見つかりません。", false, summary: "編集保存エラー", targetId: draftTargetId);
                             return;
                         }
 
@@ -1950,19 +1948,24 @@ else
                     if (await ReloadGamesAsync())
                     {
                         RefreshRepositoryWatchers();
-                        SetNotification($"{(_isEditMode ? "ゲーム設定を更新しました" : "ゲームを登録しました")}: {savedTitle}", true, summary: _isEditMode ? "編集保存" : "ゲーム登録");
+                        SetNotification($"{(_isEditMode ? "ゲーム設定を更新しました" : "ゲームを登録しました")}: {savedTitle}", true,
+                            summary: _isEditMode ? "編集保存" : "ゲーム登録", targetId: draftTargetId);
                     }
                     else
                     {
                         _focusLibraryHeading = true;
-                        SetNotification($"「{savedTitle}」は保存しました。一覧の再読込に失敗しました。", false, summary: "保存済み・一覧エラー");
+                        SetNotification($"「{savedTitle}」は保存しました。一覧の再読込に失敗しました。", false,
+                            summary: "保存済み・一覧エラー", operation: nameof(RetryLibraryAsync));
                     }
                 }
                 catch (Exception ex)
                 {
                     SetNotification(savedTitle is null
                         ? $"保存に失敗しました: {ex.Message}"
-                        : $"「{savedTitle}」は保存しました。監視の更新に失敗しました: {ex.Message}", false, summary: savedTitle is null ? (_isEditMode ? "編集保存エラー" : "登録エラー") : "保存済み・監視エラー");
+                        : $"「{savedTitle}」は保存しました。監視の更新に失敗しました: {ex.Message}", false,
+                        summary: savedTitle is null ? (_isEditMode ? "編集保存エラー" : "登録エラー") : "保存済み・監視エラー",
+                        targetId: savedTitle is null ? draftTargetId : null,
+                        operation: savedTitle is null ? nameof(SaveEditorAsync) : nameof(RetryLibraryAsync));
                 }
                 finally
                 {
@@ -2064,6 +2067,7 @@ else
                     if (!string.IsNullOrWhiteSpace(selectedPath))
                     {
                         _editorRepositoryPath = selectedPath;
+                        ResetEditorBranchState(clearNewBranchName: true);
                         await LoadEditorBranchesAsync(showNotificationOnFailure: true, preserveSelection: false);
                         return;
                     }
@@ -2095,7 +2099,8 @@ else
                 {
                     if (!await RefreshGitStatusesAsync())
                     {
-                        SetNotification("リモート更新後、一部の Git ステータス取得に失敗しました。ログを確認してください。", false, summary: "Git状態エラー");
+                        SetNotification("リモート更新後、一部の Git ステータス取得に失敗しました。ログを確認してください。",
+                            false, summary: "Git状態エラー", operation: nameof(RefreshGitStatusesManuallyAsync));
                     }
                 }
             });
@@ -2283,18 +2288,24 @@ else
         }
 
         _isBranchLoading = true;
+        var loadVersion = ++_editorBranchLoadVersion;
+        bool IsCurrentLoad() => loadVersion == _editorBranchLoadVersion;
+        var operation = fetchRemote ? nameof(ReloadEditorBranchesAsync) : nameof(LoadEditorBranchesAsync);
+        void ReportFailure(string message)
+        {
+            if (showNotificationOnFailure)
+            {
+                SetNotification(message, false, summary: "ブランチ読込エラー", targetId: repositoryPath, operation: operation);
+            }
+        }
+
         try
         {
             var gitCheck = await GitService.RunAsync(repositoryPath, ["rev-parse", "--is-inside-work-tree"]);
+            if (!IsCurrentLoad()) return false;
             if (!gitCheck.IsSuccess)
             {
-                if (showNotificationOnFailure)
-                {
-                    SetNotification(
-                        $"ブランチ一覧取得に失敗しました: {BuildGitFailureReason(gitCheck)}",
-                        false, summary: "ブランチ読込エラー");
-                }
-
+                ReportFailure($"ブランチ一覧取得に失敗しました: {BuildGitFailureReason(gitCheck)}");
                 ResetEditorBranchState(clearNewBranchName: false);
                 return false;
             }
@@ -2303,25 +2314,19 @@ else
             if (fetchRemote)
             {
                 var fetchResult = await GitService.RunAsync(repositoryPath, ["fetch", "--all", "--prune"]);
+                if (!IsCurrentLoad()) return false;
                 remoteUpdateSucceeded = fetchResult.IsSuccess;
-                if (!remoteUpdateSucceeded && showNotificationOnFailure)
+                if (!remoteUpdateSucceeded)
                 {
-                    SetNotification(
-                        $"リモートブランチの更新に失敗しました。以前の情報を表示します: {BuildGitFailureReason(fetchResult)}",
-                        false, summary: "ブランチ読込エラー");
+                    ReportFailure($"リモートブランチの更新に失敗しました。以前の情報を表示します: {BuildGitFailureReason(fetchResult)}");
                 }
             }
 
             var currentBranchResult = await GitService.RunAsync(repositoryPath, ["branch", "--show-current"]);
+            if (!IsCurrentLoad()) return false;
             if (!currentBranchResult.IsSuccess)
             {
-                if (showNotificationOnFailure)
-                {
-                    SetNotification(
-                        $"現在ブランチ取得に失敗しました: {BuildGitFailureReason(currentBranchResult)}",
-                        false, summary: "ブランチ読込エラー");
-                }
-
+                ReportFailure($"現在ブランチ取得に失敗しました: {BuildGitFailureReason(currentBranchResult)}");
                 ResetEditorBranchState(clearNewBranchName: false);
                 return false;
             }
@@ -2329,15 +2334,10 @@ else
             var localBranchesResult = await GitService.RunAsync(
                 repositoryPath,
                 ["for-each-ref", "--format=%(refname:short)", "refs/heads"]);
+            if (!IsCurrentLoad()) return false;
             if (!localBranchesResult.IsSuccess)
             {
-                if (showNotificationOnFailure)
-                {
-                    SetNotification(
-                        $"ブランチ一覧取得に失敗しました: {BuildGitFailureReason(localBranchesResult)}",
-                        false, summary: "ブランチ読込エラー");
-                }
-
+                ReportFailure($"ブランチ一覧取得に失敗しました: {BuildGitFailureReason(localBranchesResult)}");
                 ResetEditorBranchState(clearNewBranchName: false);
                 return false;
             }
@@ -2345,29 +2345,19 @@ else
             var remoteBranchesResult = await GitService.RunAsync(
                 repositoryPath,
                 ["for-each-ref", "--format=%(refname:short)", "refs/remotes"]);
+            if (!IsCurrentLoad()) return false;
             if (!remoteBranchesResult.IsSuccess)
             {
-                if (showNotificationOnFailure)
-                {
-                    SetNotification(
-                        $"リモートブランチ一覧取得に失敗しました: {BuildGitFailureReason(remoteBranchesResult)}",
-                        false, summary: "ブランチ読込エラー");
-                }
-
+                ReportFailure($"リモートブランチ一覧取得に失敗しました: {BuildGitFailureReason(remoteBranchesResult)}");
                 ResetEditorBranchState(clearNewBranchName: false);
                 return false;
             }
 
             var remoteNamesResult = await GitService.RunAsync(repositoryPath, ["remote"]);
+            if (!IsCurrentLoad()) return false;
             if (!remoteNamesResult.IsSuccess)
             {
-                if (showNotificationOnFailure)
-                {
-                    SetNotification(
-                        $"リモート名一覧取得に失敗しました: {BuildGitFailureReason(remoteNamesResult)}",
-                        false, summary: "ブランチ読込エラー");
-                }
-
+                ReportFailure($"リモート名一覧取得に失敗しました: {BuildGitFailureReason(remoteNamesResult)}");
                 ResetEditorBranchState(clearNewBranchName: false);
                 return false;
             }
@@ -2473,21 +2463,27 @@ else
                 _editorSelectedBranch = _editorBranches.FirstOrDefault();
             }
 
+            if (remoteUpdateSucceeded)
+            {
+                ClearRecoveredNotification(operation, repositoryPath);
+                if (fetchRemote)
+                {
+                    ClearRecoveredNotification(nameof(LoadEditorBranchesAsync), repositoryPath);
+                }
+            }
+
             return remoteUpdateSucceeded;
         }
         catch (Exception ex)
         {
-            if (showNotificationOnFailure)
-            {
-                SetNotification($"ブランチ一覧取得に失敗しました: {ex.Message}", false, summary: "ブランチ読込エラー");
-            }
-
+            if (!IsCurrentLoad()) return false;
+            ReportFailure($"ブランチ一覧取得に失敗しました: {ex.Message}");
             ResetEditorBranchState(clearNewBranchName: false);
             return false;
         }
         finally
         {
-            _isBranchLoading = false;
+            if (IsCurrentLoad()) _isBranchLoading = false;
         }
     }
 
@@ -2574,6 +2570,7 @@ else
 
     private void ResetEditorBranchState(bool clearNewBranchName)
     {
+        ++_editorBranchLoadVersion;
         _isBranchLoading = false;
         _isBranchSwitching = false;
         _isBranchCreating = false;
@@ -2883,15 +2880,9 @@ else
 
     private async Task RefreshSaveLinksAsync()
     {
-        _saveLinkLoadFailedGameIds.Clear();
-
-        if (_games is null || _games.Count == 0)
-        {
-            _saveLinksByGame.Clear();
-            return;
-        }
-
-        var activeGameIds = _games
+        var loadVersion = ++_saveLinkLoadVersion;
+        var games = _games ?? [];
+        var activeGameIds = games
             .Select(static game => game.Id)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var staleGameIds = _saveLinksByGame.Keys
@@ -2901,20 +2892,28 @@ else
         {
             _saveLinksByGame.Remove(staleGameId);
         }
+        _saveLinkLoadFailedGameIds.RemoveWhere(gameId => !activeGameIds.Contains(gameId));
 
-        foreach (var game in _games)
+        foreach (var game in games)
         {
+            // Only a completed read (including zero links) can seed an editor draft.
+            _saveLinksByGame.Remove(game.Id);
             try
             {
                 var saveLinks = await SaveLinkService.GetByGameIdAsync(game.Id);
+                if (loadVersion != _saveLinkLoadVersion) return;
                 _saveLinksByGame[game.Id] = saveLinks;
+                _saveLinkLoadFailedGameIds.Remove(game.Id);
             }
             catch
             {
+                if (loadVersion != _saveLinkLoadVersion) return;
                 _saveLinkLoadFailedGameIds.Add(game.Id);
             }
         }
     }
+
+    private bool HasLoadedSaveLinks(string gameId) => _saveLinksByGame.ContainsKey(gameId);
 
     private string GetSaveLinkSummary(GameCardItem game)
     {
@@ -2923,7 +2922,12 @@ else
             return "取得失敗";
         }
 
-        if (!_saveLinksByGame.TryGetValue(game.Id, out var saveLinks) || saveLinks.Count == 0)
+        if (!_saveLinksByGame.TryGetValue(game.Id, out var saveLinks))
+        {
+            return "取得中…";
+        }
+
+        if (saveLinks.Count == 0)
         {
             return "未設定";
         }
@@ -3057,11 +3061,11 @@ else
                         !loaded ? $"「{game.Title}」のピン留め設定は保存しました。一覧の再読込に失敗しました。" : nextPinned
                             ? $"ピン留めしました: {game.Title}"
                             : $"ピン留めを解除しました: {game.Title}",
-                        loaded, summary: "ピン留め更新");
+                        loaded, summary: "ピン留め更新", targetId: game.Id);
                 }
                 catch (Exception ex)
                 {
-                    SetNotification($"ピン留め更新に失敗しました: {ex.Message}", false, summary: "ピン留め更新");
+                    SetNotification($"ピン留め更新に失敗しました: {ex.Message}", false, summary: "ピン留め更新", targetId: game.Id);
                 }
                 finally
                 {
@@ -3468,11 +3472,11 @@ else
                 try
                 {
                     await SyncOrchestrator.ResumeRepositorySyncAsync(repositoryKey);
-                    SetNotification($"同期再開を受け付けました: {game.Title}", null, summary: "同期再開受付");
+                    SetNotification($"同期再開を受け付けました: {game.Title}", null, summary: "同期再開受付", targetId: repositoryKey);
                 }
                 catch (Exception ex)
                 {
-                    SetNotification($"同期再開に失敗しました: {ex.Message}", false, summary: "同期再開エラー");
+                    SetNotification($"同期再開に失敗しました: {ex.Message}", false, summary: "同期再開エラー", targetId: repositoryKey);
                 }
                 finally
                 {
@@ -3578,14 +3582,15 @@ else
     }
 
     private void SetNotification(string message, bool? isSuccess, bool addToHistory = true, string? summary = null,
-        string? launchGameId = null)
+        string? launchGameId = null, string? targetId = null, [CallerMemberName] string operation = "")
     {
         var entry = new NotificationHistoryEntry(DateTimeOffset.Now, isSuccess,
             summary ?? (isSuccess == false ? "操作エラー" : "操作結果"), message.Trim());
-        if (isSuccess == false || _notificationLaunchGameId is null || _notificationLaunchGameId == launchGameId)
+        var resultKey = (operation, launchGameId ?? targetId);
+        if (isSuccess == false || _notificationFailure is null || _notificationFailure == resultKey)
         {
             _notification = isSuccess == true ? null : entry;
-            _notificationLaunchGameId = isSuccess == false ? launchGameId : null;
+            _notificationFailure = isSuccess == false ? resultKey : null;
         }
         _announcedOperation = null;
         _operationAnnouncement = isSuccess == true ? null : entry.Summary;
@@ -3607,7 +3612,20 @@ else
 
     private void DismissNotification()
     {
-        if (_notificationLaunchGameId is null) _notification = null;
+        if (_notificationFailure is null) _notification = null;
+    }
+
+    private void ClearRecoveredNotification(string operation, string? targetId = null)
+    {
+        if (_notificationFailure == (operation, targetId))
+        {
+            if (_operationAnnouncement == _notification?.Summary)
+            {
+                _operationAnnouncement = _announcedOperation?.Message;
+            }
+            _notification = null;
+            _notificationFailure = null;
+        }
     }
 
     private void OpenResultDetails(string summary, string? detail)
