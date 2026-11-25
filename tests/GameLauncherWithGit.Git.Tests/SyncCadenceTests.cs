@@ -565,6 +565,45 @@ public sealed class SyncCadenceTests
 
     // @test-value v2
     // kind = "invariant"
+    // claim = "枝と宛先refが同じならremote名の変更で期限・再試行を保ち、実URLの変更で新しい期限になる"
+    // oracle = { type = "contract", ref = "Session Graph game-sync-cadence-independent-review CAD-CORE-03" }
+    // fault = "remote名の別名で再試行を初期化する、または同じremote名の別実URLで旧期限を流用する"
+    // observable = "仮想時計の旧backoff満了/新期限での送信回数と実URL、成功履歴"
+    // observation_boundary = "public-boundary"
+    // scope = "old endpoint retry versus a newly selected endpoint"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RemoteAliasKeepsTheRetryButNewUrlStartsANewDeadline(bool changeUrl)
+    {
+        using var f = new Fixture(commit: 0, push: 1, retry: 30) { Ahead = true, PushReportsBranch = false };
+        f.Watch();
+        f.Advance(seconds: 60);
+        Assert.Equal(RepositorySyncHistoryStatus.Failed, Assert.Single(f.History).Status);
+        f.Advance(seconds: 1);
+        if (changeUrl) f.PushUrl = "new-fixture-remote";
+        else f.PushRemote = "origin-alias";
+        f.PushReportsBranch = true;
+        f.Change();
+
+        f.Advance(seconds: 28); // t=89, first retry is due at t=90.
+        Assert.Equal(1, f.Pushes);
+        f.Advance(seconds: 1);
+        Assert.Equal(changeUrl ? 1 : 2, f.Pushes);
+        if (changeUrl)
+        {
+            f.Advance(seconds: 40); // The new URL was first seen at t=71.
+            Assert.Equal(1, f.Pushes);
+            f.Advance(seconds: 1);
+        }
+        Assert.Equal(new[] { "fixture-remote", f.PushUrl }, f.PushEndpoints);
+        Assert.Equal(RepositorySyncHistoryStatus.Succeeded, f.History.Last().Status);
+    }
+
+    // @test-value v2
+    // kind = "invariant"
     // claim = "旧枝の期限を過ぎても非選択中は送信せず、戻ったときはGitに残る未送信を再検出する"
     // oracle = { type = "contract", ref = "Session Graph game-sync-cadence-independent-review CAD-CORE-03" }
     // fault = "非選択の枝を送信する、または再選択時に古いコミットを検出せず期限を初めから待つ"
@@ -670,11 +709,14 @@ public sealed class SyncCadenceTests
         private static readonly string RemoteTip = new('a', 40);
         public string Branch { get; set; } = "sample";
         public string Destination { get; set; } = "sample";
+        public string PushRemote { get; set; } = "origin";
+        public string PushUrl { get; set; } = "fixture-remote";
         private readonly RepositoryStateStore _states = new();
         public string Repository { get; }
         public ManualClock Clock { get; } = new();
         public SyncOrchestrator Sync { get; }
         public List<string> Commands { get; } = [];
+        public List<string> PushEndpoints { get; } = [];
         public List<RepositorySyncHistoryItem> History { get; } = [];
         public List<string> Notifications { get; } = [];
         public IReadOnlyList<GameCardItem> Games { get; set; }
@@ -756,7 +798,10 @@ public sealed class SyncCadenceTests
                 var c when c == $"rev-parse --verify --quiet refs/heads/{Branch}" => new(0, Head, ""),
                 "symbolic-ref --quiet HEAD" => new(0, $"refs/heads/{Branch}\n", ""),
                 var c when c == $"config --null --get-all branch.{Branch}.remote" => new(0, "origin\0", ""),
-                "config --null --get-all remote.origin.push" => new(0, $"refs/heads/{Branch}:refs/heads/{Destination}\0", ""),
+                var c when c == $"config --null --get-all branch.{Branch}.pushRemote" && PushRemote != "origin" =>
+                    new(0, PushRemote + "\0", ""),
+                var c when c == $"config --null --get-all remote.{PushRemote}.push" =>
+                    new(0, $"refs/heads/{Branch}:refs/heads/{Destination}\0", ""),
                 var c when c.StartsWith("config --null ", StringComparison.Ordinal) => new(1, "", ""),
                 var c when c == $"check-ref-format refs/heads/{Destination}" => new(0, "", ""),
                 var c when c.StartsWith("rev-parse --verify --quiet ", StringComparison.Ordinal) && c.EndsWith("^{commit}", StringComparison.Ordinal)
@@ -782,15 +827,15 @@ public sealed class SyncCadenceTests
         Task<GitCommandResult> IGitService.ReadCadencePushUrlsAsync(string repositoryPath, string remote, CancellationToken token)
         {
             Assert.Equal(Repository, repositoryPath);
-            Assert.Equal("origin", remote);
-            return Task.FromResult(new GitCommandResult(0, "fixture-remote\n", ""));
+            Assert.Equal(PushRemote, remote);
+            return Task.FromResult(new GitCommandResult(0, PushUrl + "\n", ""));
         }
 
         Task<GitCommandResult> IGitService.RunCadenceEndpointAsync(string repositoryPath, string resolvedUrl,
             string destinationRef, string? commit, CancellationToken token)
         {
             Assert.Equal(Repository, repositoryPath);
-            Assert.Equal("fixture-remote", resolvedUrl);
+            Assert.Equal(PushUrl, resolvedUrl);
             Assert.Equal($"refs/heads/{Destination}", destinationRef);
             if (commit is null)
             {
@@ -800,6 +845,7 @@ public sealed class SyncCadenceTests
             }
             Assert.Equal(Head, commit);
             Commands.Add($"push {commit}:{destinationRef}");
+            PushEndpoints.Add(resolvedUrl);
             Push();
             return Task.FromResult(PushReportsBranch
                 ? new GitCommandResult(0, "", "") : new GitCommandResult(1, "", "", "Unconfirmed"));

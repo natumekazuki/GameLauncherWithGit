@@ -66,7 +66,7 @@ public sealed partial class SyncOrchestrator
 	// Only the current repository runner changes the work; the scheduler reads it after the runner finishes.
 	private sealed class CadenceWork
 	{
-		private readonly Dictionary<PushIdentity, PushWork> _selections = [];
+		private readonly Dictionary<PushTargetKey, PushWork> _selections = [];
 		public DateTimeOffset? CommitSince { get; set; }
 		public PushWork? SelectedPush { get; private set; }
 		public bool HasPending => CommitSince is not null || SelectedPush?.Since is not null;
@@ -74,12 +74,13 @@ public sealed partial class SyncOrchestrator
 		public PushWork? Select(PushIdentity? identity)
 		{
 			if (identity is null) return SelectedPush = null;
-			if (!_selections.TryGetValue(identity, out var push))
+			var key = new PushTargetKey(identity.SourceRef, identity.PushUrl, identity.DestinationRef, identity.BlockedReason);
+			if (!_selections.TryGetValue(key, out var push))
 			{
 				// Only the first selection can reconstruct a pre-startup interval. A different
 				// selection starts when observed; returning to a known one uses its existing deadline.
 				push = new PushWork { RestoreCommitAge = _selections.Count == 0 };
-				_selections.Add(identity, push);
+				_selections.Add(key, push);
 			}
 			return SelectedPush = push;
 		}
@@ -216,6 +217,8 @@ public sealed partial class SyncOrchestrator
 
 	private sealed record PushIdentity(string SourceRef, string? Remote = null, string? DestinationRef = null,
 		string? PushUrl = null, string? BlockedReason = null);
+	// Names select the current configuration, but an alias for the same endpoint owns the same deadline.
+	private sealed record PushTargetKey(string SourceRef, string? PushUrl, string? DestinationRef, string? BlockedReason);
 	private sealed record OutgoingCommits(PushIdentity? Identity, string? Head, bool NeedsConfirmation,
 		DateTimeOffset? Oldest = null);
 
