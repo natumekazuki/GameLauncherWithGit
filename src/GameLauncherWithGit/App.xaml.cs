@@ -17,7 +17,7 @@ public partial class App : Microsoft.Maui.Controls.Application
 #if WINDOWS
 	private readonly GameLauncherWithGit.Infrastructure.Mcp.ScenarioMcpHost _mcp;
 	private readonly Task _mcpStartup;
-	private readonly GameLauncherWithGit.Infrastructure.PlayRecordingWeb.PlayRecordingWebHost _playRecordingWeb;
+	private readonly Task<GameLauncherWithGit.Infrastructure.PlayRecordingWeb.PlayRecordingWebHost?> _playRecordingWebStartup;
 #endif
 
 	public App(IAppSettingsService appSettings, GameLauncherWithGit.Application.Services.ScenarioScreenshotService screenshots,
@@ -28,7 +28,7 @@ public partial class App : Microsoft.Maui.Controls.Application
 		EnsureSingleInstance();
 #if WINDOWS
 		_mcp = services.GetRequiredService<GameLauncherWithGit.Infrastructure.Mcp.ScenarioMcpHost>();
-	_playRecordingWeb = services.GetRequiredService<GameLauncherWithGit.Infrastructure.PlayRecordingWeb.PlayRecordingWebHost>();
+		_playRecordingWebStartup = Task.Run(() => StartPlayRecordingWebAsync(services));
 		_mcpStartup = StartMcpAsync(services);
 #endif
 	}
@@ -55,7 +55,10 @@ public partial class App : Microsoft.Maui.Controls.Application
 #if WINDOWS
 		window.Destroying += async (_, _) =>
 		{
-			try { await _playRecordingWeb.DisposeAsync(); }
+			try
+			{
+				if (await _playRecordingWebStartup is { } web) await web.DisposeAsync();
+			}
 			catch { Trace.WriteLine("Play recording Web shutdown failed."); }
 			await _mcpStartup;
 			try { await _mcp.DisposeAsync(); }
@@ -67,6 +70,23 @@ public partial class App : Microsoft.Maui.Controls.Application
 	}
 
 #if WINDOWS
+	private static async Task<GameLauncherWithGit.Infrastructure.PlayRecordingWeb.PlayRecordingWebHost?> StartPlayRecordingWebAsync(IServiceProvider services)
+	{
+		GameLauncherWithGit.Infrastructure.PlayRecordingWeb.PlayRecordingWebHost? host = null;
+		try
+		{
+			host = services.GetRequiredService<GameLauncherWithGit.Infrastructure.PlayRecordingWeb.PlayRecordingWebHost>();
+			if (GameLauncherWithGit.Application.Services.AppDataPaths.IsIsolated)
+				Trace.WriteLine($"Isolated play recording Web: {await host.StartIsolatedAsync()}");
+			else
+				await host.StartLocalAsync();
+		}
+		catch (ObjectDisposedException) { /* The desktop exited before the listener started. */ }
+		catch (OperationCanceledException) { /* The desktop exited during listener startup. */ }
+		catch { Trace.WriteLine("Play recording Web unavailable. Check the local recording Web port."); }
+		return host;
+	}
+
 	private async Task StartMcpAsync(IServiceProvider services)
 	{
 		try

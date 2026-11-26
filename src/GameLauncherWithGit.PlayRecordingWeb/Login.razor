@@ -2,11 +2,10 @@
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Forms
 @attribute [AllowAnonymous]
-@inject PlayRecordingWebView View
 
 <main class="play-web-entry">
     <h1>プレイ中の記録</h1>
-    <form method="post" action="@(new Uri(View.Origin, "/login"))">
+    <form method="post" action="/login">
         <AntiforgeryToken />
         <div class="play-web-field">
             <label for="code">PCに表示された接続コード</label>

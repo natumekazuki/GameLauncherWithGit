@@ -11,7 +11,9 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
     <PackageReference Include="xunit" Version="2.9.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" PrivateAssets="all" />
-    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/PlayRecordingWeb/PlayRecordingWebAccess.cs" />
-    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/PlayRecordingWeb/PlayRecordingWebSession.cs" />
+    <ProjectReference Include="../../src/GameLauncherWithGit.PlayRecordingWeb/GameLauncherWithGit.PlayRecordingWeb.csproj" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/PlayRecordingWeb/*.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/IGameLibraryStore.cs;../../src/GameLauncherWithGit/Infrastructure/Abstractions/IScenarioCaptureStore.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Application/Models/GameCardItem.cs;../../src/GameLauncherWithGit/Application/Models/GameCardStatus.cs;../../src/GameLauncherWithGit/Application/Models/GameSaveLinkItem.cs;../../src/GameLauncherWithGit/Application/Models/ScenarioCapture.cs;../../src/GameLauncherWithGit/Application/Models/ScenarioFlow.cs;../../src/GameLauncherWithGit/Application/Models/ScenarioScreenshotStorage.cs" />
   </ItemGroup>
 </Project>

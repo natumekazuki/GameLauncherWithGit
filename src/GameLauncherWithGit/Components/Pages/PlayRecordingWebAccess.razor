@@ -3,12 +3,12 @@
 @inject PlayRecordingWebHost Host
 @implements IAsyncDisposable
 
-<PageTitle>記録Webの接続許可</PageTitle>
+<PageTitle>記録WebのServe接続</PageTitle>
 
 <section class="play-web-access" aria-busy="@(_busy ? "true" : "false")">
     <header>
         <a class="secondary-button utility-icon-button" href="/" title="ゲーム一覧に戻る" aria-label="ゲーム一覧に戻る"><CaptureIcon Name="Back" /></a>
-        <h1>記録Webの接続許可</h1>
+        <h1>記録WebのServe接続</h1>
     </header>
 
     @if (_games is null)
@@ -44,7 +44,7 @@
                 <input @ref="_urlInput" type="url" @bind="_serveUrl" @bind:event="oninput" disabled="@_busy" />
             </label>
             <div class="play-web-actions">
-                <button type="button" class="launch-button" @onclick="StartAsync" disabled="@(!CanIssue || string.IsNullOrWhiteSpace(_serveUrl))"><CaptureIcon Name="Play" />Web接続を開始</button>
+                <button type="button" class="launch-button" @onclick="StartAsync" disabled="@(!CanIssue || string.IsNullOrWhiteSpace(_serveUrl))"><CaptureIcon Name="Play" />Serve接続を開始</button>
                 @ErrorDetails
             </div>
         }
@@ -71,7 +71,7 @@
                 <CaptureIcon Name="@(_permission is not null && _permission.GameId == _selectedGameId ? "Refresh" : "Link")" />@(_permission is null ? "接続コードを発行" : _permission.GameId == _selectedGameId ? "旧アクセスを失効してコードを再発行" : "旧アクセスを失効してゲームを変更")
             </button>
             <button type="button" class="secondary-button" @onclick="RevokeAsync" disabled="@(_busy || _permission is null)"><CaptureIcon Name="Close" />接続許可を失効</button>
-            <button type="button" class="secondary-button" @onclick="StopAsync" disabled="@_busy"><CaptureIcon Name="Stop" />Web接続を停止</button>
+            <button type="button" class="secondary-button" @onclick="StopAsync" disabled="@_busy"><CaptureIcon Name="Stop" />Serve接続を停止</button>
         </div>
     }
 
@@ -112,13 +112,13 @@
     {
         if (!Uri.TryCreate(_serveUrl, UriKind.Absolute, out var origin))
             throw new ArgumentException("Tailscale ServeのHTTPS URLを指定してください。");
-        await Host.StartAsync(_selectedGameId, origin);
+        await Host.StartServeAsync(_selectedGameId, origin);
         _focusAfterChange = true;
-    }, "接続開始失敗", "記録Webの開始に失敗しました。");
+    }, "接続開始失敗", "Serve接続を開始できませんでした。");
 
     private Task IssueAsync() => RunAsync(async () => await Host.IssueAsync(_selectedGameId), "コード発行失敗", "接続コードを発行できませんでした。");
     private Task RevokeAsync() => RunAsync(async () => { await Host.RevokeAsync(); _focusAfterChange = true; }, "許可の失効失敗", "接続許可を失効できませんでした。");
-    private Task StopAsync() => RunAsync(async () => { await Host.StopAsync(); _focusAfterChange = true; }, "接続停止失敗", "記録Webを停止できませんでした。");
+    private Task StopAsync() => RunAsync(async () => { await Host.StopServeAsync(); _focusAfterChange = true; }, "接続停止失敗", "Serve接続を停止できませんでした。");
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -137,7 +137,8 @@
         try { await operation(); }
         catch (ArgumentException ex) when (ex.ParamName == "origin") { _error = "Tailscale ServeのHTTPS URL（パスなし）を指定してください。"; }
         catch (ArgumentException ex) { _error = ex.Message; }
-        catch (InvalidOperationException ex) when (ex.Message.StartsWith("登録済みで", StringComparison.Ordinal)) { _error = ex.Message; }
+        catch (InvalidOperationException ex) when (ex.Message.StartsWith("登録済みで", StringComparison.Ordinal)
+            || ex.Message.StartsWith("記録Webの待受を利用できません", StringComparison.Ordinal)) { _error = ex.Message; }
         catch (Exception) { _error = failure; }
         finally
         {
@@ -148,7 +149,7 @@
 
     private void RefreshStatus()
     {
-        _origin = Host.Origin;
+        _origin = Host.ServeOrigin;
         _permission = Host.Permission;
     }
 
@@ -161,7 +162,7 @@
             {
                 await InvokeAsync(() =>
                 {
-                    if (_origin == Host.Origin && _permission == Host.Permission) return;
+                    if (_origin == Host.ServeOrigin && _permission == Host.Permission) return;
                     RefreshStatus();
                     StateHasChanged();
                 });

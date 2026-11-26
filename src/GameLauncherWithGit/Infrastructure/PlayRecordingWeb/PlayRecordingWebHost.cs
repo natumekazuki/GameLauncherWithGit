@@ -1,12 +1,13 @@
-using System.Globalization;
 using GameLauncherWithGit.Application.Models;
-using GameLauncherWithGit.Application.Services;
 using GameLauncherWithGit.Infrastructure.Abstractions;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace GameLauncherWithGit.Infrastructure.PlayRecordingWeb;
 
-/// <summary>Owns the manually started Windows loopback host, not the desktop record services.</summary>
+/// <summary>Owns the desktop lifetime of the loopback listener and the optional Serve grant.</summary>
 public sealed class PlayRecordingWebHost(
     IGameLibraryStore games,
     IScenarioCaptureStore capture,
@@ -14,11 +15,15 @@ public sealed class PlayRecordingWebHost(
 {
     public const int LoopbackPort = 47832;
     private readonly PlayRecordingWebAccess _access = new(TimeProvider.System);
-    private readonly SemaphoreSlim _lifecycle = new(1);
+    private readonly SemaphoreSlim _listenerLifecycle = new(1);
+    private readonly SemaphoreSlim _serveChanges = new(1);
+    private readonly CancellationTokenSource _startupCancellation = new();
+    private readonly object _disposeLock = new();
     private WebApplication? _app;
-    private bool _disposed;
+    private Uri? _localOrigin;
+    private Task? _disposeTask;
 
-    public Uri? Origin { get; private set; }
+    public Uri? ServeOrigin => _access.ServeOrigin;
     public PlayRecordingWebPermission? Permission => _access.Permission;
 
     /// <summary>Lists registered games with a confirmed and enabled capture setup; never creates profiles.</summary>
@@ -30,80 +35,107 @@ public sealed class PlayRecordingWebHost(
         return (await games.GetAllAsync()).Where(game => configuredIds.Contains(game.Id)).ToArray();
     }
 
-    /// <summary>Starts on the fixed loopback port for the explicitly allowed HTTPS Serve origin.</summary>
-    public Task<PlayRecordingWebPermission> StartAsync(string gameId, Uri origin) =>
-        StartCoreAsync(gameId, RequireServeOrigin(origin), LoopbackPort, isolated: false);
+    /// <summary>Starts the direct PC-only listener for the desktop lifetime on the fixed product port.</summary>
+    public Task<Uri> StartLocalAsync() => StartLocalCoreAsync(LoopbackPort);
 
-    /// <summary>Starts a direct HTTP endpoint only when the app uses a dedicated data directory.</summary>
-    public Task<PlayRecordingWebPermission> StartIsolatedAsync(string gameId, int port)
+    /// <summary>Starts the same listener on an OS-assigned port for an isolated desktop or fixture.</summary>
+    internal Task<Uri> StartIsolatedAsync() => StartLocalCoreAsync(0);
+
+    /// <summary>Enables exactly this private HTTPS Serve origin and issues its first fixed-game grant.</summary>
+    public async Task<PlayRecordingWebPermission> StartServeAsync(string gameId, Uri origin)
     {
-        if (!AppDataPaths.IsIsolated)
-            throw new InvalidOperationException("Direct loopback requires an isolated data directory.");
-        if (port is < 1024 or > 65535)
-            throw new ArgumentOutOfRangeException(nameof(port));
-
-        return StartCoreAsync(gameId, new Uri($"http://127.0.0.1:{port.ToString(CultureInfo.InvariantCulture)}/"),
-            port, isolated: true);
+        var serveOrigin = RequireServeOrigin(origin);
+        await _serveChanges.WaitAsync();
+        try
+        {
+            ObjectDisposedException.ThrowIf(_access.IsClosed, this);
+            if (Volatile.Read(ref _app) is null) throw new InvalidOperationException("記録Webの待受を利用できません。PCアプリを再起動してください。");
+            if (ServeOrigin is not null) throw new InvalidOperationException("Serve接続はすでに開始されています。");
+            var game = await RequireEligibleGameAsync(gameId);
+            await _access.IssueAsync(game.Id, game.Title, serveOrigin);
+            return Permission!;
+        }
+        finally { _serveChanges.Release(); }
     }
 
     /// <summary>Replaces the current grant and invalidates its cookie and circuits, without restarting the listener.</summary>
     public async Task<PlayRecordingWebPermission> IssueAsync(string gameId)
     {
-        await _lifecycle.WaitAsync();
+        await _serveChanges.WaitAsync();
         try
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_app is null) throw new InvalidOperationException("Web接続が開始されていません。");
+            ObjectDisposedException.ThrowIf(_access.IsClosed, this);
+            if (ServeOrigin is null) throw new InvalidOperationException("Serve接続が開始されていません。");
             var game = await RequireEligibleGameAsync(gameId);
             await _access.IssueAsync(game.Id, game.Title);
             return Permission!;
         }
-        finally { _lifecycle.Release(); }
+        finally { _serveChanges.Release(); }
     }
 
     /// <summary>Invalidates access and waits for any operation already authorized under the old grant.</summary>
     public async Task RevokeAsync()
     {
-        await _lifecycle.WaitAsync();
+        await _serveChanges.WaitAsync();
         try { await _access.RevokeAsync(); }
-        finally { _lifecycle.Release(); }
+        finally { _serveChanges.Release(); }
     }
 
-    /// <summary>Revokes authorization and stops only the Web host.</summary>
-    public async Task StopAsync()
+    /// <summary>Disables the Serve origin and revokes access. The local listener stays available.</summary>
+    public async Task StopServeAsync()
     {
-        await _lifecycle.WaitAsync();
-        try { await StopCoreAsync(); }
-        finally { _lifecycle.Release(); }
+        await _serveChanges.WaitAsync();
+        try { await _access.RevokeAsync(disableServe: true); }
+        finally { _serveChanges.Release(); }
     }
 
-    public async ValueTask DisposeAsync()
+    /// <summary>Stops admission and closes the listener for the rest of the desktop lifetime.</summary>
+    public ValueTask DisposeAsync()
     {
-        await _lifecycle.WaitAsync();
+        lock (_disposeLock) return new(_disposeTask ??= DisposeCoreAsync());
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        _access.Close();
+        try { await _startupCancellation.CancelAsync(); }
+        finally { await StopListenerAsync(); }
+    }
+
+    private async Task StopListenerAsync()
+    {
+        // Only startup owns the listener gate. Waiting on a Serve setting or grant here
+        // would let a desktop read or a client operation stall application exit.
+        await _listenerLifecycle.WaitAsync();
         try
         {
-            _disposed = true;
-            await StopCoreAsync();
+            _startupCancellation.Dispose();
+            var app = Interlocked.Exchange(ref _app, null);
+            _localOrigin = null;
+            if (app is null) return;
+            try { await app.StopAsync(); }
+            finally { await app.DisposeAsync(); }
         }
-        finally { _lifecycle.Release(); }
+        finally { _listenerLifecycle.Release(); }
     }
 
-    private async Task<PlayRecordingWebPermission> StartCoreAsync(string gameId, Uri origin, int port, bool isolated)
+    private async Task<Uri> StartLocalCoreAsync(int port)
     {
-        await _lifecycle.WaitAsync();
+        await _listenerLifecycle.WaitAsync();
         try
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_app is not null) throw new InvalidOperationException("Web接続はすでに開始されています。");
-            var game = await RequireEligibleGameAsync(gameId);
-            var app = PlayRecordingWebApplication.Build(origin, port, isolated, _access, content);
+            ObjectDisposedException.ThrowIf(_access.IsClosed, this);
+            if (_localOrigin is { } running) return running;
+            var app = PlayRecordingWebApplication.Build(port, _access, content);
             try
             {
-                await app.StartAsync();
-                await _access.IssueAsync(game.Id, game.Title);
-                _app = app;
-                Origin = origin;
-                return Permission!;
+                await app.StartAsync(_startupCancellation.Token);
+                var boundPort = port == 0
+                    ? new Uri(app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single()).Port
+                    : port;
+                _localOrigin = new UriBuilder(Uri.UriSchemeHttp, "127.0.0.1", boundPort).Uri;
+                Volatile.Write(ref _app, app);
+                return _localOrigin;
             }
             catch
             {
@@ -111,18 +143,7 @@ public sealed class PlayRecordingWebHost(
                 throw;
             }
         }
-        finally { _lifecycle.Release(); }
-    }
-
-    private async Task StopCoreAsync()
-    {
-        await _access.RevokeAsync();
-        if (_app is not { } app) return;
-
-        _app = null;
-        Origin = null;
-        try { await app.StopAsync(); }
-        finally { await app.DisposeAsync(); }
+        finally { _listenerLifecycle.Release(); }
     }
 
     private async Task<GameCardItem> RequireEligibleGameAsync(string gameId)

@@ -107,6 +107,49 @@ public sealed class PlayRecordingWebSessionTests
         Assert.Equal("allowed-game", await circuit.UseAsync<string>(Task.FromResult));
     }
 
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "A local circuit uses only the desktop-target operation; a Serve circuit uses only the granted game operation. Disconnected or superseded local connections, or connections on a closing host, cannot operate."
+    // oracle = { type = "contract", ref = "src/GameLauncherWithGit/Infrastructure/PlayRecordingWeb/PlayRecordingWebSession.cs: FollowsDesktopTarget, UseDesktopTargetAsync<T> and UseAsync<T>" }
+    // fault = "Either circuit accepts the other mode's callback, or a local circuit can act while disconnected, from a prior connection or after the host closes admission."
+    // observable = "Mode flags, current callback results, and UnauthorizedAccessException without invoking a callback in the wrong mode or on a disconnected, stale, or closing connection."
+    // observation_boundary = "component-behavior"
+    // scope = "recording-web-circuit-admission"
+    // lifecycle = "permanent"
+    // risk_tags = ["authorization"]
+    // @end-test-value
+    [Fact]
+    public async Task LocalAndServeCircuitsCannotUseEachOthersOperation()
+    {
+        var access = new PlayRecordingWebAccess(TimeProvider.System);
+        var serve = await OpenCircuitAsync(access, "allowed-game");
+        var local = new PlayRecordingWebSession(access);
+        local.OpenLocal(new Uri("http://localhost:47832/"));
+        local.Connect();
+
+        Assert.True(local.FollowsDesktopTarget);
+        Assert.False(serve.FollowsDesktopTarget);
+        Assert.Equal("allowed-game", await serve.UseAsync<string>(Task.FromResult));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            serve.UseDesktopTargetAsync<int>(() => throw new InvalidOperationException("Serve must not use the desktop target.")));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            local.UseAsync<int>(_ => throw new InvalidOperationException("Local must not receive the Serve game.")));
+
+        await access.RevokeAsync();
+        Assert.Equal(7, await local.UseDesktopTargetAsync(() => Task.FromResult(7)));
+        var previous = local.ConnectionVersion;
+        local.Disconnect();
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            local.UseDesktopTargetAsync<int>(() => throw new InvalidOperationException("A disconnected circuit must not operate.")));
+        local.Connect();
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            local.UseDesktopTargetAsync<int>(previous, () => throw new InvalidOperationException("A stale connection must not operate.")));
+        Assert.Equal(8, await local.UseDesktopTargetAsync(() => Task.FromResult(8)));
+        access.Close();
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            local.UseDesktopTargetAsync<int>(() => throw new InvalidOperationException("Desktop shutdown must close admission.")));
+    }
+
     private static async Task<PlayRecordingWebSession> OpenCircuitAsync(PlayRecordingWebAccess access, string gameId)
     {
         await access.IssueAsync(gameId, gameId);
