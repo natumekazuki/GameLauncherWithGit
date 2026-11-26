@@ -27,6 +27,8 @@
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Services/SqliteGameLibraryStore*.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Services/LunaCaptureHost.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/IGameLibraryStore.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/IGitService.cs" />
+    <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Models/GitCommandResult.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/ISaveLinkStore.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/IRepositorySyncHistoryStore.cs" />
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/Abstractions/IScenarioCaptureStore.cs" />

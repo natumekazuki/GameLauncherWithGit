@@ -76,7 +76,12 @@ public sealed record CaptureProcess(int Id, string Name, string Path, string Win
 public sealed record CaptureSnapshot
 {
     internal long OperationVersion { get; init; }
+    internal long PlayScopeVersion { get; init; }
     public CaptureProfile? Profile { get; init; }
+    /// <summary>The live record root; Profile identifies the shared extraction settings instead.</summary>
+    public long? RecordId { get; init; }
+    /// <summary>The PC play selection, independently of whether extraction is running.</summary>
+    public string? PlayGameId { get; init; }
     public long? SessionId { get; init; }
     public string Status { get; init; } = "未接続";
     public bool NeedsProcess { get; init; }

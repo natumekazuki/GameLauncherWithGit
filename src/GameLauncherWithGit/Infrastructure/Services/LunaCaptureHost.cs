@@ -18,8 +18,14 @@ public sealed class LunaCaptureHost(ILogger<LunaCaptureHost> logger) : ILunaCapt
     private PidCall? _connect;
     private PidCall? _detach;
     private CheckInject? _check;
-    private TaskCompletionSource? _connected;
-    private int _target;
+    private readonly object _connectionGate = new();
+    private readonly Dictionary<uint, Connection> _connections = [];
+
+    private sealed class Connection
+    {
+        public TaskCompletionSource<bool> Ready { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Drained { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct ThreadParam { public uint Pid; public ulong Address; public ulong Context; public ulong Context2; }
@@ -54,8 +60,8 @@ public sealed class LunaCaptureHost(ILogger<LunaCaptureHost> logger) : ILunaCapt
             _detach = Export<PidCall>("Luna_DetachProcess");
             _check = Export<CheckInject>("Luna_CheckIfNeedInject");
             _callbacks.AddRange([
-                new ProcessEvent(pid => Guard(() => { if (pid == _target) _connected?.TrySetResult(); ConnectionChanged?.Invoke(pid, true); })),
-            new ProcessEvent(pid => Guard(() => ConnectionChanged?.Invoke(pid, false))),
+                new ProcessEvent(pid => Guard(() => NotifyConnection(pid, true))),
+            new ProcessEvent(pid => Guard(() => NotifyConnection(pid, false))),
             new CreateEvent((_, _, _, _) => { }), new ThreadEvent((_, _, _) => { }),
             new OutputEvent((code, name, thread, text) => Guard(() => Output?.Invoke(
                 new(thread.Pid, thread.Address, thread.Context, thread.Context2, Marshal.PtrToStringUni(code) ?? "", Marshal.PtrToStringUTF8(name) ?? ""),
@@ -78,6 +84,23 @@ public sealed class LunaCaptureHost(ILogger<LunaCaptureHost> logger) : ILunaCapt
         catch (Exception ex) { logger.LogError(ex, "Luna callback failed."); }
     }
 
+    private void NotifyConnection(uint processId, bool connected)
+    {
+        Connection? connection;
+        lock (_connectionGate) _connections.TryGetValue(processId, out connection);
+        if (connection is null) return;
+        try { ConnectionChanged?.Invoke(processId, connected); }
+        finally
+        {
+            if (connected) connection.Ready.TrySetResult(true);
+            else
+            {
+                connection.Ready.TrySetResult(false);
+                connection.Drained.TrySetResult();
+            }
+        }
+    }
+
     public async Task ConnectAsync(int processId)
     {
         var bits = GetProcessBits(processId);
@@ -86,10 +109,27 @@ public sealed class LunaCaptureHost(ILogger<LunaCaptureHost> logger) : ILunaCapt
         var hook = Path.Combine(directory, $"LunaHook{bits}.dll");
         if (!File.Exists(injector) || !File.Exists(hook)) throw new FileNotFoundException("HOOKの実行部品がありません。ネイティブビルドを確認してください。");
         Initialize();
-        _target = processId;
-        _connected = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        _connect!((uint)processId);
-        if (!_check!((uint)processId)) throw new InvalidOperationException("対象はすでに別のHOOKホストへ接続されています。");
+        var pid = (uint)processId;
+        Connection? previous;
+        lock (_connectionGate) _connections.TryGetValue(pid, out previous);
+        if (previous is not null)
+        {
+            if (!await WaitForDrainAsync(previous))
+                throw new InvalidOperationException("以前の取得接続の終了を確認できません。ゲームを起動し直してください。");
+            // The native disconnect callback follows text-thread teardown, but precedes removal of the
+            // process record. Wait for the host/hook ownership mutex before opening another pipe.
+            var deadline = Stopwatch.StartNew();
+            while (!_check!(pid) && deadline.Elapsed < TimeSpan.FromSeconds(3)) await Task.Delay(50);
+        }
+        if (!_check!(pid)) throw new InvalidOperationException("対象はすでに別のHOOKホストへ接続されています。");
+        var connection = new Connection();
+        lock (_connectionGate)
+        {
+            foreach (var drained in _connections.Where(x => x.Key != pid && x.Value.Drained.Task.IsCompleted).Select(x => x.Key).ToArray())
+                _connections.Remove(drained);
+            _connections[pid] = connection;
+        }
+        _connect!(pid);
         using var helper = Process.Start(new ProcessStartInfo(injector)
         {
             UseShellExecute = false,
@@ -97,11 +137,36 @@ public sealed class LunaCaptureHost(ILogger<LunaCaptureHost> logger) : ILunaCapt
             ArgumentList = { processId.ToString(), hook },
             WorkingDirectory = directory
         }) ?? throw new InvalidOperationException("注入helperを起動できませんでした。");
-        await Task.WhenAll(helper.WaitForExitAsync(), _connected.Task).WaitAsync(TimeSpan.FromSeconds(15));
+        await Task.WhenAll(helper.WaitForExitAsync(), connection.Ready.Task).WaitAsync(TimeSpan.FromSeconds(15));
         if (helper.ExitCode != 0) throw new InvalidOperationException($"注入helperが失敗しました（{helper.ExitCode}）。");
+        if (!await connection.Ready.Task)
+            throw new InvalidOperationException("取得接続が終了しました。");
     }
 
-    public void Detach(int processId) => _detach?.Invoke((uint)processId);
+    public void Detach(int processId)
+    {
+        var pid = (uint)processId;
+        lock (_connectionGate)
+            if (!_connections.TryGetValue(pid, out var connection) || connection.Drained.Task.IsCompleted) return;
+        _detach?.Invoke(pid);
+    }
+
+    public async Task<bool> DetachAndDrainAsync(int processId)
+    {
+        Connection? connection;
+        lock (_connectionGate) _connections.TryGetValue((uint)processId, out connection);
+        if (connection is null) return false;
+        Detach(processId);
+        // In the pinned Luna host the receive loop ends, all text timers stop synchronously, and only
+        // then OnDisconnect runs. Its completion is the boundary for accepting callbacks after reconnect.
+        return await WaitForDrainAsync(connection);
+    }
+
+    private static async Task<bool> WaitForDrainAsync(Connection connection)
+    {
+        try { await connection.Drained.Task.WaitAsync(TimeSpan.FromSeconds(3)); return true; }
+        catch (TimeoutException) { return false; }
+    }
 
     public CaptureProcess? GetForegroundProcess()
     {

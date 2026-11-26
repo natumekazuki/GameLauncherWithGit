@@ -109,6 +109,8 @@ public sealed class LauncherService : ILauncherService
 	private async Task<LaunchResult> FinishStartedLaunchAsync(string gameId, LaunchResult launchResult)
 	{
 		var failedSteps = new List<string>();
+		// Publish the selection in successful start order, without waiting for unrelated writes first.
+		var captureSetup = _capture.BeginGameForLaunchAsync(gameId, launchResult.StartedProcess);
 		if (!await TryRecordStatusAsync(gameId, GameCardStatus.Synced))
 		{
 			failedSteps.Add("同期状態の保存");
@@ -127,7 +129,7 @@ public sealed class LauncherService : ILauncherService
 		var showCapture = false;
 		try
 		{
-			showCapture = await _capture.BeginGameForLaunchAsync(gameId);
+			showCapture = await captureSetup;
 		}
 		catch (Exception ex)
 		{
@@ -324,14 +326,14 @@ public sealed class LauncherService : ILauncherService
 				UseShellExecute = true
 			};
 
-			using var process = Process.Start(startInfo);
+			var process = Process.Start(startInfo);
 			if (process is null)
 			{
 				return new LaunchResult(false, "ゲームプロセスの起動に失敗しました。");
 			}
 
 			_logger.LogInformation("Game process started. gameId={GameId}, path={ExecutablePath}", game.Id, game.ExecutablePath);
-			return new LaunchResult(true, "ゲームを起動しました。");
+			return new LaunchResult(true, "ゲームを起動しました。") { StartedProcess = process };
 		}
 		catch (Exception ex)
 		{

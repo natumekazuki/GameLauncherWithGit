@@ -123,7 +123,7 @@ public sealed class ScenarioScreenshotService : IAsyncDisposable
 
     private async Task RegisterHotkeyAsync(ScreenshotHotkey hotkey, CaptureSnapshot capture)
     {
-        var profileId = capture.Profile!.Id;
+        var profileId = capture.RecordId!.Value;
         var sessionId = capture.SessionId!.Value;
         await _platform.RegisterHotkeyAsync(hotkey, () => _ = CaptureAsync(profileId, sessionId));
         _registeredSession = sessionId;
@@ -240,7 +240,7 @@ public sealed class ScenarioScreenshotService : IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         // Freeze the body identity before any asynchronous capture/encoding work.
-        var (target, processId) = _capture.FreezeScreenshotTarget();
+        var (target, processId, playEpoch) = _capture.FreezeScreenshotPlayTarget();
         if (expectedProfile is not null && (target.CaptureGameId != expectedProfile || target.Event.SessionId != expectedSession))
             throw new InvalidOperationException("撮影対象の取得回が変わりました。");
         var capturedAt = DateTimeOffset.UtcNow;
@@ -259,6 +259,7 @@ public sealed class ScenarioScreenshotService : IAsyncDisposable
         Update(s => s with { Busy = true, Window = gameOnly ? s.Window : window, Status = "撮影を保存中" });
         var frame = gameOnly ? await _platform.CaptureGameWindowAsync(window, cancellationToken)
             : await _platform.CaptureAsync(window, cancellationToken);
+        _capture.RequireScreenshotPlayTarget(playEpoch, target.CaptureGameId);
         if (gameOnly) _capture.RequireScreenshotProcessAlive(target, processId);
         await _capture.FlushPendingAsync().WaitAsync(cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();

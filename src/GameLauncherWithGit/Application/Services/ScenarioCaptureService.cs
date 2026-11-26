@@ -6,7 +6,7 @@ using System.Threading.Channels;
 
 namespace GameLauncherWithGit.Application.Services;
 
-public sealed class ScenarioCaptureService : IAsyncDisposable
+public sealed partial class ScenarioCaptureService : IAsyncDisposable
 {
     private const string FormalConnectionRequired = "正式記録中のゲームで操作してください。";
     private const int MaxEvents = 1000;
@@ -36,6 +36,9 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
     private long? _session;
     private CapturePosition? _lastBodyPosition, _rangeStart;
     private Process? _body;
+    private Action<CaptureSource, string>? _connectionOutput;
+    private Action<uint, bool>? _connectionChanged;
+    private long _connectionEpoch;
     private bool _active;
     private bool _finishing;
     private bool _connected;
@@ -64,43 +67,63 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
 
     internal void ChangeOperationVersion() { lock (_gate) _operationVersion++; }
 
-    internal (long Version, long? ProfileId, long? SessionId, bool Active, bool Formal, bool Paused,
+    internal (long Version, long? ProfileId, long? RecordId, long? SessionId, bool Active, bool Formal, bool Paused,
         CapturePosition? LastBody, CapturePosition? RangeStart, bool RangeCanStart) OperationState
     {
         get
         {
-            lock (_gate) return (_operationVersion, _profile?.Id, _session, _active || _finishing || _connecting,
+            lock (_gate) return (_operationVersion, _profile?.Id, ActiveRecordId, _session, _active || _finishing || _connecting,
                 HasFormalConnection, _paused, _lastBodyPosition, _rangeStart, RangeStartRejection() is null);
         }
     }
 
     public (ScreenshotTarget Target, int ProcessId) FreezeScreenshotTarget()
     {
+        var (target, processId, _) = FreezeScreenshotPlayTarget();
+        return (target, processId);
+    }
+
+    internal (ScreenshotTarget Target, int ProcessId, long PlayEpoch) FreezeScreenshotPlayTarget()
+    {
         lock (_gate)
         {
-            if (!_active || _finishing || !_connected || _preview || _paused || _profile is null || _process is null
+            if (!_active || _finishing || !_connected || _preview || _paused || ActiveRecordId is not { } recordId || _process is null
                 || _session is not { } session || _lastBodyPosition is not { Sequence: > 0 } position
                 || position.SessionId != session)
                 throw new InvalidOperationException("正式記録を開始し、本文を受信してから撮影してください。");
-            return (new(_profile.Id, new(session, position.Sequence)), _process.Id);
+            return (new(recordId, new(session, position.Sequence)), _process.Id, _playEpoch);
         }
+    }
+
+    internal void RequireScreenshotPlayTarget(long playEpoch, long recordId)
+    {
+        lock (_gate)
+            if (_recordTargets is not null && (_playEpoch != playEpoch || CurrentPlayRecordId != recordId))
+                throw new InvalidOperationException("撮影中にプレイ中の記録対象が変わりました。");
     }
 
     internal void RequireScreenshotProcessAlive(ScreenshotTarget target, int processId)
     {
         lock (_gate)
-            if (!_connected || _profile?.Id != target.CaptureGameId || _session != target.Event.SessionId
+            if (!_connected || ActiveRecordId != target.CaptureGameId || _session != target.Event.SessionId
                 || _body is not { } body || body.Id != processId || body.HasExited)
                 throw new InvalidOperationException("撮影対象のゲームが終了しました。");
     }
 
-    public ScenarioCaptureService(IScenarioCaptureStore store, ILunaCaptureHost host, ILogger<ScenarioCaptureService> logger)
+    public ScenarioCaptureService(IScenarioCaptureStore store, ILunaCaptureHost host, ILogger<ScenarioCaptureService> logger,
+        ScenarioRecordTargetResolver recordTargets) : this(store, host, recordTargets, logger) { }
+
+    internal ScenarioCaptureService(IScenarioCaptureStore store, ILunaCaptureHost host, ILogger<ScenarioCaptureService> logger)
+        : this(store, host, null, logger) { }
+
+    private ScenarioCaptureService(IScenarioCaptureStore store, ILunaCaptureHost host, ScenarioRecordTargetResolver? recordTargets,
+        ILogger<ScenarioCaptureService> logger)
     {
         _store = store; _host = host; _logger = logger;
-        host.Output += OnOutput;
-        host.ConnectionChanged += OnConnection;
+        _recordTargets = recordTargets;
         _writerTask = Task.Run(WriteLoopAsync);
         _resolverTask = Task.Run(ResolveLoopAsync);
+        _targetMonitorTask = recordTargets is null ? Task.CompletedTask : Task.Run(MonitorPlayTargetAsync);
     }
 
     public CaptureSnapshot Snapshot
@@ -110,7 +133,10 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
             lock (_gate) return new()
             {
                 OperationVersion = _operationVersion,
+                PlayScopeVersion = _playEpoch,
                 Profile = _profile,
+                RecordId = ActiveRecordId,
+                PlayGameId = _playProcessExited ? null : _playProfile?.GameId,
                 SessionId = _session,
                 Status = _status,
                 Connected = _connected,
@@ -159,17 +185,28 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
     public Task<bool> BeginGameAsync(string gameId) => RunOperationAsync(() => BeginGameCoreAsync(gameId, reportFailure: false));
 
     // The launcher already started the game and must distinguish a failed follow-up from a normal skip.
-    internal Task<bool> BeginGameForLaunchAsync(string gameId) => RunOperationAsync(() => BeginGameCoreAsync(gameId, reportFailure: true));
+    internal Task<bool> BeginGameForLaunchAsync(string gameId, Process? process) =>
+        RunOperationAsync(() => BeginGameCoreAsync(gameId, reportFailure: true, launched: true, process: process));
 
-    private async Task<bool> BeginGameCoreAsync(string gameId, bool reportFailure)
+    private async Task<bool> BeginGameCoreAsync(string gameId, bool reportFailure, bool launched = false, Process? process = null)
     {
         try
         {
+            if (launched && _recordTargets is not null)
+                await ClearPlayTargetCoreAsync();
             var profile = await _store.GetOrCreateCaptureProfileAsync(gameId);
+            if (!launched && _recordTargets is not null)
+            {
+                if (!profile.Enabled) return false;
+                await PreparePlayTargetCoreAsync(profile);
+                return true;
+            }
+            if (_recordTargets is not null || profile.Enabled)
+                await SelectPlayTargetCoreAsync(profile, process);
             if (!profile.Enabled) return false;
             var labels = await _store.GetCaptureLabelsAsync(profile.Id);
             lock (_gate)
-                if (_active || _finishing) { _logger.LogWarning("Capture is already active; second capture skipped. game={Game}", gameId); return false; }
+                if (_active || _finishing || _playProfile?.Id != profile.Id || _playProcessExited) return false;
             lock (_gate)
             {
                 _operationVersion++;
@@ -199,11 +236,15 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
             if (reportFailure) throw;
             return false;
         }
+        finally
+        {
+            if (process is not null && _playProcess != process) process.Dispose();
+        }
     }
 
     internal async Task StartConfiguredCoreAsync(CaptureProfile profile)
     {
-        if (!profile.HasConfirmedRecordingSetup || OperationState.Active)
+        if (!CanStartConfigured(profile))
             throw new InvalidOperationException("ゲームの記録設定と現在の接続状態を確認してください。");
         if ((await _store.GetCaptureProfilesAsync()).Any(other => other.Id != profile.Id && other.GameId is not null
             && string.Equals(other.BodyExecutablePath, profile.BodyExecutablePath, StringComparison.OrdinalIgnoreCase)))
@@ -212,11 +253,32 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
             StringComparison.OrdinalIgnoreCase)).ToArray();
         if (matches.Length != 1)
             throw new InvalidOperationException("記録対象のゲームを1つだけ起動してください。");
-        lock (_gate) { _profile = profile; _session = null; _operationVersion++; }
+        if (_recordTargets is null) await SelectPlayTargetCoreAsync(profile);
+        lock (_gate)
+        {
+            if (CurrentPlayRecordId is null || _playProfile?.Id != profile.Id) throw new InvalidOperationException(UnknownRecord);
+            _profile = profile; _session = null; _operationVersion++;
+        }
         await SelectProcessCoreAsync(matches[0].Id, preview: false, requiredPath: profile.BodyExecutablePath);
     }
 
-    public Task SelectProcessAsync(int id, bool preview = true) => RunOperationAsync(() => SelectProcessCoreAsync(id, preview));
+    internal bool CanStartConfigured(CaptureProfile profile)
+    {
+        lock (_gate)
+        {
+            if (!profile.HasConfirmedRecordingSetup || _finishing || _connecting) return false;
+            if (!_active) return true;
+            // Launch can finish before the configured game body appears. That waiting state is not a trial connection.
+            return _recordTargets is not null && _needsProcess && !_connected && _body is null
+                && _profile?.Id == profile.Id && _playProfile?.Id == profile.Id;
+        }
+    }
+
+    public Task SelectProcessAsync(int id, bool preview = true) => RunOperationAsync(async () =>
+    {
+        await RefreshPlayTargetCoreAsync();
+        await SelectProcessCoreAsync(id, preview);
+    });
 
     internal async Task SelectProcessCoreAsync(int id, bool preview = true, string? requiredPath = null)
     {
@@ -258,7 +320,13 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
             }
             process.EnableRaisingEvents = true;
             process.Exited += OnBodyExited;
-            lock (_gate) { _body = process; _process = candidate; }
+            lock (_gate)
+            {
+                _body = process; _process = candidate;
+                var epoch = ++_connectionEpoch;
+                _host.Output += _connectionOutput = (source, text) => OnOutput(epoch, source, text);
+                _host.ConnectionChanged += _connectionChanged = (pid, connected) => OnConnection(epoch, pid, connected);
+            }
             if (process.HasExited) throw new InvalidOperationException("ゲーム本体は終了しています。");
             await _host.ConnectAsync(id);
             lock (_gate)
@@ -280,11 +348,15 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
         finally { lock (_gate) _connecting = false; StateChanged?.Invoke(); }
     }
 
-    public Task ConfirmProcessAsync() => RunOperationAsync(() => ConfirmProcessCoreAsync());
-
-    internal async Task ConfirmProcessCoreAsync(bool persistSetup = true)
+    public Task ConfirmProcessAsync() => RunOperationAsync(async () =>
     {
-        CaptureProfile profile; CaptureProcess target; Process body;
+        await RefreshPlayTargetCoreAsync();
+        await ConfirmProcessCoreAsync();
+    });
+
+    internal async Task ConfirmProcessCoreAsync(bool persistSetup = true, bool paused = false)
+    {
+        CaptureProfile profile; CaptureProcess target; Process body; bool takePlaySelection;
         lock (_gate)
         {
             if (!_active || !_connected || !_preview || _body is null || _process is null || _profile is null)
@@ -292,27 +364,65 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
             if (!_profile.Rules.Selections.Any(x => x.Role == CaptureRole.Body))
                 throw new InvalidOperationException("本文・セリフ・地の文の取得元を選択してください。");
             profile = _profile; target = _process; body = _body;
+            takePlaySelection = _recordTargets is not null && _playProfile?.Id != profile.Id;
         }
+        ScenarioRecordTargetResolver.ResolvedRecord? draftRecord = null;
+        Process? draftProcess = null;
+        Process? previousPlayProcess = null;
+        Process? currentPlayProcess = null;
+        long? session = null;
         var persisted = (await _store.GetCaptureProfilesAsync()).Single(x => x.Id == profile.Id);
         profile = persisted with { Rules = profile.Rules, BodyExecutablePath = target.Path };
-        var session = await _store.BeginCaptureSessionAsync(profile.Id);
         try
         {
+            if (takePlaySelection)
+            {
+                var setting = await _recordTargets!.ReadRepositoryPathAsync(profile.GameId!, _stop.Token);
+                draftRecord = await _recordTargets.ResolveAsync(setting, profile.Id, _stop.Token);
+            }
+            long recordId;
+            lock (_gate)
+                recordId = (takePlaySelection ? draftRecord is { IsCurrent: true } ? draftRecord.RecordId : null : ActiveRecordId)
+                    ?? throw new InvalidOperationException(UnknownRecord);
+            if (_recordTargets is not null && (takePlaySelection || _playProcess?.Id != body.Id))
+                draftProcess = Process.GetProcessById(body.Id);
+            session = await _store.BeginCaptureSessionAsync(recordId);
             if (persistSetup) await _store.SaveCaptureProfileAsync(profile);
             lock (_gate)
             {
-                if (!_active || !_connected || _body != body) throw new InvalidOperationException("確定中に接続が終了しました。");
-                _profile = profile; _session = session; _preview = false; _paused = false; _pathEpoch++;
+                if (!_active || !_connected || _body != body || body.HasExited
+                    || (takePlaySelection ? draftRecord is not { IsCurrent: true } : ActiveRecordId != recordId))
+                    throw new InvalidOperationException("確定中に接続または記録対象が変わりました。");
+                if (draftProcess is not null)
+                {
+                    previousPlayProcess = _playProcess;
+                    _playProcess = currentPlayProcess = draftProcess;
+                    _playProcessExited = false;
+                    draftProcess = null;
+                }
+                if (takePlaySelection)
+                {
+                    _playRecord?.Dispose();
+                    _playRecord = draftRecord; draftRecord = null;
+                    _playProfile = profile;
+                    _continuation = null;
+                    _playEpoch++;
+                }
+                _profile = profile; _session = session; _preview = false; _paused = paused; _pathEpoch++;
                 _operationVersion++;
                 _sequence = _received = _saved = _lost = 0;
-                _lastBodyPosition = new(session, 0, 0); _status = "記録中・受信待ち";
+                _lastBodyPosition = paused ? null : new(session.Value, 0, 0);
+                _status = paused ? "記録を一時停止中（本文・画像は保存しません）" : "記録中・受信待ち";
                 _buffer.Clear(); _attempted.Clear(); _bufferBytes = 0;
                 foreach (var key in _candidates.Keys.ToArray())
                     _candidates[key] = _candidates[key] with { Samples = [] };
             }
+            if (previousPlayProcess is not null) ReleasePlayProcess(previousPlayProcess);
+            if (currentPlayProcess is not null) WatchPlayProcess(currentPlayProcess);
             StateChanged?.Invoke();
         }
-        catch { await _store.EndCaptureSessionAsync(session); throw; }
+        catch { if (session is { } id) await _store.EndCaptureSessionAsync(id); throw; }
+        finally { draftRecord?.Dispose(); draftProcess?.Dispose(); }
     }
 
     private async void OnBodyExited(object? sender, EventArgs args)
@@ -323,16 +433,17 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
             if (process != _body) return;
             MarkConnectionLost();
         }
+        await Task.Yield();
         await RunOperationAsync(() => FinishCoreAsync(process));
     }
 
-    private void OnConnection(uint pid, bool connected)
+    private void OnConnection(long epoch, uint pid, bool connected)
     {
         if (connected) return;
         Process body;
         lock (_gate)
         {
-            if (_body is not { } current || current.Id != pid) return;
+            if (_connectionEpoch != epoch || _body is not { } current || current.Id != pid) return;
             body = current;
             MarkConnectionLost();
         }
@@ -347,11 +458,12 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
         _status = "切断されました";
     }
 
-    private void OnOutput(CaptureSource source, string text)
+    private void OnOutput(long epoch, CaptureSource source, string text)
     {
         lock (_gate)
         {
-            if (!_active || _paused || _connectionLost || _body?.Id != source.ProcessId || _profile is null) return;
+            if (_connectionEpoch != epoch || !_active || _paused || _connectionLost || _body?.Id != source.ProcessId
+                || _profile is null || (!_preview && _recordTargets is not null && ActiveRecordId is null)) return;
             _received++;
             var receivedAt = DateTimeOffset.UtcNow;
             if (_candidates.ContainsKey(source.Key) || _candidates.Count < 256)
@@ -426,9 +538,9 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
         lock (_gate)
         {
             RequireFormalConnection();
-            if (_rangeStart is null || _lastBodyPosition is null || _profile is null) throw new InvalidOperationException("区間の開始を指定してください。");
+            if (_rangeStart is null || _lastBodyPosition is null || ActiveRecordId is not { } recordId) throw new InvalidOperationException("区間の開始を指定してください。");
             if (_rangeStart.CompareTo(_lastBodyPosition) >= 0) throw new InvalidOperationException("開始後の本文がまだ届いていません。");
-            var selection = new CaptureRangeSelection(_profile.Id, _rangeStart, _lastBodyPosition);
+            var selection = new CaptureRangeSelection(recordId, _rangeStart, _lastBodyPosition);
             _rangeStart = null;
             _operationVersion++;
             return selection;
@@ -485,7 +597,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
         StateChanged?.Invoke();
     }
 
-    private bool HasFormalConnection => _active && !_finishing && _connected && !_preview && _session is not null;
+    private bool HasFormalConnection => _active && !_finishing && _connected && !_preview && _session is not null && ActiveRecordId is not null;
 
     private void RequireFormalConnection()
     {
@@ -542,7 +654,7 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
                 _currentSelections[selectedSource.Key] = (match.Role, match.LabelId);
             }
             RefreshCandidates(rules);
-            if (_active && !_preview && !_paused && _session is { } session)
+            if (HasFormalConnection && !_paused && _session is { } session)
                 foreach (var received in _buffer.Where(x => x.ReceivedAt >= DateTimeOffset.UtcNow.AddSeconds(-30)))
                 {
                     var (role, label) = Selection(received.Source, rules);
@@ -623,13 +735,17 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
 
     public Task FinishAsync() => RunOperationAsync(() => FinishCoreAsync());
 
-    internal async Task FinishCoreAsync(Process? expectedBody = null, bool reportFailure = false)
+    internal async Task<bool> FinishCoreAsync(Process? expectedBody = null, bool reportFailure = false, bool requireDrain = false)
     {
         Process? body; long? session;
         lock (_gate)
         {
-            if (!_active || (expectedBody is not null && _body != expectedBody)) return;
+            if (!_active || (expectedBody is not null && _body != expectedBody)) return false;
             _operationVersion++;
+            _connectionEpoch++;
+            if (_connectionOutput is not null) _host.Output -= _connectionOutput;
+            if (_connectionChanged is not null) _host.ConnectionChanged -= _connectionChanged;
+            _connectionOutput = null; _connectionChanged = null;
             _active = false; _finishing = true; _connected = false; _needsProcess = true; _preview = false; _paused = false;
             _rangeStart = null;
             body = _body; _body = null; session = _session;
@@ -639,12 +755,17 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
         }
         StateChanged?.Invoke();
         var failed = false;
+        var drained = false;
         try
         {
             if (body is not null)
             {
                 body.Exited -= OnBodyExited;
-                try { _host.Detach(body.Id); }
+                try
+                {
+                    if (requireDrain) drained = await _host.DetachAndDrainAsync(body.Id);
+                    else _host.Detach(body.Id);
+                }
                 catch (Exception ex)
                 {
                     failed = true;
@@ -660,16 +781,25 @@ public sealed class ScenarioCaptureService : IAsyncDisposable
             }
         }
         catch (Exception ex) { failed = true; _logger.LogError(ex, "Capture finish failed. session={Session}", session); }
-        finally { lock (_gate) _finishing = false; }
+        finally
+        {
+            lock (_gate)
+            {
+                if (_recordTargets is not null) _session = null;
+                _finishing = false;
+            }
+            StateChanged?.Invoke();
+        }
         if (failed && reportFailure) throw new InvalidOperationException("取得は停止しましたが、終了処理を完了できませんでした。PCで状態を確認してください。");
+        return drained && !failed;
     }
 
     public async ValueTask DisposeAsync()
     {
-        await FinishAsync();
-        _host.Output -= OnOutput; _host.ConnectionChanged -= OnConnection;
-        _stop.Cancel(); _writes.Writer.TryComplete();
-        await Task.WhenAll(_writerTask, _resolverTask);
+        _stop.Cancel();
+        await RunOperationAsync(async () => { await FinishCoreAsync(); await ClearPlayTargetCoreAsync(); });
+        _writes.Writer.TryComplete();
+        await Task.WhenAll(_writerTask, _resolverTask, _targetMonitorTask);
         _stop.Dispose();
     }
 }

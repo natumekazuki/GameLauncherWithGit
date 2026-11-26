@@ -7,4 +7,5 @@ public sealed record LaunchResult(
 {
 	/// <summary>Whether a follow-up step failed after the game successfully started.</summary>
 	internal bool HasWarnings { get; init; }
+	internal System.Diagnostics.Process? StartedProcess { get; init; }
 }

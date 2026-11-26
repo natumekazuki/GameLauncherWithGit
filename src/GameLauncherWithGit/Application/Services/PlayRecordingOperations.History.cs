@@ -32,7 +32,7 @@ public sealed partial class PlayRecordingOperations
             ?? throw new InvalidOperationException("選択した位置の本文が見つかりません。記録を読み込み直してください。");
 
     public Task<IReadOnlyList<CaptureLabel>> GetLabelsAsync(string gameId, PlayRecordingTarget expected) =>
-        ForGameAsync(gameId, expected, () => Store.GetCaptureLabelsAsync(expected.ProfileId));
+        ForGameAsync(gameId, expected, async () => await Store.GetCaptureLabelsAsync((await RequireProfileAsync(gameId)).Id));
 
     public Task<IReadOnlyList<string>> GetSpeakersAsync(string gameId, PlayRecordingTarget expected) =>
         ForGameAsync(gameId, expected, () => Store.GetGameCaptureSpeakersAsync(expected.ProfileId));
