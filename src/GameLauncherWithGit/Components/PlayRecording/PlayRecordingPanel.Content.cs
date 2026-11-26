@@ -57,15 +57,14 @@ public partial class PlayRecordingPanel
         _nextBefore = null;
     }
 
-    private Task ShowLatestAsync() => ChangeTextViewAsync(true, null);
-    private Task ShowHistoryAsync() => ChangeTextViewAsync(false, null);
     private Task OpenRangeAsync(DisplayTarget target, long rangeId) => ReadForDisplayedTargetAsync(target, async () =>
     {
         await OpenTextViewAsync(false, rangeId);
         FocusAfterRender(FocusTarget.Text);
     });
 
-    private Task ChangeTextViewAsync(bool latest, long? rangeId) => RunForegroundAsync(() => OpenTextViewAsync(latest, rangeId));
+    private Task ChangeTextViewAsync(DisplayTarget target, bool latest) =>
+        ReadForDisplayedTargetAsync(target, () => OpenTextViewAsync(latest, null));
 
     private async Task OpenTextViewAsync(bool latest, long? rangeId)
     {
@@ -80,12 +79,7 @@ public partial class PlayRecordingPanel
         await LoadTextAsync();
     }
 
-    private Task RefreshTextAsync() => RunForegroundAsync(LoadTextAsync);
-    private Task RefreshRangesAsync() => RunForegroundAsync(LoadRangesAsync);
-    private Task RefreshPathsAsync() => RunForegroundAsync(LoadPathsAsync);
-    private Task RefreshScenesAsync() => RunForegroundAsync(LoadScenesAsync);
-
-    private Task PageTextAsync(int direction) => RunForegroundAsync(async () =>
+    private Task PageTextAsync(DisplayTarget target, int direction) => ReadForDisplayedTargetAsync(target, async () =>
     {
         if (direction > 0 && _nextBefore is { } older) _olderPages.Add(older);
         else if (direction < 0 && _olderPages.Count > 0) _olderPages.RemoveAt(_olderPages.Count - 1);
@@ -171,12 +165,10 @@ public partial class PlayRecordingPanel
         return LoadGalleryImageAsync();
     }
 
-    private Task ReloadGalleryAsync() => RunForegroundAsync(() => LoadGalleryImageAsync());
-
     private bool CanPageGallery(int direction) =>
         _galleryImages is { } images && _galleryIndex + direction >= 0 && _galleryIndex + direction < images.Count;
 
-    private Task PageGalleryAsync(int direction) => RunForegroundAsync(async () =>
+    private Task PageGalleryAsync(DisplayTarget target, int direction) => ReadForDisplayedTargetAsync(target, async () =>
     {
         if (!CanPageGallery(direction)) return;
         _preferredGalleryImageId = null;
