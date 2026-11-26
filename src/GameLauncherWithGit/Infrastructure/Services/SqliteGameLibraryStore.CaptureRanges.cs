@@ -53,10 +53,9 @@ public sealed partial class SqliteGameLibraryStore
         }).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
     }
 
-    private static async Task WriteCaptureTagsAsync(SqliteConnection connection, SqliteTransaction transaction, long rangeId, string[] tags)
+    private static async Task WriteCaptureTagsAsync(SqliteConnection connection, SqliteTransaction transaction,
+        long recordId, long rangeId, string[] tags)
     {
-        await using var owner = CaptureCommand(connection, transaction, "SELECT CaptureGameId FROM CaptureRanges WHERE Id=$id", ("$id", rangeId));
-        var game = (long)(await owner.ExecuteScalarAsync())!;
         var existing = new List<string>();
         await using (var query = CaptureCommand(connection, transaction, """
             SELECT g.Name FROM CaptureRangeTags t JOIN ScenarioGameTags g ON g.Id=t.TagId WHERE t.RangeId=$id
@@ -66,13 +65,18 @@ public sealed partial class SqliteGameLibraryStore
         if (existing.Order(StringComparer.Ordinal).SequenceEqual(tags, StringComparer.Ordinal)) return;
         await using var delete = CaptureCommand(connection, transaction, "DELETE FROM CaptureRangeTags WHERE RangeId=$id", ("$id", rangeId));
         await delete.ExecuteNonQueryAsync();
+        var profileId = await ProfileForRecordAsync(connection, transaction, recordId);
+        var definitionsChanged = false;
         foreach (var tag in tags)
         {
-            var resolved = await GetOrCreateSceneTagAsync(connection, transaction, game, tag);
+            var resolved = await GetOrCreateSceneTagAsync(connection, transaction, profileId, tag);
+            definitionsChanged |= resolved.Created;
             await using var insert = CaptureCommand(connection, transaction,
                 "INSERT INTO CaptureRangeTags(RangeId,TagId) VALUES($id,$tag)", ("$id", rangeId), ("$tag", resolved.Id));
             await insert.ExecuteNonQueryAsync();
         }
+        if (definitionsChanged)
+            await BumpSharedTagRevisionAsync(connection, transaction, profileId, recordId);
     }
 
     public async Task<long> SaveCaptureRangeAsync(long profileId, string name, CapturePosition start, CapturePosition end, IReadOnlyCollection<string>? tags = null)
@@ -111,7 +115,7 @@ public sealed partial class SqliteGameLibraryStore
             """, ("$game", profileId), ("$name", name), ("$ss", start.SessionId), ("$sq", start.Sequence), ("$so", start.Offset),
             ("$es", end.SessionId), ("$eq", end.Sequence), ("$eo", end.Offset));
         var id = (long)(await save.ExecuteScalarAsync())!;
-        await WriteCaptureTagsAsync(connection, transaction, id, normalizedTags);
+        await WriteCaptureTagsAsync(connection, transaction, profileId, id, normalizedTags);
         await transaction.CommitAsync();
         return id;
     }

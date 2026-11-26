@@ -94,9 +94,10 @@ public sealed partial class SqliteGameLibraryStore
         SqliteTransaction transaction, long captureGameId, CancellationToken cancellationToken = default)
     {
         var version = await ReadScenarioMaterialVersionAsync(connection, transaction, captureGameId, cancellationToken);
+        var profileId = await ProfileForRecordAsync(connection, transaction, captureGameId, cancellationToken);
         var tags = new List<ScenarioGameTag>();
         await using (var query = CaptureCommand(connection, transaction,
-            "SELECT Id,Name FROM ScenarioGameTags WHERE CaptureGameId=$game ORDER BY Name COLLATE BINARY,Id", ("$game", captureGameId)))
+            "SELECT Id,Name FROM ScenarioGameTags WHERE CaptureGameId=$game ORDER BY Name COLLATE BINARY,Id", ("$game", profileId)))
         await using (var reader = await query.ExecuteReaderAsync(cancellationToken))
             while (await reader.ReadAsync(cancellationToken)) tags.Add(new(reader.GetInt64(0), reader.GetString(1)));
         var rangeTags = new List<ScenarioRangeTagLink>();
@@ -192,7 +193,11 @@ public sealed partial class SqliteGameLibraryStore
         if (displayed is not null)
             RequireDisplayedScene(await ReadScenarioSceneFlowAsync(connection, transaction, game, cancellationToken), displayed);
         foreach (var id in edit.RangeIds) await RequireSceneOwnerAsync(connection, transaction, game, "CaptureRanges", id, cancellationToken);
-        foreach (var id in edit.TagIds) await RequireSceneOwnerAsync(connection, transaction, game, "ScenarioGameTags", id, cancellationToken);
+        if (edit.TagIds.Count > 0)
+        {
+            var profileId = await ProfileForRecordAsync(connection, transaction, game, cancellationToken);
+            foreach (var id in edit.TagIds) await RequireSceneOwnerAsync(connection, transaction, profileId, "ScenarioGameTags", id, cancellationToken);
+        }
         if (sceneId is not null) await RequireSceneOwnerAsync(connection, transaction, game, "ScenarioScenes", sceneId.Value, cancellationToken);
         var changed = false;
         if (sceneId is null)
@@ -289,13 +294,13 @@ public sealed partial class SqliteGameLibraryStore
     }
 
     private static async Task<(long Id, bool Created)> GetOrCreateSceneTagAsync(SqliteConnection connection,
-        SqliteTransaction transaction, long game, string name, CancellationToken cancellationToken = default)
+        SqliteTransaction transaction, long profileId, string name, CancellationToken cancellationToken = default)
     {
         await using var insert = CaptureCommand(connection, transaction,
-            "INSERT INTO ScenarioGameTags(CaptureGameId,Name) VALUES($game,$name) ON CONFLICT DO NOTHING", ("$game", game), ("$name", name));
+            "INSERT INTO ScenarioGameTags(CaptureGameId,Name) VALUES($game,$name) ON CONFLICT DO NOTHING", ("$game", profileId), ("$name", name));
         var created = await insert.ExecuteNonQueryAsync(cancellationToken) > 0;
         await using var query = CaptureCommand(connection, transaction,
-            "SELECT Id FROM ScenarioGameTags WHERE CaptureGameId=$game AND Name=$name", ("$game", game), ("$name", name));
+            "SELECT Id FROM ScenarioGameTags WHERE CaptureGameId=$game AND Name=$name", ("$game", profileId), ("$name", name));
         return ((long)(await query.ExecuteScalarAsync(cancellationToken))!, created);
     }
 
@@ -306,8 +311,9 @@ public sealed partial class SqliteGameLibraryStore
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = connection.BeginTransaction();
         await ReadScenarioMaterialVersionAsync(connection, transaction, captureGameId, cancellationToken);
-        var result = await GetOrCreateSceneTagAsync(connection, transaction, captureGameId, name, cancellationToken);
-        if (result.Created) await BumpScenarioMaterialRevisionAsync(connection, transaction, captureGameId);
+        var profileId = await ProfileForRecordAsync(connection, transaction, captureGameId, cancellationToken);
+        var result = await GetOrCreateSceneTagAsync(connection, transaction, profileId, name, cancellationToken);
+        if (result.Created) await BumpSharedTagRevisionAsync(connection, transaction, profileId, cancellationToken: cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return result.Id;
     }
@@ -318,14 +324,16 @@ public sealed partial class SqliteGameLibraryStore
         await EnsureInitializedAsync(cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = connection.BeginTransaction();
-        await RequireSceneOwnerAsync(connection, transaction, captureGameId, "ScenarioGameTags", tagId, cancellationToken);
+        var profileId = await ProfileForRecordAsync(connection, transaction, captureGameId, cancellationToken);
+        await RequireSceneOwnerAsync(connection, transaction, profileId, "ScenarioGameTags", tagId, cancellationToken);
         await using (var duplicate = CaptureCommand(connection, transaction,
             "SELECT EXISTS(SELECT 1 FROM ScenarioGameTags WHERE CaptureGameId=$game AND Name=$name AND Id<>$id)",
-            ("$game", captureGameId), ("$name", name), ("$id", tagId)))
+            ("$game", profileId), ("$name", name), ("$id", tagId)))
             if ((long)(await duplicate.ExecuteScalarAsync(cancellationToken))! != 0) throw new ArgumentException("同じ名前のタグが登録されています。");
         await using var update = CaptureCommand(connection, transaction,
             "UPDATE ScenarioGameTags SET Name=$name WHERE Id=$id AND Name IS NOT $name", ("$name", name), ("$id", tagId));
-        if (await update.ExecuteNonQueryAsync(cancellationToken) > 0) await BumpScenarioMaterialRevisionAsync(connection, transaction, captureGameId);
+        if (await update.ExecuteNonQueryAsync(cancellationToken) > 0)
+            await BumpSharedTagRevisionAsync(connection, transaction, profileId, cancellationToken: cancellationToken);
         await transaction.CommitAsync(cancellationToken);
     }
 
@@ -334,13 +342,36 @@ public sealed partial class SqliteGameLibraryStore
         await EnsureInitializedAsync(cancellationToken);
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var transaction = connection.BeginTransaction();
-        await RequireSceneOwnerAsync(connection, transaction, captureGameId, "ScenarioGameTags", tagId, cancellationToken);
+        var profileId = await ProfileForRecordAsync(connection, transaction, captureGameId, cancellationToken);
+        await RequireSceneOwnerAsync(connection, transaction, profileId, "ScenarioGameTags", tagId, cancellationToken);
+        await using var otherLinks = CaptureCommand(connection, transaction, """
+            SELECT EXISTS(SELECT 1 FROM CaptureRangeTags t JOIN CaptureRanges r ON r.Id=t.RangeId
+                          WHERE t.TagId=$id AND r.CaptureGameId<>$record)
+                OR EXISTS(SELECT 1 FROM ScenarioSceneTags t JOIN ScenarioScenes s ON s.Id=t.SceneId
+                          WHERE t.TagId=$id AND s.CaptureGameId<>$record)
+            """, ("$id", tagId), ("$record", captureGameId));
+        if ((long)(await otherLinks.ExecuteScalarAsync(cancellationToken))! != 0)
+            throw new InvalidOperationException("別の記録範囲で使われている作品タグは削除できません。");
         await using var rangeLinks = CaptureCommand(connection, transaction,
             "SELECT EXISTS(SELECT 1 FROM CaptureRangeTags WHERE TagId=$id)", ("$id", tagId));
         var revisionUpdatedByRangeLinks = (long)(await rangeLinks.ExecuteScalarAsync(cancellationToken))! != 0;
         await using var delete = CaptureCommand(connection, transaction, "DELETE FROM ScenarioGameTags WHERE Id=$id", ("$id", tagId));
         await delete.ExecuteNonQueryAsync(cancellationToken);
-        if (!revisionUpdatedByRangeLinks) await BumpScenarioMaterialRevisionAsync(connection, transaction, captureGameId);
+        await BumpSharedTagRevisionAsync(connection, transaction, profileId,
+            revisionUpdatedByRangeLinks ? captureGameId : null, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    // Unfiltered material includes even unused tags. A definition change invalidates every scope of this profile,
+    // while assignment-only changes stay local. Skip a record already advanced by the range-link triggers.
+    private static async Task BumpSharedTagRevisionAsync(SqliteConnection connection, SqliteTransaction transaction,
+        long profileId, long? alreadyUpdatedRecord = null, CancellationToken cancellationToken = default)
+    {
+        await using var update = CaptureCommand(connection, transaction, """
+            UPDATE ScenarioMaterialState SET Revision=Revision+1
+            WHERE (CaptureGameId=$profile OR CaptureGameId IN (SELECT RecordId FROM ScenarioBranchHistory WHERE ProfileId=$profile))
+                AND CaptureGameId IS NOT $alreadyUpdated
+            """, ("$profile", profileId), ("$alreadyUpdated", alreadyUpdatedRecord));
+        await update.ExecuteNonQueryAsync(cancellationToken);
     }
 }

@@ -17,6 +17,12 @@ public sealed partial class SqliteGameLibraryStore
                 CurrentGameId TEXT NULL UNIQUE REFERENCES Games(Id) ON DELETE SET NULL,
                 Title TEXT NOT NULL, Enabled INTEGER NOT NULL DEFAULT 1,
                 BodyExecutablePath TEXT NULL, SettingsJson TEXT NOT NULL DEFAULT '{}');
+            CREATE TABLE IF NOT EXISTS ScenarioBranchHistory (
+                RecordId INTEGER PRIMARY KEY REFERENCES CaptureGames(Id),
+                ProfileId INTEGER NOT NULL REFERENCES CaptureGames(Id),
+                RepositoryKey TEXT NOT NULL COLLATE BINARY,
+                BranchRef TEXT NOT NULL COLLATE BINARY,
+                CHECK(RecordId<>ProfileId), UNIQUE(ProfileId,RepositoryKey,BranchRef));
             CREATE TABLE IF NOT EXISTS CaptureSessions (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
                 CaptureGameId INTEGER NOT NULL REFERENCES CaptureGames(Id),
@@ -127,8 +133,10 @@ public sealed partial class SqliteGameLibraryStore
     {
         await EnsureInitializedAsync(default);
         await using var connection = await OpenConnectionAsync(default);
-        await using var command = CaptureCommand(connection, null,
-            "SELECT Id,CurrentGameId,Title,Enabled,BodyExecutablePath,SettingsJson FROM CaptureGames ORDER BY Title,Id");
+        await using var command = CaptureCommand(connection, null, """
+            SELECT Id,CurrentGameId,Title,Enabled,BodyExecutablePath,SettingsJson FROM CaptureGames g
+            WHERE NOT EXISTS(SELECT 1 FROM ScenarioBranchHistory WHERE RecordId=g.Id) ORDER BY Title,Id
+            """);
         var result = new List<CaptureProfile>();
         await using var reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync()) result.Add(ReadCaptureProfile(reader));
@@ -152,6 +160,7 @@ public sealed partial class SqliteGameLibraryStore
         await using var connection = await OpenConnectionAsync(default);
         await using var command = CaptureCommand(connection, null, """
             UPDATE CaptureGames SET Enabled=$enabled,BodyExecutablePath=$path,SettingsJson=$rules WHERE Id=$id
+            AND NOT EXISTS(SELECT 1 FROM ScenarioBranchHistory WHERE RecordId=$id)
             """, ("$enabled", profile.Enabled), ("$path", profile.BodyExecutablePath),
             ("$rules", JsonSerializer.Serialize(profile.Rules, JsonOptions)), ("$id", profile.Id));
         if (await command.ExecuteNonQueryAsync() != 1) throw new InvalidOperationException("抽出設定が見つかりません。");
@@ -164,8 +173,9 @@ public sealed partial class SqliteGameLibraryStore
         return await ReadCaptureLabelsAsync(connection, null, profileId);
     }
 
-    private static async Task<List<CaptureLabel>> ReadCaptureLabelsAsync(SqliteConnection connection, SqliteTransaction? transaction, long profileId)
+    private static async Task<List<CaptureLabel>> ReadCaptureLabelsAsync(SqliteConnection connection, SqliteTransaction? transaction, long recordId)
     {
+        var profileId = await ProfileForRecordAsync(connection, transaction, recordId);
         await using var command = CaptureCommand(connection, transaction,
             "SELECT Id,Name,Kind FROM CaptureLabels WHERE CaptureGameId=$id ORDER BY Id", ("$id", profileId));
         await using var reader = await command.ExecuteReaderAsync();

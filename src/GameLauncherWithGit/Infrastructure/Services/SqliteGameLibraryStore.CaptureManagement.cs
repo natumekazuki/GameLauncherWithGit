@@ -118,7 +118,7 @@ public sealed partial class SqliteGameLibraryStore
         await using var command = CaptureCommand(connection, transaction,
             "UPDATE CaptureRanges SET Name=$name WHERE Id=$id AND Name IS NOT $name", ("$name", name), ("$id", rangeId));
         if (currentName != name) await command.ExecuteNonQueryAsync();
-        await WriteCaptureTagsAsync(connection, transaction, rangeId, normalizedTags);
+        await WriteCaptureTagsAsync(connection, transaction, profileId, rangeId, normalizedTags);
         await transaction.CommitAsync();
     }
 

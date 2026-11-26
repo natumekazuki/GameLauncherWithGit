@@ -317,7 +317,8 @@ public sealed partial class SqliteGameLibraryStore
         await using var connection = await OpenConnectionAsync(cancellationToken);
         // Read all selected data in one snapshot; the file gate retains its images while copying.
         await using var transaction = connection.BeginTransaction(deferred: true);
-        await using var gameQuery = CaptureCommand(connection, transaction, "SELECT Title FROM CaptureGames WHERE Id=$game", ("$game", captureGameId));
+        var profileId = await ProfileForRecordAsync(connection, transaction, captureGameId, cancellationToken);
+        await using var gameQuery = CaptureCommand(connection, transaction, "SELECT Title FROM CaptureGames WHERE Id=$game", ("$game", profileId));
         var title = await gameQuery.ExecuteScalarAsync(cancellationToken) as string ?? throw new ArgumentException("ゲームの履歴が見つかりません。");
         var ranges = await ReadCaptureRangesAsync(connection, transaction, captureGameId);
         var items = await ReadCaptureExportItemsAsync(connection, transaction, captureGameId, selection, ranges);

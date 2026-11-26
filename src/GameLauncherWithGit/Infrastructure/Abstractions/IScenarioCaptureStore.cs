@@ -8,11 +8,12 @@ public interface IScenarioCaptureStore
     Task<IReadOnlyList<CaptureProfile>> GetCaptureProfilesAsync();
     Task<CaptureProfile?> FindCaptureProfileAsync(string gameId);
     Task SaveCaptureProfileAsync(CaptureProfile profile);
+    /// <summary>Returns the profile's shared classification definitions for a profile or record ID.</summary>
     Task<IReadOnlyList<CaptureLabel>> GetCaptureLabelsAsync(long profileId);
     Task<long> BeginCaptureSessionAsync(long profileId);
     Task EndCaptureSessionAsync(long sessionId);
     Task<IReadOnlyList<CaptureSession>> GetCaptureSessionsAsync(long profileId);
-    /// <summary>ゲーム全体の有効話者を重複なし・名称順で返す。未確定と空白のみの値は除く。</summary>
+    /// <summary>指定された記録範囲の有効話者を重複なし・名称順で返す。別の記録範囲、未確定、空白のみの値は除く。</summary>
     Task<IReadOnlyList<string>> GetGameCaptureSpeakersAsync(long profileId);
     Task<IReadOnlyList<CaptureTextItem>> GetGameCaptureItemsAsync(long profileId, int limit = 200, int offset = 0, long? labelId = null, bool unclassifiedOnly = false, bool latest = false, long? rangeId = null, CaptureKind? kind = null, string? textSearch = null, string? speakerSearch = null, CapturePosition? before = null);
     Task<IReadOnlyList<CaptureDeletionTarget>> GetCaptureDeletionTargetsAsync(long profileId, IReadOnlyCollection<long> itemIds);

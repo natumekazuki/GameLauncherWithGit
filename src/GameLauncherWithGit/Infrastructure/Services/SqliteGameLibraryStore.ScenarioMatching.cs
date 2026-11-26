@@ -21,7 +21,8 @@ public sealed partial class SqliteGameLibraryStore
 
     private static async Task EnsureScenarioMatchingSchemaAsync(SqliteConnection connection, CancellationToken cancellationToken)
     {
-        await using var command = CaptureCommand(connection, null, """
+        await using var transaction = connection.BeginTransaction();
+        await using var command = CaptureCommand(connection, transaction, """
             CREATE TABLE IF NOT EXISTS ScenarioMaterialState (
                 CaptureGameId INTEGER PRIMARY KEY REFERENCES CaptureGames(Id),
                 Revision INTEGER NOT NULL DEFAULT 0, MatchingRevision INTEGER NOT NULL DEFAULT 0,
@@ -78,9 +79,21 @@ public sealed partial class SqliteGameLibraryStore
             WHEN OLD.Title IS NOT NEW.Title OR OLD.CurrentGameId IS NOT NEW.CurrentGameId BEGIN
                 UPDATE ScenarioMaterialState SET Revision=Revision+1 WHERE CaptureGameId=NEW.Id;
             END;
-            CREATE TRIGGER IF NOT EXISTS ScenarioMaterial_LabelUpdate AFTER UPDATE ON CaptureLabels
+            CREATE TRIGGER IF NOT EXISTS ScenarioMaterial_SharedTitleUpdate AFTER UPDATE ON CaptureGames
+            WHEN OLD.Title IS NOT NEW.Title BEGIN
+                UPDATE ScenarioMaterialState SET Revision=Revision+1
+                WHERE CaptureGameId IN (SELECT RecordId FROM ScenarioBranchHistory WHERE ProfileId=NEW.Id);
+            END;
+            DROP TRIGGER IF EXISTS ScenarioMaterial_LabelUpdate;
+            CREATE TRIGGER IF NOT EXISTS ScenarioMaterial_SharedLabelUpdate AFTER UPDATE ON CaptureLabels
             WHEN OLD.Name IS NOT NEW.Name OR OLD.Kind IS NOT NEW.Kind BEGIN
-                UPDATE ScenarioMaterialState SET Revision=Revision+1,Dirty=1 WHERE CaptureGameId=NEW.CaptureGameId;
+                UPDATE ScenarioMaterialState SET Revision=Revision+1,Dirty=CASE WHEN OLD.Kind IS NOT NEW.Kind THEN 1 ELSE Dirty END
+                WHERE CaptureGameId IN (
+                    SELECT s.CaptureGameId FROM CaptureSessions s JOIN CaptureItems i ON i.SessionId=s.Id
+                    WHERE (s.CaptureGameId=NEW.CaptureGameId OR s.CaptureGameId IN
+                        (SELECT RecordId FROM ScenarioBranchHistory WHERE ProfileId=NEW.CaptureGameId))
+                    AND CASE WHEN i.HasManualLabel=1 THEN i.ManualLabelId ELSE i.AutoLabelId END=NEW.Id
+                );
             END;
             """);
         await command.ExecuteNonQueryAsync(cancellationToken);
@@ -94,7 +107,7 @@ public sealed partial class SqliteGameLibraryStore
             {
                 var row = action == "DELETE" ? "OLD" : "NEW";
                 var timing = action == "DELETE" ? "BEFORE" : "AFTER";
-                await using var trigger = CaptureCommand(connection, null, $"""
+                await using var trigger = CaptureCommand(connection, transaction, $"""
                     CREATE TRIGGER IF NOT EXISTS ScenarioMaterial_{table}_{action} {timing} {action} ON {table} BEGIN
                         UPDATE ScenarioMaterialState SET Revision=Revision+1 WHERE CaptureGameId={owner.Replace("{row}", row)};
                     END;
@@ -102,6 +115,7 @@ public sealed partial class SqliteGameLibraryStore
                 await trigger.ExecuteNonQueryAsync(cancellationToken);
             }
         }
+        await transaction.CommitAsync(cancellationToken);
     }
 
     /// <summary>Use inside the transaction that changes flow or other material-only metadata.</summary>
