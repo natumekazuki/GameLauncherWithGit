@@ -1,6 +1,9 @@
 const observers = new WeakMap();
 export function observeFeed(element, owner) {
-    const listener = () => owner.invokeMethodAsync('FeedFollowing', element.scrollHeight - element.scrollTop - element.clientHeight < 40);
+    const listener = () => {
+        const scope = element.dataset.captureScope;
+        if (scope) owner.invokeMethodAsync('FeedFollowing', scope, element.scrollHeight - element.scrollTop - element.clientHeight < 40);
+    };
     element.addEventListener('scroll', listener, { passive: true });
     observers.set(element, listener);
 }
@@ -19,7 +22,7 @@ export function focusEditorContent() {
 }
 let previousFocus;
 let previousBodyStyle;
-export function focusEditor(owner) {
+export function focusEditor(owner, scope) {
     previousFocus = document.activeElement;
     const dialog = document.getElementById('capture-editor');
     if (!dialog) return;
@@ -36,7 +39,7 @@ export function focusEditor(owner) {
         if (event.key === 'Escape') {
             if (dialog.querySelector('.capture-failure-popover:popover-open')) return;
             event.preventDefault();
-            owner.invokeMethodAsync('CloseEditorFromKeyboard');
+            owner.invokeMethodAsync('CloseEditorFromKeyboard', scope);
         }
         if (event.key !== 'Tab') return;
         const elements = controls(), first = elements[0], last = elements.at(-1);

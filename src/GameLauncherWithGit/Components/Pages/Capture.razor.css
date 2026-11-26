@@ -32,6 +32,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .capture-content { min-width:0; }
 .capture-filters { display:grid; grid-template-columns:1fr 1.3fr 1fr; gap:.75rem; margin-bottom:.75rem; }
 .capture-filters-live { grid-template-columns:1fr 1fr; }
+.capture-filters-scoped { grid-template-columns:repeat(4,minmax(0,1fr)); }
 .capture-history-toolbar,.capture-search,.capture-history-actions { display:flex; align-items:center; gap:.5rem; }
 .capture-history-toolbar { margin-bottom:.35rem; gap:1rem; align-items:flex-end; }
 .capture-search { flex:1; min-width:0; align-items:flex-end; }
@@ -191,6 +192,7 @@ input[type=checkbox] { width:1rem; height:1rem; margin:0; accent-color:#85b4ff; 
     .capture-range-active { margin-left:auto; }
     .capture-filters { grid-template-columns:1fr 1fr; }
     .capture-filters:not(.capture-filters-live) .capture-filter:first-child { grid-column:1 / -1; }
+    .capture-filters-scoped .capture-filter:nth-child(2) { grid-column:1 / -1; }
     .capture-tools { gap:.5rem; }
     .capture-tool-group + .capture-tool-group { padding-left:.5rem; }
     .capture-item { padding:.75rem; }

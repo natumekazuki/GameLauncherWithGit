@@ -102,13 +102,16 @@
     }
     @if (_confirmation is { } confirmation)
     {
-        <section class="scene-subdialog scene-confirm" role="alertdialog" aria-modal="true" aria-labelledby="scene-confirm-title" aria-describedby="scene-confirm-impact"><h3 id="scene-confirm-title">@confirmation</h3><p id="scene-confirm-impact">@_confirmationDetail</p><div class="scene-tag-actions"><button class="secondary-button" @onclick="CancelConfirmation" disabled="@_busy">キャンセル</button><button class="launch-button" @onclick="ConfirmAsync" disabled="@_busy">@_confirmationActionLabel</button></div></section>
+        <section class="scene-subdialog scene-confirm" role="alertdialog" aria-modal="true" aria-labelledby="scene-confirm-title" aria-describedby="scene-confirm-scope scene-confirm-impact"><h3 id="scene-confirm-title">@confirmation</h3><p id="scene-confirm-scope">@Title</p><p id="scene-confirm-impact">@_confirmationDetail</p><div class="scene-tag-actions"><button class="secondary-button" @onclick="CancelConfirmation" disabled="@_busy">キャンセル</button><button class="launch-button" @onclick="ConfirmAsync" disabled="@_busy">@_confirmationActionLabel</button></div></section>
     }
     <span class="scene-status" role="status">@(_busy ? "処理中…" : _notice)</span>
 </section></div>
 
 @code {
-    [Parameter] public long CaptureGameId { get; set; }
+    [Parameter] public long ProfileId { get; set; }
+    [Parameter] public long RecordId { get; set; }
+    [Parameter] public Func<Task>? ValidateScope { get; set; }
+    [Parameter, EditorRequired] public Func<Func<Task>, Task> WriteScope { get; set; } = default!;
     [Parameter] public string Title { get; set; } = "";
     [Parameter] public EventCallback Closed { get; set; }
     [Parameter] public EventCallback Changed { get; set; }
@@ -160,15 +163,15 @@
     {
         if (_busy || _disposed) return;
         _busy = true; _error = _notice = null;
-        try { await action(); if (success is not null) _notice = success; }
+        try { if (ValidateScope is not null) await ValidateScope(); await action(); if (success is not null) _notice = success; }
         catch (Exception ex) { _error = ex.Message; }
         finally { _busy = false; }
     }
     private async Task ReloadAsync()
     {
-        _snapshot = await Task.Run(() => SceneStore.GetScenarioSceneFlowAsync(CaptureGameId));
-        _ranges = await Task.Run(() => CaptureStore.GetCaptureRangesAsync(CaptureGameId));
-        _speakers = await Task.Run(() => CaptureStore.GetGameCaptureSpeakersAsync(CaptureGameId));
+        _snapshot = await Task.Run(() => SceneStore.GetScenarioSceneFlowAsync(RecordId));
+        _ranges = await Task.Run(() => CaptureStore.GetCaptureRangesAsync(RecordId));
+        _speakers = await Task.Run(() => CaptureStore.GetGameCaptureSpeakersAsync(RecordId));
         _draft?.RangeIds.IntersectWith(_ranges.Select(r => r.Id));
         _draft?.TagIds.IntersectWith(_snapshot.Tags.Select(t => t.Id));
     }
@@ -207,9 +210,12 @@
         var edit = DraftEdit;
         if (string.IsNullOrWhiteSpace(edit.Title) || !double.IsFinite(edit.X) || !double.IsFinite(edit.Y)) throw new InvalidOperationException("主ラベルと有限の座標を入力してください。");
         var id = _selectedId;
-        if (_isNew) id = await SceneStore.CreateScenarioSceneAsync(CaptureGameId, edit);
-        else if (id is { } existing) await SceneStore.UpdateScenarioSceneAsync(CaptureGameId, existing, edit);
-        else return;
+        await WriteScope(async () =>
+        {
+            if (_isNew) id = await SceneStore.CreateScenarioSceneAsync(RecordId, edit);
+            else if (id is { } existing) await SceneStore.UpdateScenarioSceneAsync(RecordId, existing, edit);
+        });
+        if (id is null) return;
         _selectedId = id; _isNew = _dirty = false; _notice = "場面を保存しました。";
         await ReloadAsync(); await LoadSceneAsync(id); await Changed.InvokeAsync();
     });
@@ -217,16 +223,19 @@
     {
         if (Scenes.FirstOrDefault(scene => scene.Id == _selectedId) is not { } selected) return;
         Confirm($"「{SceneName(selected.Definition)}」を削除しますか？", "この場面と手編集の接続だけを削除します。元の本文・画像・区間・作品タグは残ります。", "場面を削除",
-            () => RunAsync(async () => { await SceneStore.DeleteScenarioSceneAsync(CaptureGameId, selected.Id); await ReloadAsync(); await LoadSceneAsync(Scenes.FirstOrDefault()?.Id); await Changed.InvokeAsync(); }, "場面を削除しました。"));
+            () => RunAsync(async () => { await WriteScope(() => SceneStore.DeleteScenarioSceneAsync(RecordId, selected.Id)); await ReloadAsync(); await LoadSceneAsync(Scenes.FirstOrDefault()?.Id); await Changed.InvokeAsync(); }, "場面を削除しました。"));
     }
-    private Task SetConnectionAsync(long target, bool connected) => RunAsync(async () => { if (_selectedId is not { } id || _dirty || _isNew) return; await SceneStore.SetScenarioSceneConnectionAsync(CaptureGameId, id, target, connected); _notice = "接続を保存しました。"; await ReloadAsync(); await Changed.InvokeAsync(); });
+    private Task SetConnectionAsync(long target, bool connected) => RunAsync(async () => { if (_selectedId is not { } id || _dirty || _isNew) return; await WriteScope(() => SceneStore.SetScenarioSceneConnectionAsync(RecordId, id, target, connected)); _notice = "接続を保存しました。"; await ReloadAsync(); await Changed.InvokeAsync(); });
     private async Task ChangeDraftTagsAsync(string[] names)
     {
         await RunAsync(async () =>
         {
             if (_draft is null) return;
             var ids = new HashSet<long>();
-            foreach (var name in names) { var tag = _snapshot?.Tags.FirstOrDefault(t => t.Name == name); ids.Add(tag?.Id ?? await SceneStore.GetOrCreateScenarioGameTagAsync(CaptureGameId, name)); }
+            await WriteScope(async () =>
+            {
+                foreach (var name in names) { var tag = _snapshot?.Tags.FirstOrDefault(t => t.Name == name); ids.Add(tag?.Id ?? await SceneStore.GetOrCreateScenarioGameTagAsync(ProfileId, name)); }
+            });
             await ReloadAsync(); _draft.TagIds = ids; MarkDirty(); await Changed.InvokeAsync();
         });
     }
@@ -243,12 +252,12 @@
         try
         {
             var selection = new ScenarioArchiveSelection(RangeId: rangeId);
-            var full = (ScenarioFullProjection)await Task.Run(() => MaterialReader.GetScenarioProjectionAsync(CaptureGameId, selection, ScenarioMaterialAccessLevel.Full, stop.Token));
+            var full = (ScenarioFullProjection)await Task.Run(() => MaterialReader.GetScenarioProjectionAsync(RecordId, selection, ScenarioMaterialAccessLevel.Full, stop.Token));
             if (stop.IsCancellationRequested) return;
             _previewTexts = full.Occurrences.Take(3).Select(o => full.Contents.First(c => c.Id == o.ContentId).Text).ToArray();
             if (full.Occurrences.FirstOrDefault(o => o.Images.Count > 0) is { } occurrence)
             {
-                var request = new ScenarioMaterialImageRequest(CaptureGameId, selection, full.Version, full.SelectionVersion, occurrence.Id, occurrence.Images[0].ImageId);
+                var request = new ScenarioMaterialImageRequest(RecordId, selection, full.Version, full.SelectionVersion, occurrence.Id, occurrence.Images[0].ImageId);
                 var bytes = await ScreenshotStore.ReadScenarioImageAsync(ScenarioMaterialAccessLevel.Full, request, stop.Token);
                 if (!stop.IsCancellationRequested) _previewImage = "data:image/png;base64," + Convert.ToBase64String(bytes);
             }
@@ -271,12 +280,12 @@
     private void CloseTags() { _tagManager = false; _error = _notice = null; }
     private void ChangeManagedTag(ChangeEventArgs args) { _managedTagId = long.TryParse(args.Value?.ToString(), out var id) ? id : 0; _tagName = _snapshot?.Tags.FirstOrDefault(t => t.Id == _managedTagId)?.Name ?? ""; }
     private void SelectTagSpeaker(ChangeEventArgs args) => _tagName = args.Value?.ToString() ?? "";
-    private Task SaveTagAsync() => RunAsync(async () => { if (_managedTagId == 0) _managedTagId = await SceneStore.GetOrCreateScenarioGameTagAsync(CaptureGameId, _tagName); else await SceneStore.RenameScenarioGameTagAsync(CaptureGameId, _managedTagId, _tagName); _notice = "作品タグを保存しました。"; await ReloadAsync(); await Changed.InvokeAsync(); });
+    private Task SaveTagAsync() => RunAsync(async () => { await WriteScope(async () => { if (_managedTagId == 0) _managedTagId = await SceneStore.GetOrCreateScenarioGameTagAsync(ProfileId, _tagName); else await SceneStore.RenameScenarioGameTagAsync(ProfileId, _managedTagId, _tagName); }); _notice = "作品タグを保存しました。"; await ReloadAsync(); await Changed.InvokeAsync(); });
     private void ConfirmDeleteTag()
     {
         if (_snapshot?.Tags.FirstOrDefault(tag => tag.Id == _managedTagId) is not { } selected) return;
         Confirm($"作品タグ「{selected.Name}」を削除しますか？", "作品内の場面・区間とのタグ関連だけを外します。本文・画像・場面・区間は削除しません。", "タグを削除",
-            () => RunAsync(async () => { await SceneStore.DeleteScenarioGameTagAsync(CaptureGameId, selected.Id); _managedTagId = 0; _tagName = ""; _notice = "作品タグを削除しました。"; await ReloadAsync(); await Changed.InvokeAsync(); }));
+            () => RunAsync(async () => { await WriteScope(() => SceneStore.DeleteScenarioGameTagAsync(RecordId, selected.Id)); _managedTagId = 0; _tagName = ""; _notice = "作品タグを削除しました。"; await ReloadAsync(); await Changed.InvokeAsync(); }));
     }
     private sealed class SceneDraft(ScenarioSceneEdit edit)
     {

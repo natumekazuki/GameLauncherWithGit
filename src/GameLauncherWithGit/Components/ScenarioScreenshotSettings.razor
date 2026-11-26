@@ -47,6 +47,7 @@
 
 @code {
     private bool _ctrl, _alt, _shift, _busy, _hotkeyError;
+    [Parameter, EditorRequired] public Func<CaptureWindow?, Task> SelectCaptureWindow { get; set; } = default!;
     private uint _key;
     private string? _error;
     private IReadOnlyList<CaptureWindow> _windows = [];
@@ -64,11 +65,14 @@
         try { _windows = Screenshots.GetWindows(); _error = null; }
         catch (Exception ex) { _error = ex.Message; }
     }
-    private void SelectWindow(CaptureWindow? window)
+    private async Task SelectWindow(CaptureWindow? window)
     {
+        if (_busy) return;
+        _busy = true;
         _hotkeyError = false;
-        try { Screenshots.SelectWindow(window); _error = null; }
+        try { await SelectCaptureWindow(window); _error = null; }
         catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
     }
     private async Task SaveHotkeyAsync()
     {
