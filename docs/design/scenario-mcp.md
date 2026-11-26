@@ -22,6 +22,12 @@ SelectionVersion は順序付き `occurrenceIds`、`rangeIds`、`sceneIds`、`ta
 
 resource template `scenario://material/{gameId}/{revision}/{matchingRevision}` は全体 selection の資料、`scenario://item/{gameId}/{revision}/{matchingRevision}/{collection}/{id}` はその中の対象を返す。filtered selection は tools の selection 引数を使用する。
 
+### ブランチ別の記録を読む
+
+`scenario_games` は従来通り作品の ID を返す。`scenario_history_scopes` にその ID を渡すと、保存済みの記録範囲ごとの `captureGameId` と論理ブランチの `branchRef` を返す。リポジトリのパス、作品名、本文は返さない。関連リポジトリ未設定の通常記録と、枝の出典を持たない従来の記録の `branchRef` は `null` で、元の ID は変わらない。この呼び出しは記録範囲を作成しない。
+
+返された `captureGameId` を既存の snapshot/出力ツールの `gameId` として渡す。版、出現位置、画像はその一つの記録範囲に属し、別の枝や従来の記録へ付け替えられない。ID の形式、リソース URI、二つの認証レベルは変更しない。
+
 ## 画像境界
 
 画像本体は Full のみ。作品・selection・資料版・selection版・出現 ID・画像 ID の組で取得し、実 store の画像 gate 内で現在の版、選択内出現、その出現への画像関連を再確認する。別作品・範囲外・無関係画像・旧版は返さない。ファイル path は公開せず、thumbnail 専用や raw ファイル取得の迂回口は設けない。

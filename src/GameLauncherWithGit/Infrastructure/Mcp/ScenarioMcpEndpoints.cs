@@ -28,6 +28,22 @@ public sealed class ScenarioMcpEndpoints(IHttpContextAccessor context, IScenario
         { captureGameId = x.Id.ToString(CultureInfo.InvariantCulture) }), Json);
     });
 
+    [McpServerTool(Name = "scenario_history_scopes", ReadOnly = true, OpenWorld = false)]
+    [Description("List stored record-scope IDs for a capture game ID from scenario_games. Use a returned ID with scenario_snapshot to read one scope. Does not return repository paths.")]
+    public Task<string> HistoryScopes(string gameId) => Safe(async () =>
+    {
+        _ = Level;
+        var profileId = ScenarioMcpInputs.Id(gameId);
+        if (captures is not IScenarioHistoryStore history)
+            throw new McpException("Scenario history scopes are unavailable.");
+        var scopes = await history.GetScenarioHistoryScopesAsync(profileId);
+        return JsonSerializer.Serialize(scopes.Select(scope => new
+        {
+            captureGameId = scope.RecordId.ToString(CultureInfo.InvariantCulture),
+            branchRef = scope.BranchRef
+        }), Json);
+    });
+
     [McpServerTool(Name = "scenario_snapshot", ReadOnly = true, OpenWorld = false)]
     [Description("Read the selected scenario material at the API key's level. Returns stable IDs, material version and selection version. Full keys also receive text and speakers.")]
     public Task<string> Snapshot(string gameId, ScenarioMcpSelection? selection = null,

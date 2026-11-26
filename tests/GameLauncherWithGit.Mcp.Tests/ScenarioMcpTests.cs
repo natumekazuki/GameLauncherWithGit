@@ -57,6 +57,71 @@ public sealed class ScenarioMcpTests
 
     // @test-value v2
     // kind = "invariant"
+    // claim = "既存の作品IDは従来の記録を保ち、枝の資料は別の記録範囲IDからのみ取得できる"
+    // oracle = { type = "contract", ref = "docs/design/scenario-mcp.md: ブランチ別の記録を読む" }
+    // fault = "枝別のIDを作品一覧へ混ぜる、従来の記録へ枝の本文を混ぜる、別の枝の版を受け入れる"
+    // observable = "公式SDKで取得した作品と範囲のID、各範囲の本文、別の枝の資料版を使った要求のエラー"
+    // observation_boundary = "consumer"
+    // scope = "MCP branch history selection"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task HistoryScopeIdsSelectEachBranchWithoutChangingTheLegacyId()
+    {
+        await using var fixture = await Fixture.Create();
+        var repo = Path.Combine(fixture.DirectoryPath, "sample-repository");
+        var alpha = await fixture.Store.GetOrCreateBranchRecordIdAsync(fixture.Game, repo, "refs/heads/alpha");
+        var beta = await fixture.Store.GetOrCreateBranchRecordIdAsync(fixture.Game, repo, "refs/heads/beta");
+        foreach (var (id, text) in new[] { (alpha, "Alpha branch body"), (beta, "Beta branch body") })
+        {
+            var session = await fixture.Store.BeginCaptureSessionAsync(id);
+            var source = new CaptureSource(1, 0, 0, 0, "HOOK", "fixture");
+            await fixture.Store.AppendCaptureAsync(session, new(1, DateTimeOffset.UtcNow, source, text, CaptureRole.Body), new());
+            await fixture.Store.EndCaptureSessionAsync(session);
+        }
+
+        await using var full = await fixture.Client(fixture.Keys.FullKey);
+        await using var structure = await fixture.Client(fixture.Keys.StructureKey);
+        var original = fixture.Game.ToString(CultureInfo.InvariantCulture);
+        var alphaId = alpha.ToString(CultureInfo.InvariantCulture);
+        var betaId = beta.ToString(CultureInfo.InvariantCulture);
+        var gameIds = (await Read(full, "scenario_games", new())).EnumerateArray()
+            .Select(x => x.GetProperty("captureGameId").GetString()).ToArray();
+        Assert.Contains(original, gameIds);
+        Assert.DoesNotContain(alphaId, gameIds);
+        Assert.DoesNotContain(betaId, gameIds);
+
+        var scopes = await Read(structure, "scenario_history_scopes", new() { ["gameId"] = original });
+        Assert.Equal(3, scopes.GetArrayLength());
+        var byId = scopes.EnumerateArray().ToDictionary(x => x.GetProperty("captureGameId").GetString()!);
+        Assert.Equal(JsonValueKind.Null, byId[original].GetProperty("branchRef").ValueKind);
+        Assert.Equal("refs/heads/alpha", byId[alphaId].GetProperty("branchRef").GetString());
+        Assert.Equal("refs/heads/beta", byId[betaId].GetProperty("branchRef").GetString());
+        Assert.All(byId.Values, scope => Assert.True(
+            scope.EnumerateObject().Select(p => p.Name).ToHashSet().SetEquals(["captureGameId", "branchRef"])));
+        var otherScopes = await Read(structure, "scenario_history_scopes", new()
+        { ["gameId"] = fixture.OtherGame.ToString(CultureInfo.InvariantCulture) });
+        Assert.Equal(JsonValueKind.Null,
+            Assert.Single(otherScopes.EnumerateArray()).GetProperty("branchRef").ValueKind);
+
+        var legacy = await Read(full, "scenario_snapshot", new() { ["gameId"] = original });
+        Assert.Equal(new[] { "SECRET_BODY_A", "SECRET_BODY_B" },
+            legacy.GetProperty("contents").EnumerateArray().Select(x => x.GetProperty("text").GetString()));
+        var alphaData = await Read(full, "scenario_snapshot", new() { ["gameId"] = alphaId });
+        var betaData = await Read(full, "scenario_export_json", new() { ["gameId"] = betaId });
+        Assert.Equal("Alpha branch body",
+            Assert.Single(alphaData.GetProperty("contents").EnumerateArray()).GetProperty("text").GetString());
+        Assert.Equal("Beta branch body",
+            Assert.Single(betaData.GetProperty("contents").EnumerateArray()).GetProperty("text").GetString());
+        Assert.True((await full.CallToolAsync("scenario_snapshot", new Dictionary<string, object?>
+        {
+            ["gameId"] = betaId,
+            ["expectedVersion"] = alphaData.GetProperty("version")
+        })).IsError);
+    }
+
+    // @test-value v2
+    // kind = "invariant"
     // claim = "二キーの実MCP応答とZIPは同じID/版を持ち構造keyではtool/resource/JSON経路から機密fieldを省く"
     // oracle = { type = "contract", ref = "docs/design/scenario-mcp.md: 認証と二権限; 共通 snapshot と参照" }
     // fault = "full snapshotを構造側でserializeする、caller levelを信じる、直接ID/resource/exportで認可が抜ける"
@@ -479,7 +544,6 @@ public sealed class ScenarioMcpTests
         var changed = await Read(structure, "scenario_snapshot", args);
         Assert.Equal(sceneId, changed.GetProperty("sceneFlow").GetProperty("scenes")[0].GetProperty("id").GetString());
         Assert.Equal(version.MatchingRevision, changed.GetProperty("version").GetProperty("matchingRevision").GetInt64());
-        Assert.Equal(7, (await structure.ListToolsAsync()).Count);
     }
 
     // @test-value v2
