@@ -54,7 +54,7 @@ public partial class PlayRecordingPanel
         }
 
         return WebSession.FollowsDesktopTarget
-            ? WebSession.UseDesktopTargetAsync(() => WithConnection(null))
+            ? WebSession.UseDesktopTargetAsync(connectionVersion, () => WithConnection(null))
             : WebSession.UseAsync(connectionVersion, permittedGameId => WithConnection(permittedGameId));
     }
 
