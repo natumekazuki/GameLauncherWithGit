@@ -78,7 +78,7 @@ public partial class PlayRecordingPanel
             }
             throw new DisplayChangedException();
         }
-        var visible = state is { BlockedByOtherGame: false } && !string.IsNullOrEmpty(state.GameId)
+        var visible = state is not null && !string.IsNullOrEmpty(state.GameId)
             && (permittedGameId is null || string.Equals(permittedGameId, state.GameId, StringComparison.Ordinal))
             ? state : null;
         return new(order, visible);

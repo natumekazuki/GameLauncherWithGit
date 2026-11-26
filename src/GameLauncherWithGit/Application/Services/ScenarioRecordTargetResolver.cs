@@ -16,6 +16,43 @@ public sealed class ScenarioRecordTargetResolver(IGameLibraryStore games, IScena
         return target.IsCurrent ? target.RecordId : null;
     }
 
+    /// <summary>Owns a history display's current-branch observation until that display releases it.</summary>
+    internal async Task<DesktopHistoryObservation> ObserveDesktopHistoryAsync(string gameId, long profileId, CancellationToken token)
+    {
+        var setting = await ReadRepositoryPathAsync(gameId, token);
+        return new(this, gameId, profileId, await ResolveAsync(setting, profileId, token));
+    }
+
+    private async Task<bool> IsCurrentProfileAsync(string gameId, long profileId) =>
+        (await profiles.FindCaptureProfileAsync(gameId))?.Id == profileId;
+
+    internal sealed class DesktopHistoryObservation(ScenarioRecordTargetResolver resolver, string gameId, long profileId,
+        ResolvedRecord record) : IDisposable
+    {
+        private int _disposed;
+
+        public string GameId { get; } = gameId;
+        public long ProfileId { get; } = profileId;
+        public long? RecordId => Volatile.Read(ref _disposed) == 0 && record.IsCurrent ? record.RecordId : null;
+
+        public async Task<bool> IsCurrentAsync(string expectedGameId, long expectedRecordId, CancellationToken token = default)
+        {
+            if (GameId != expectedGameId || RecordId != expectedRecordId) return false;
+            if (!await resolver.IsCurrentProfileAsync(GameId, ProfileId)
+                || await resolver.ReadRepositoryPathAsync(GameId, token) != record.Setting)
+            {
+                Dispose();
+                return false;
+            }
+            return RecordId == expectedRecordId;
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0) record.Dispose();
+        }
+    }
+
     internal async Task<bool> OwnsRecordAsync(string gameId, long recordId)
     {
         var profile = await profiles.FindCaptureProfileAsync(gameId);

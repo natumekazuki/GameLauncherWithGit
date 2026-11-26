@@ -19,6 +19,7 @@ public sealed record PlayRecordingTarget
     internal long ScopeVersion { get; }
     internal bool FixedRecord { get; }
     internal long? OwnerProfileId { get; }
+    internal ScenarioRecordTargetResolver.DesktopHistoryObservation? HistoryObservation { get; init; }
     internal long HistoryRoot => RecordId ?? ProfileId;
 }
 
@@ -268,9 +269,10 @@ public sealed partial class PlayRecordingOperations(ScenarioCaptureService captu
     }
 
     // Explicitly identify the owner and root shown by a history UI (including when not extracting that game).
-    internal static PlayRecordingTarget DesktopHistoryTarget(CaptureSnapshot displayed, string gameId, long recordId, bool fixedRecord = false)
+    internal static PlayRecordingTarget DesktopHistoryTarget(CaptureSnapshot displayed, string gameId, long recordId,
+        bool fixedRecord = false, ScenarioRecordTargetResolver.DesktopHistoryObservation? observation = null)
         => new(recordId, displayed.PlayGameId == gameId && displayed.RecordId == recordId ? displayed.SessionId : null,
-            displayed.OperationVersion, gameId, recordId, displayed.PlayScopeVersion, fixedRecord);
+            displayed.OperationVersion, gameId, recordId, displayed.PlayScopeVersion, fixedRecord) { HistoryObservation = observation };
 
     // Fixed PC history can also belong to a retained profile whose game registration was removed.
     internal static PlayRecordingTarget DesktopHistoryTarget(CaptureSnapshot displayed, long profileId, long recordId)
@@ -298,10 +300,15 @@ public sealed partial class PlayRecordingOperations(ScenarioCaptureService captu
             else
             {
                 var play = capture.CurrentPlayTarget;
-                var root = play.Profile?.GameId == gameId ? play.RecordId : await capture.ResolveDesktopRecordIdAsync(gameId);
-                if (root != recordId) throw Stale();
+                if (play.Profile?.GameId == gameId)
+                {
+                    if (expected.HistoryObservation is not null || play.RecordId != recordId) throw Stale();
+                }
+                else if (expected.HistoryObservation is not { } observation
+                    || !await observation.IsCurrentAsync(gameId, recordId)) throw Stale();
             }
-            if (DesktopHistoryTarget(capture.Snapshot, gameId, recordId, expected.FixedRecord) != expected) throw Stale();
+            if (DesktopHistoryTarget(capture.Snapshot, gameId, recordId, expected.FixedRecord, expected.HistoryObservation) != expected)
+                throw Stale();
             return;
         }
         if (DesktopTarget(shown, expected.ProfileId) != expected

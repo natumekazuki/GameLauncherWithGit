@@ -438,7 +438,7 @@
 {
     <div class="modal-backdrop"><section id="capture-editor" class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-range-title">
         <header class="capture-dialog-header"><h2 id="capture-range-title">区間</h2>@DialogFailure("区間の保存失敗")<button class="secondary-button capture-icon-button" title="区間を取り消す" aria-label="区間を取り消す" @onclick="() => CancelRangeDraftAsync(displayedDraftTarget!, displayedDraft!)" disabled="@_busy"><CaptureIcon Name="Close" /></button></header>
-        <CaptureRangeFields @key="displayedDraft" Name="_rangeName" NameChanged="name => UpdateRangeDraft(displayedDraft, () => _rangeName = name)"
+        <CaptureRangeFields @key="displayedDraft" Name="@_rangeName" NameChanged="name => UpdateRangeDraft(displayedDraft, () => _rangeName = name)"
             Tags="_rangeTags" TagsChanged="tags => UpdateRangeDraft(displayedDraft, () => _rangeTags = tags)"
             AvailableTags="AvailableRangeTags" SuggestedTags="_gameSpeakers" Disabled="_busy" />
         <div class="capture-dialog-actions"><button class="launch-button capture-text-button" @onclick="() => SaveRangeAsync(displayedDraftTarget!, displayedDraft!)" disabled="@(_busy || string.IsNullOrWhiteSpace(_rangeName))"><CaptureIcon Name="Save" />区間を保存</button></div>
@@ -936,6 +936,7 @@
     }
     private async Task LoadProfileAsync()
     {
+        ReleaseHistoryObservation();
         ResetScopeContent();
         _displayedScope = null;
         _historyScopes = [];
@@ -951,6 +952,16 @@
     {
         _pendingLiveRange = _live && _recordId != 0 && displayed.Profile?.Id == _profileId
             ? await RecordingOperations.GetDesktopPendingRangeAsync(PlayRecordingOperations.DesktopTarget(displayed, _profileId)) : null;
+        if (_rangeSelection is { Live: true } draft && !ReferenceEquals(draft, _pendingLiveRange))
+        {
+            _rangeSelection = null;
+            _rangeDraftTarget = null;
+            _rangeName = "";
+            _rangeTags = [];
+            _error = _errorLabel = null;
+            _focusEditor = false;
+            _restoreFocus = true;
+        }
         if (_recordId == 0 || _rangeListsVersion == displayed.OperationVersion) return;
         await LoadScopeListsAsync();
         _rangeListsVersion = displayed.OperationVersion;
@@ -1589,6 +1600,7 @@
     public async ValueTask DisposeAsync()
     {
         CancelWindowPick(); _stop.Cancel();
+        ReleaseHistoryObservation();
         if (_module is not null) { try { await _module.InvokeVoidAsync("unobserveFeed", _feed); await _module.DisposeAsync(); } catch (JSDisconnectedException) { } }
         _self?.Dispose(); _stop.Dispose();
     }

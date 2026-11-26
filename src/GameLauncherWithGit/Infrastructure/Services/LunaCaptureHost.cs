@@ -101,6 +101,14 @@ public sealed class LunaCaptureHost(ILogger<LunaCaptureHost> logger) : ILunaCapt
         }
     }
 
+    public async Task WaitForPreviousConnectionAsync(int processId)
+    {
+        Connection? previous;
+        lock (_connectionGate) _connections.TryGetValue((uint)processId, out previous);
+        if (previous is not null && !await WaitForDrainAsync(previous))
+            throw new InvalidOperationException("以前の取得接続の終了を確認できません。ゲームを起動し直してください。");
+    }
+
     public async Task ConnectAsync(int processId)
     {
         var bits = GetProcessBits(processId);
@@ -110,12 +118,11 @@ public sealed class LunaCaptureHost(ILogger<LunaCaptureHost> logger) : ILunaCapt
         if (!File.Exists(injector) || !File.Exists(hook)) throw new FileNotFoundException("HOOKの実行部品がありません。ネイティブビルドを確認してください。");
         Initialize();
         var pid = (uint)processId;
-        Connection? previous;
-        lock (_connectionGate) _connections.TryGetValue(pid, out previous);
-        if (previous is not null)
+        bool hasPrevious;
+        lock (_connectionGate) hasPrevious = _connections.ContainsKey(pid);
+        if (hasPrevious)
         {
-            if (!await WaitForDrainAsync(previous))
-                throw new InvalidOperationException("以前の取得接続の終了を確認できません。ゲームを起動し直してください。");
+            await WaitForPreviousConnectionAsync(processId);
             // The native disconnect callback follows text-thread teardown, but precedes removal of the
             // process record. Wait for the host/hook ownership mutex before opening another pipe.
             var deadline = Stopwatch.StartNew();

@@ -12,11 +12,14 @@ public sealed partial class ScenarioCaptureService
     private CaptureProfile? _playProfile;
     private ScenarioRecordTargetResolver.ResolvedRecord? _playRecord;
     private Process? _playProcess;
+    private LaunchBodyHandoff? _launchBodyHandoff;
     private bool _playProcessExited;
     private long _playEpoch;
     private CaptureContinuation? _continuation;
 
     private sealed record CaptureContinuation(int ProcessId, CaptureRules Rules, bool Paused);
+    private sealed record LaunchBodyHandoff(string BodyPath, DateTime? StartedAt, long? StubExitedAt = null);
+    private static readonly TimeSpan LaunchBodyGrace = TimeSpan.FromSeconds(15);
 
     // The caller holds _gate. The play target can exist before/after extraction, and may have no writable root.
     private long? CurrentPlayRecordId => _playProcessExited ? null
@@ -26,9 +29,6 @@ public sealed partial class ScenarioCaptureService
         : _profile?.Id == _playProfile?.Id ? CurrentPlayRecordId : null;
 
     internal bool UsesPcPlayTarget => _recordTargets is not null;
-
-    internal Task<long?> ResolveDesktopRecordIdAsync(string gameId) =>
-        _recordTargets?.GetCurrentRecordIdAsync(gameId) ?? Task.FromResult<long?>(null);
 
     internal Task<bool> OwnsDesktopRecordAsync(string gameId, long recordId) =>
         _recordTargets?.OwnsRecordAsync(gameId, recordId) ?? Task.FromResult(false);
@@ -85,6 +85,7 @@ public sealed partial class ScenarioCaptureService
         await ClearPlayTargetCoreAsync();
         // A trial connection may exist before any play target has been published.
         await FinishCoreAsync();
+        var handoff = GetLaunchBodyHandoff(profile, process);
         lock (_gate)
         {
             _playProfile = profile;
@@ -92,6 +93,7 @@ public sealed partial class ScenarioCaptureService
             _session = null;
             _status = "未接続";
             _playProcess = process;
+            _launchBodyHandoff = handoff;
             _playProcessExited = false;
             _playEpoch++;
             _operationVersion++;
@@ -114,6 +116,7 @@ public sealed partial class ScenarioCaptureService
             _continuation = null;
             previousProcess = _playProcess;
             _playProcess = null;
+            _launchBodyHandoff = null;
             _playProcessExited = false;
             previous = _playRecord;
             _playRecord = null;
@@ -157,6 +160,11 @@ public sealed partial class ScenarioCaptureService
         lock (_gate)
         {
             if (_playProcess != sender || _playProcessExited) return;
+            if (_launchBodyHandoff is { } handoff)
+            {
+                _launchBodyHandoff = handoff with { StubExitedAt = handoff.StubExitedAt ?? Stopwatch.GetTimestamp() };
+                return; // The existing monitor resolves the body or expires the handoff.
+            }
             _playProcessExited = true;
             _operationVersion++;
             _playEpoch++;
@@ -167,6 +175,79 @@ public sealed partial class ScenarioCaptureService
             lock (_gate) if (_playProcess != sender) return;
             await ClearPlayTargetCoreAsync();
         }));
+    }
+
+    private static LaunchBodyHandoff? GetLaunchBodyHandoff(CaptureProfile profile, Process? launched)
+    {
+        if (launched is null || profile.BodyExecutablePath is not { } bodyPath) return null;
+        var path = "";
+        try { path = launched.MainModule?.FileName ?? ""; }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+        // LauncherService uses an absolute path. Unlike MainModule, StartInfo can identify a stub after exit.
+        if (!Path.IsPathFullyQualified(path))
+        {
+            try { path = launched.StartInfo.FileName; }
+            catch (InvalidOperationException) { return null; }
+        }
+        if (!Path.IsPathFullyQualified(path) || string.Equals(path, bodyPath, StringComparison.OrdinalIgnoreCase)) return null;
+        DateTime? startedAt = null;
+        try { startedAt = launched.StartTime.ToUniversalTime(); }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+        return new(bodyPath, startedAt);
+    }
+
+    private async Task<bool> RefreshLaunchProcessAsync(CaptureProfile profile)
+    {
+        var process = _playProcess;
+        if (process is null) return true;
+        LaunchBodyHandoff? handoff;
+        lock (_gate)
+        {
+            if (_playProcessExited) return false;
+            if (_launchBodyHandoff is { StubExitedAt: null } pending && process.HasExited)
+                _launchBodyHandoff = pending with { StubExitedAt = Stopwatch.GetTimestamp() };
+            handoff = _launchBodyHandoff;
+        }
+        if (handoff is null) return !process.HasExited;
+        if (handoff.StubExitedAt is { } exited && Stopwatch.GetElapsedTime(exited) >= LaunchBodyGrace) return false;
+
+        var matches = GetProcesses().Where(candidate => candidate.Id != process.Id &&
+            string.Equals(candidate.Path, handoff.BodyPath, StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (matches.Length != 1 || handoff.StartedAt is not { } startedAt
+            || await HasOtherProfileForBodyAsync(profile.Id, handoff.BodyPath)) return true;
+        var body = GetMatchingProcess(matches[0].Id, handoff.BodyPath, earliestStart: startedAt);
+        if (body is null) return true;
+        lock (_gate)
+        {
+            _playProcess = body;
+            _launchBodyHandoff = null;
+        }
+        ReleasePlayProcess(process);
+        WatchPlayProcess(body);
+        return true;
+    }
+
+    private async Task<bool> HasOtherProfileForBodyAsync(long profileId, string path) =>
+        (await _store.GetCaptureProfilesAsync()).Any(other => other.Id != profileId && other.GameId is not null
+            && string.Equals(other.BodyExecutablePath, path, StringComparison.OrdinalIgnoreCase));
+
+    private static Process? GetMatchingProcess(int id, string path, DateTime? earliestStart = null)
+    {
+        Process? process = null;
+        try
+        {
+            process = Process.GetProcessById(id);
+            if (!process.HasExited && string.Equals(process.MainModule?.FileName, path, StringComparison.OrdinalIgnoreCase)
+                && (earliestStart is null || process.StartTime.ToUniversalTime() > earliestStart))
+            {
+                var matched = process;
+                process = null;
+                return matched;
+            }
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { }
+        finally { process?.Dispose(); }
+        return null;
     }
 
     private async Task MonitorPlayTargetAsync()
@@ -188,7 +269,7 @@ public sealed partial class ScenarioCaptureService
     internal async Task RefreshPlayTargetCoreAsync()
     {
         if (_recordTargets is null || _playProfile is not { GameId: { } gameId } profile) return;
-        if (_playProcessExited || _playProcess?.HasExited == true) { await ClearPlayTargetCoreAsync(); return; }
+        if (!await RefreshLaunchProcessAsync(profile)) { await ClearPlayTargetCoreAsync(); return; }
 
         ScenarioRecordTargetResolver.RepositorySetting setting;
         try { setting = await _recordTargets.ReadRepositoryPathAsync(gameId, _stop.Token); }

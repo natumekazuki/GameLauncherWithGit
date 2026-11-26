@@ -10,15 +10,18 @@ public partial class Capture
 
     // Identity of a particular display, not just its record ID: A → B → A must not revive A's old callbacks.
     private readonly record struct PlayBoundary(long Version, long? SessionId);
+    private readonly record struct CurrentScope(long? RecordId, PlayBoundary? Play,
+        ScenarioRecordTargetResolver.DesktopHistoryObservation? History);
 
-    private sealed class DisplayedScope(long recordId, string viewKey, PlayBoundary? playBoundary)
+    private sealed class DisplayedScope(long recordId, string viewKey, CurrentScope boundary)
     {
         public long RecordId { get; } = recordId;
         public string ViewKey { get; } = viewKey;
-        public PlayBoundary? Boundary { get; } = playBoundary;
+        public CurrentScope Boundary { get; } = boundary;
     }
 
     private DisplayedScope? _displayedScope;
+    private ScenarioRecordTargetResolver.DesktopHistoryObservation? _historyObservation;
     private long _viewSequence;
     private long _recordId => _displayedScope?.RecordId ?? 0;
     private long _historyChoice;
@@ -45,19 +48,10 @@ public partial class Capture
         && !_stop.IsCancellationRequested;
 
     private bool TracksCurrentScope => _live || _historyChoice == 0;
-    private PlayBoundary? CurrentPlayBoundary
-    {
-        get
-        {
-            var play = CaptureService.CurrentPlayTarget;
-            if (!TracksCurrentScope || play.Profile?.Id != _profileId) return null;
-            var snapshot = CaptureService.Snapshot;
-            return new(play.ScopeVersion, snapshot.RecordId == play.RecordId ? snapshot.SessionId : null);
-        }
-    }
 
     private PlayRecordingTarget HistoryTarget(CaptureSnapshot snapshot) => _profile?.GameId is { } gameId
-        ? PlayRecordingOperations.DesktopHistoryTarget(snapshot, gameId, _recordId, fixedRecord: !TracksCurrentScope)
+        ? PlayRecordingOperations.DesktopHistoryTarget(snapshot, gameId, _recordId, fixedRecord: !TracksCurrentScope,
+            observation: _displayedScope?.Boundary.History)
         : PlayRecordingOperations.DesktopHistoryTarget(snapshot, _profileId, _recordId);
 
     private Task AtScopeAsync(DisplayedScope? expected, Func<Task> action) => IsDisplayed(expected) ? action() : Task.CompletedTask;
@@ -66,21 +60,16 @@ public partial class Capture
     private async Task RequireCurrentScopeAsync(DisplayedScope? expected)
     {
         if (!IsDisplayed(expected)) throw ScopeChanged();
-        if (TracksCurrentScope)
-        {
-            var id = await ResolveCurrentRecordAsync();
-            if (!IsDisplayed(expected) || id != expected!.RecordId || expected.Boundary != CurrentPlayBoundary)
-                throw ScopeChanged();
-        }
+        if (TracksCurrentScope && (!await IsCurrentScopeAsync(expected!) || !IsDisplayed(expected))) throw ScopeChanged();
     }
 
     private async Task<bool> CanPublishAsync(DisplayedScope? expected)
     {
         if (!IsDisplayed(expected)) return false;
         if (!TracksCurrentScope) return true;
-        var id = await ResolveCurrentRecordAsync();
+        var current = await IsCurrentScopeAsync(expected!);
         if (!IsDisplayed(expected)) return false;
-        if (id == expected!.RecordId && expected.Boundary == CurrentPlayBoundary) return true;
+        if (current) return true;
         ResetScopeContent();
         _displayedScope = null;
         _scopeLabel = null;
@@ -90,14 +79,60 @@ public partial class Capture
     private static InvalidOperationException ScopeChanged() =>
         new("記録範囲が変わりました。表示を確認してから操作してください。");
 
-    private Task<long?> ResolveCurrentRecordAsync()
+    private CurrentScope FromPlayTarget(long? recordId, long scopeVersion)
     {
-        if (_profile is not { } profile) return Task.FromResult<long?>(null);
+        var snapshot = CaptureService.Snapshot;
+        return new(recordId, new(scopeVersion, snapshot.RecordId == recordId ? snapshot.SessionId : null), null);
+    }
+
+    private async Task<bool> IsCurrentScopeAsync(DisplayedScope expected)
+    {
         var play = CaptureService.CurrentPlayTarget;
-        if (play.Profile?.Id == profile.Id) return Task.FromResult(play.RecordId);
-        if (_live) return Task.FromResult<long?>(null);
-        if (profile.GameId is not { } gameId) return Task.FromResult<long?>(profile.Id);
-        return HistoryResolver.GetCurrentRecordIdAsync(gameId);
+        if (_profile is not { } profile) return false;
+        if (play.Profile?.Id == profile.Id) return FromPlayTarget(play.RecordId, play.ScopeVersion) == expected.Boundary;
+        return !_live && profile.GameId is { } gameId && expected.Boundary.History is { } observation
+            && ReferenceEquals(observation, _historyObservation)
+            && await observation.IsCurrentAsync(gameId, expected.RecordId, _stop.Token)
+            && CaptureService.CurrentPlayTarget.Profile?.Id != profile.Id;
+    }
+
+    private async Task<CurrentScope> ReadCurrentScopeAsync()
+    {
+        if (_stop.IsCancellationRequested || _profile is not { } profile) return default;
+        var play = CaptureService.CurrentPlayTarget;
+        if (play.Profile?.Id == profile.Id || _live || profile.GameId is null)
+        {
+            ReleaseHistoryObservation();
+            if (play.Profile?.Id == profile.Id)
+                return FromPlayTarget(play.RecordId, play.ScopeVersion);
+            return _live ? default : new(profile.Id, null, null);
+        }
+
+        var token = _stop.Token;
+        var observed = _historyObservation;
+        if (observed is { RecordId: { } recordId } && observed.ProfileId == profile.Id
+            && await observed.IsCurrentAsync(profile.GameId, recordId, token)
+            && ReferenceEquals(observed, _historyObservation))
+            return new(recordId, null, observed);
+
+        var next = await HistoryResolver.ObserveDesktopHistoryAsync(profile.GameId, profile.Id, token);
+        // A nested editor may load while polling, or the page can close while Git is resolving HEAD.
+        if (token.IsCancellationRequested || _profile?.Id != profile.Id || _live
+            || CaptureService.CurrentPlayTarget.Profile?.Id == profile.Id || !ReferenceEquals(observed, _historyObservation))
+        {
+            next.Dispose();
+            return default;
+        }
+        _historyObservation = next;
+        observed?.Dispose();
+        return new(next.RecordId, null, next);
+    }
+
+    private void ReleaseHistoryObservation()
+    {
+        var previous = _historyObservation;
+        _historyObservation = null;
+        previous?.Dispose();
     }
 
     private Task WithHistoryWriteAsync(DisplayedScope? expected, PlayRecordingTarget target, Func<long, Task> write)
@@ -125,10 +160,11 @@ public partial class Capture
 
     private async Task RefreshScopeAsync(bool reload = false)
     {
-        long? current = null;
+        CurrentScope currentScope = default;
         string? error = null;
-        try { current = await ResolveCurrentRecordAsync(); }
+        try { currentScope = await ReadCurrentScopeAsync(); }
         catch (Exception ex) when (!_stop.IsCancellationRequested) { error = ex.Message; }
+        var current = currentScope.RecordId;
 
         if (reload || current != _currentRecordId || _historyScopes.Count == 0 && _profile is not null)
         {
@@ -147,7 +183,7 @@ public partial class Capture
             : error ?? "現在のブランチを特定できません。ブランチを確認して再試行してください。";
         _scopeLabel = scope?.BranchRef is not null ? HistoryScopeLabel(scope)
             : scope is not null && ShowHistoryScopes && _currentRecordId != _profileId ? "従来の記録" : null;
-        var boundary = CurrentPlayBoundary;
+        var boundary = TracksCurrentScope ? currentScope : default;
         if (!reload && (scope?.RecordId ?? 0) == _recordId && (scope is null || _displayedScope?.Boundary == boundary)) return;
 
         ResetScopeContent();

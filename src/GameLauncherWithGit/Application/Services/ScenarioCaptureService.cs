@@ -218,12 +218,11 @@ public sealed partial class ScenarioCaptureService : IAsyncDisposable
                 _speakerPending.Clear();
                 _buffer.Clear(); _candidates.Clear(); _attempted.Clear(); _currentSelections.Clear(); _bufferBytes = 0;
             }
-            if (profile.BodyExecutablePath is not null)
+            if (profile.BodyExecutablePath is { } path)
             {
-                var matches = GetProcesses().Where(x => string.Equals(x.Path, profile.BodyExecutablePath, StringComparison.OrdinalIgnoreCase)).ToArray();
-                if (matches.Length == 1)
+                if (await FindConfiguredBodyAsync(profile.Id, path) is { } candidate)
                 {
-                    try { await SelectProcessCoreAsync(matches[0].Id, preview: false); }
+                    try { await SelectProcessCoreAsync(candidate.Id, preview: false, requiredPath: path, expectedStart: candidate.StartedAt); }
                     catch when (Snapshot.NeedsProcess) { return true; }
                 }
             }
@@ -246,12 +245,7 @@ public sealed partial class ScenarioCaptureService : IAsyncDisposable
     {
         if (!CanStartConfigured(profile))
             throw new InvalidOperationException("ゲームの記録設定と現在の接続状態を確認してください。");
-        if ((await _store.GetCaptureProfilesAsync()).Any(other => other.Id != profile.Id && other.GameId is not null
-            && string.Equals(other.BodyExecutablePath, profile.BodyExecutablePath, StringComparison.OrdinalIgnoreCase)))
-            throw new InvalidOperationException("同じ実行ファイルを使用するゲームがあります。PCで記録対象を選択してください。");
-        var matches = GetProcesses().Where(x => string.Equals(x.Path, profile.BodyExecutablePath,
-            StringComparison.OrdinalIgnoreCase)).ToArray();
-        if (matches.Length != 1)
+        if (profile.BodyExecutablePath is not { } path || await FindConfiguredBodyAsync(profile.Id, path) is not { } candidate)
             throw new InvalidOperationException("記録対象のゲームを1つだけ起動してください。");
         if (_recordTargets is null) await SelectPlayTargetCoreAsync(profile);
         lock (_gate)
@@ -259,7 +253,23 @@ public sealed partial class ScenarioCaptureService : IAsyncDisposable
             if (CurrentPlayRecordId is null || _playProfile?.Id != profile.Id) throw new InvalidOperationException(UnknownRecord);
             _profile = profile; _session = null; _operationVersion++;
         }
-        await SelectProcessCoreAsync(matches[0].Id, preview: false, requiredPath: profile.BodyExecutablePath);
+        await SelectProcessCoreAsync(candidate.Id, preview: false, requiredPath: path, expectedStart: candidate.StartedAt);
+    }
+
+    private async Task<(int Id, DateTime StartedAt)?> FindConfiguredBodyAsync(long profileId, string path)
+    {
+        var candidates = GetProcesses().Where(process => string.Equals(process.Path, path, StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (_recordTargets is not null)
+        {
+            // The play monitor resolves a launcher handoff before this operation. Never use the only
+            // matching executable if its process is not the one associated with this play selection.
+            if (_launchBodyHandoff is not null || _playProcess is not { } tracked
+                || tracked.HasExited || !candidates.Any(candidate => candidate.Id == tracked.Id)) return null;
+            return (tracked.Id, tracked.StartTime.ToUniversalTime());
+        }
+        if (candidates.Length != 1 || await HasOtherProfileForBodyAsync(profileId, path)) return null;
+        using var process = GetMatchingProcess(candidates[0].Id, path);
+        return process is null ? null : (process.Id, process.StartTime.ToUniversalTime());
     }
 
     internal bool CanStartConfigured(CaptureProfile profile)
@@ -280,7 +290,7 @@ public sealed partial class ScenarioCaptureService : IAsyncDisposable
         await SelectProcessCoreAsync(id, preview);
     });
 
-    internal async Task SelectProcessCoreAsync(int id, bool preview = true, string? requiredPath = null)
+    internal async Task SelectProcessCoreAsync(int id, bool preview = true, string? requiredPath = null, DateTime? expectedStart = null)
     {
         CaptureProfile profile;
         lock (_gate)
@@ -310,11 +320,16 @@ public sealed partial class ScenarioCaptureService : IAsyncDisposable
             }
             var candidate = GetProcesses().SingleOrDefault(x => x.Id == id)
                 ?? throw new InvalidOperationException("対象プロセスが見つかりません。");
+            await _host.WaitForPreviousConnectionAsync(id);
             var process = Process.GetProcessById(id);
-            if (requiredPath is not null)
+            if (requiredPath is not null || expectedStart is not null)
             {
                 bool matches;
-                try { matches = string.Equals(process.MainModule?.FileName, requiredPath, StringComparison.OrdinalIgnoreCase); }
+                try
+                {
+                    matches = (requiredPath is null || string.Equals(process.MainModule?.FileName, requiredPath, StringComparison.OrdinalIgnoreCase))
+                        && (expectedStart is null || process.StartTime.ToUniversalTime() == expectedStart);
+                }
                 catch { process.Dispose(); throw; }
                 if (!matches) { process.Dispose(); throw new InvalidOperationException("起動中のゲームが変わりました。"); }
             }
@@ -400,6 +415,7 @@ public sealed partial class ScenarioCaptureService : IAsyncDisposable
                     _playProcessExited = false;
                     draftProcess = null;
                 }
+                _launchBodyHandoff = null;
                 if (takePlaySelection)
                 {
                     _playRecord?.Dispose();

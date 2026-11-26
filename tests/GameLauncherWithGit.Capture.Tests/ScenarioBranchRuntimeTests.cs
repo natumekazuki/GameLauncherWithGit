@@ -206,6 +206,125 @@ public sealed class ScenarioBranchRuntimeTests : IAsyncDisposable
 
     // @test-value v2
     // kind = "invariant"
+    // claim = "起動用プロセスが終わっても後着の本体へ引き継ぎ、先に起動していた同一パスのプロセスや別作品との設定競合では接続しない"
+    // oracle = { type = "contract", ref = "docs/design/scenario-extraction.md: 起動用と本体が異なる場合; WithMate Session Graph play-recording-web / play-web-runtime-process-identity" }
+    // fault = "起動用プロセス終了を本体終了と見なす、共有実行ファイルの別作品に接続する、または実本体終了後も対象を公開する"
+    // observable = "WebのPlayRecordingStateおよびStartAsync、合成ホストへの実接続PID"
+    // observation_boundary = "public-boundary"
+    // scope = "real OS stub and body lifetimes, synthetic capture host"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExitedLauncherHandsOffOnlyToTheNewUnambiguousBody(bool exitsBeforeCaptureBegins)
+    {
+        using var previousBody = StartBodyProcess();
+        using var previousInput = previousBody.StandardInput;
+        var path = await WaitForExecutablePathAsync(previousBody);
+        var profile = await AddGameAsync("game");
+        var other = await AddGameAsync("other");
+        await _store.SaveCaptureProfileAsync(profile with { BodyExecutablePath = path, Rules = BodyRules });
+        await _store.SaveCaptureProfileAsync(other with { BodyExecutablePath = path, Rules = BodyRules });
+        _host.Processes = [new(previousBody.Id, "previous body", path)];
+
+        var starter = new ProcessStartInfo(OperatingSystem.IsWindows()
+            ? Path.Combine(Environment.SystemDirectory, "cmd.exe") : "/bin/sh")
+        {
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true
+        };
+        foreach (var argument in OperatingSystem.IsWindows() ? new[] { "/d", "/q", "/c", "set /p state=" } : ["-c", "read -r state"])
+            starter.ArgumentList.Add(argument);
+        var launched = Process.Start(starter)!;
+        using var stubInput = launched.StandardInput;
+        using var exit = Process.GetProcessById(launched.Id);
+        if (!exitsBeforeCaptureBegins) Assert.True(await _capture.BeginGameForLaunchAsync("game", launched));
+        await stubInput.WriteLineAsync("done");
+        await exit.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        if (exitsBeforeCaptureBegins) Assert.True(await _capture.BeginGameForLaunchAsync("game", launched));
+        var waiting = Assert.IsType<PlayRecordingState>(await _play.GetCurrentStateAsync());
+        Assert.Null(waiting.Target.SessionId);
+        Assert.Null(_host.ConnectedProcessId);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _play.StartAsync("game", waiting.Target));
+
+        // Without explicit disambiguation, even a newer candidate is not assigned to a shared path.
+        using var actualBody = StartBodyProcess();
+        using var actualInput = actualBody.StandardInput;
+        var actualPath = await WaitForExecutablePathAsync(actualBody);
+        _host.Processes = [new(actualBody.Id, "current body", actualPath)];
+        var competing = Assert.IsType<PlayRecordingState>(await _play.GetCurrentStateAsync());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _play.StartAsync("game", competing.Target));
+        Assert.Null(_host.ConnectedProcessId);
+
+        _host.Processes = [new(previousBody.Id, "previous body", path)];
+        await _store.SaveCaptureProfileAsync(other);
+        var older = Assert.IsType<PlayRecordingState>(await _play.GetCurrentStateAsync());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _play.StartAsync("game", older.Target));
+        Assert.Null(_host.ConnectedProcessId);
+
+        _host.Processes = [new(actualBody.Id, "current body", actualPath)];
+        var ready = Assert.IsType<PlayRecordingState>(await _play.GetCurrentStateAsync());
+        await _play.StartAsync("game", ready.Target);
+        Assert.True((await _play.GetCurrentStateAsync())!.Recording);
+        Assert.Equal(actualBody.Id, _host.ConnectedProcessId);
+        await actualInput.WriteLineAsync("done");
+        await actualBody.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Null(await _play.GetCurrentStateAsync());
+    }
+
+    private static Process StartBodyProcess()
+    {
+        var start = new ProcessStartInfo(OperatingSystem.IsWindows()
+            ? Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe") : "/bin/bash")
+        {
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true
+        };
+        foreach (var argument in OperatingSystem.IsWindows()
+            ? new[] { "-NoProfile", "-NonInteractive", "-Command", "[Console]::ReadLine() > $null" }
+            : ["-c", "read -r state"])
+            start.ArgumentList.Add(argument);
+        return Process.Start(start)!;
+    }
+
+    private static async Task<string> WaitForExecutablePathAsync(Process process)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (true)
+        {
+            if (process.MainModule?.FileName is { } path) return path;
+            await Task.Delay(25, timeout.Token);
+        }
+    }
+
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "取得終了後の同一PID再開で遅着した旧切断は、新しい正常な取得回を終了させない"
+    // oracle = { type = "contract", ref = "WithMate Session Graph play-recording-web / scenario-branch-luna-drain-contract; play-web-runtime-process-identity" }
+    // fault = "旧接続を待つ前に新しい切断通知ハンドラーを購読する"
+    // observable = "同一PIDに対するWeb記録開始成功、新しい取得回、接続中状態"
+    // observation_boundary = "public-boundary"
+    // scope = "same-PID explicit restart with a synthetic late disconnect"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task ReopeningTheSamePidDoesNotReceiveThePreviousConnectionsDisconnect()
+    {
+        await AddGameAsync("game");
+        await PrepareAndConnectAsync("game");
+        await _capture.ConfirmProcessAsync();
+        var first = Assert.IsType<PlayRecordingState>(await _play.GetCurrentStateAsync());
+        _host.DeferDisconnect = true;
+        await _play.FinishAsync("game", first.Target);
+        var stopped = Assert.IsType<PlayRecordingState>(await _play.GetCurrentStateAsync());
+        await _play.StartAsync("game", stopped.Target);
+        var reopened = Assert.IsType<PlayRecordingState>(await _play.GetCurrentStateAsync());
+        Assert.True(reopened.Recording);
+        Assert.NotNull(reopened.Target.SessionId);
+        Assert.NotEqual(first.Target.SessionId, reopened.Target.SessionId);
+    }
+
+    // @test-value v2
+    // kind = "invariant"
     // claim = "起動済みゲームは未記録でもPC対象であり、同じ記録IDに戻っても旧表示は使えず、実プロセス終了で対象を解除する"
     // oracle = { type = "contract", ref = "WithMate Session Graph play-recording-web / scenario-branch-pc-manual-play-target; play-recording-view-scope-epoch" }
     // fault = "取得回が無い時にゲームを公開しない、同じ枝に戻れば無取得の旧ボタンを受け付ける、または終了後も旧履歴を公開する"
@@ -367,15 +486,38 @@ public sealed class ScenarioBranchRuntimeTests : IAsyncDisposable
         public event Action<uint, bool>? ConnectionChanged;
         private static readonly CaptureSource Source = new((uint)Environment.ProcessId, 100, 200, 0, "body-hook", "body");
         public bool ProcessAvailable { get; set; } = true;
+        public IReadOnlyList<CaptureProcess>? Processes { get; set; }
+        public int? ConnectedProcessId { get; private set; }
+        public bool DeferDisconnect { get; set; }
+        private int? _deferredDisconnect;
         public Action<string> FreezeOutput()
         {
             var handler = Output ?? throw new InvalidOperationException("No synthetic capture connection.");
             return text => handler(Source, text);
         }
-        public Task ConnectAsync(int processId) { ConnectionChanged?.Invoke((uint)processId, true); return Task.CompletedTask; }
-        public void Detach(int processId) => ConnectionChanged?.Invoke((uint)processId, false);
+        public Task WaitForPreviousConnectionAsync(int processId)
+        {
+            if (_deferredDisconnect == processId)
+            {
+                _deferredDisconnect = null;
+                ConnectionChanged?.Invoke((uint)processId, false);
+            }
+            return Task.CompletedTask;
+        }
+        public async Task ConnectAsync(int processId)
+        {
+            await WaitForPreviousConnectionAsync(processId);
+            ConnectedProcessId = processId;
+            ConnectionChanged?.Invoke((uint)processId, true);
+        }
+        public void Detach(int processId)
+        {
+            if (DeferDisconnect) _deferredDisconnect = processId;
+            else ConnectionChanged?.Invoke((uint)processId, false);
+        }
         public Task<bool> DetachAndDrainAsync(int processId) { Detach(processId); return Task.FromResult(true); }
-        public IReadOnlyList<CaptureProcess> GetProcesses() => ProcessAvailable ? [new(Environment.ProcessId, "synthetic", Environment.ProcessPath!)] : [];
+        public IReadOnlyList<CaptureProcess> GetProcesses() => Processes
+            ?? (ProcessAvailable ? [new(Environment.ProcessId, "synthetic", Environment.ProcessPath!)] : []);
         public CaptureProcess? GetForegroundProcess() => null;
     }
 
