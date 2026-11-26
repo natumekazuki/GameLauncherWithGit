@@ -51,6 +51,7 @@ public static class MauiProgram
 			return store;
 		});
 		builder.Services.AddSingleton<IScenarioCaptureStore>(serviceProvider => serviceProvider.GetRequiredService<SqliteGameLibraryStore>());
+		builder.Services.AddSingleton<IScenarioHistoryStore>(serviceProvider => serviceProvider.GetRequiredService<SqliteGameLibraryStore>());
 		builder.Services.AddSingleton<IScenarioMaterialReader>(serviceProvider => serviceProvider.GetRequiredService<SqliteGameLibraryStore>());
 		builder.Services.AddSingleton<IScenarioSceneFlowStore>(serviceProvider => serviceProvider.GetRequiredService<SqliteGameLibraryStore>());
 #if WINDOWS
@@ -60,6 +61,7 @@ public static class MauiProgram
 		builder.Services.AddSingleton<GameLauncherWithGit.Infrastructure.PlayRecordingWeb.PlayRecordingWebHost>();
 #endif
 		builder.Services.AddSingleton<ILunaCaptureHost, LunaCaptureHost>();
+		builder.Services.AddSingleton<ScenarioRecordTargetResolver>();
 		builder.Services.AddSingleton<ScenarioCaptureService>();
 		builder.Services.AddSingleton<IScenarioScreenshotStore>(serviceProvider => serviceProvider.GetRequiredService<SqliteGameLibraryStore>());
 		builder.Services.AddSingleton<IScenarioScreenshotPlatform, ScenarioScreenshotPlatform>();

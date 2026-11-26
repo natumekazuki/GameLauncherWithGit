@@ -43,7 +43,7 @@
         <a class="secondary-button home-labeled-action" href="capture"><CaptureIcon Name="History" /> シナリオ</a>
         @if (OperatingSystem.IsWindows())
         {
-            <a class="secondary-button home-labeled-action" href="play-recording-web" aria-label="記録Webの接続許可"><CaptureIcon Name="Link" /> 記録Web</a>
+            <a class="secondary-button home-labeled-action" href="play-recording-web" aria-label="記録Webのスマホ接続"><CaptureIcon Name="Link" /> スマホ接続</a>
         }
         <button type="button" class="secondary-button utility-icon-button" title="設定" aria-label="設定" @onclick="OpenSettingsAsync" disabled="@(_isStartupChecking || _isCardSizeSaving)"><CaptureIcon Name="Settings" /></button>
         <button type="button" class="secondary-button utility-icon-button" title="ヘルプ" aria-label="ヘルプ" @onclick="OpenHelp"><span aria-hidden="true" class="home-help-icon">?</span></button>

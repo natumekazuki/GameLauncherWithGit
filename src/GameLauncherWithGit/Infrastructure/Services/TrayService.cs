@@ -308,6 +308,11 @@ public sealed class TrayService : ITrayService, IDisposable
 	{
 		try
 		{
+			await _serviceProvider.GetRequiredService<GameLauncherWithGit.Infrastructure.PlayRecordingWeb.PlayRecordingWebHost>().DisposeAsync();
+		}
+		catch { _logger.LogWarning("Play recording Web shutdown did not finish."); }
+		try
+		{
 			await _serviceProvider.GetRequiredService<GameLauncherWithGit.Infrastructure.Mcp.ScenarioMcpHost>().DisposeAsync();
 		}
 		catch { _logger.LogWarning("Scenario MCP shutdown did not finish."); }
