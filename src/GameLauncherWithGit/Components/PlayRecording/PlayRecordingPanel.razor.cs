@@ -14,10 +14,11 @@ public partial class PlayRecordingPanel
     [Inject] private IJSRuntime Js { get; set; } = default!;
 
     private enum Pane { Text, Paths }
-    private enum FocusTarget { FinishImpact, FinishButton, Pause, Resume, Screenshot, RangeStatus, RangeStart, RangePicker, Ranges, Classification, EditButton, PathRow, Gallery, GalleryButton, Text }
+    private enum FocusTarget { FinishImpact, FinishButton, Pause, Resume, Screenshot, RangeStatus, RangeStart, RangePicker, RangeDraft, RangeEditor, Ranges, Classification, EditButton, PathRow, Gallery, GalleryButton, Text }
     private (FocusTarget Target, long ItemId)? _nextFocus;
-    private ElementReference _finishImpact, _finishButton, _pauseButton, _resumeButton, _rangeStatus,
+    private ElementReference _finishImpact, _finishButton, _rangeStatus, _rangeDraftButton, _rangeEditorHeading,
         _startRangeButton, _pickRangeButton, _rangesTab, _editClassification, _galleryHeading, _textHeading, _screenshotButton;
+    private ScenarioRecordingBar? _recordingBar;
     private sealed class RowButtons { public ElementReference Open; }
     private readonly Dictionary<long, RowButtons> _rowButtons = [];
 
@@ -31,6 +32,7 @@ public partial class PlayRecordingPanel
     private bool _busy, _disposed, _statusLoaded, _statusError, _paneNeedsLoad;
     private sealed record OperationFailure(string Label, string Detail);
     private OperationFailure? _actionError;
+    private string? _actionSuccess;
     private Pane _pane;
     private bool _savedRangesOpen;
     private bool _scrollToLatest;
@@ -58,6 +60,12 @@ public partial class PlayRecordingPanel
         if (_nextFocus is not { } request || _busy) return;
         _nextFocus = null;
         if (ControlsDisabled || _disposed) return;
+        if (request.Target is FocusTarget.Pause or FocusTarget.Resume)
+        {
+            try { if (_recordingBar is not null) await _recordingBar.FocusPauseAsync(); }
+            catch (JSDisconnectedException) { }
+            return;
+        }
 
         var textVisible = _pane == Pane.Text && _galleryItem is null;
         var rowVisible = textVisible && !_pickingRange && !_textError;
@@ -66,11 +74,11 @@ public partial class PlayRecordingPanel
         {
             FocusTarget.FinishImpact when _finishConfirmation is not null && _state?.CanFinish == true => _finishImpact,
             FocusTarget.FinishButton when _finishConfirmation is null && _state?.CanFinish == true => _finishButton,
-            FocusTarget.Pause when _state is { Paused: false, Recording: true } => _pauseButton,
-            FocusTarget.Resume when _state?.Paused == true => _resumeButton,
             FocusTarget.Screenshot when _state?.CanTakeScreenshot == true => _screenshotButton,
             FocusTarget.RangeStatus when _state is { RangeStart: not null, PendingRange: null } => _rangeStatus,
             FocusTarget.RangeStart when _state is { Recording: true, Paused: false, CanStartRange: true } && _rangeDraft is null => _startRangeButton,
+            FocusTarget.RangeDraft when _rangeDraft is { Open: false } => _rangeDraftButton,
+            FocusTarget.RangeEditor when _rangeDraft is { Open: true } => _rangeEditorHeading,
             FocusTarget.RangePicker when textVisible && !_textError && _textItems is { Count: > 0 } && _textRangeId is null => _pickRangeButton,
             FocusTarget.Ranges when _pane == Pane.Text => _rangesTab,
             FocusTarget.Classification when rowVisible && _editItem?.Id == request.ItemId => _editClassification,
@@ -97,7 +105,7 @@ public partial class PlayRecordingPanel
     private void OpenFinishConfirmation(DisplayTarget target, PlayRecordingState displayed)
     {
         if (ControlsDisabled || _finishConfirmation is not null || !displayed.CanFinish || !IsDisplayedTargetCurrent(target)) return;
-        _finishConfirmation = new(displayed.Title, displayed.RangeStart, displayed.PendingRange);
+        _finishConfirmation = new(displayed.Title, displayed.RangeStart, displayed.PendingRange, _rangeDraft);
         FocusAfterRender(FocusTarget.FinishImpact);
     }
 
@@ -184,6 +192,7 @@ public partial class PlayRecordingPanel
         if (!WebSession.IsConnectionCurrent(connectionVersion) || origin is { } start && !IsWorkspaceCurrent(start)) return;
         _busy = true;
         _actionError = null;
+        _actionSuccess = null;
         try
         {
             if (_pollRead is { } read)

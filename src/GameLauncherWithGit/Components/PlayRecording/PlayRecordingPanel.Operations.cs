@@ -1,6 +1,7 @@
 using System.Runtime.ExceptionServices;
 using GameLauncherWithGit.Application.Models;
 using GameLauncherWithGit.Application.Services;
+using GameLauncherWithGit.Components;
 using GameLauncherWithGit.Infrastructure.PlayRecordingWeb;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
@@ -18,26 +19,42 @@ public partial class PlayRecordingPanel
     private RangeDraft? _rangeDraft;
     private FinishConfirmation? _finishConfirmation;
     private bool _focusNextSharedRange;
-    private string RecordingStatus => _state switch
+    private bool _finishAfterRangeSave;
+    private bool _waitingAfterResume;
+    private ScenarioRecordingDisplay RecordingDisplay => _state switch
     {
-        { Paused: true } => "一時停止中",
-        { Recording: true } => "記録中",
-        { CanStart: true } => "記録停止中",
-        _ => "記録を開始できません"
+        { Paused: true } => ScenarioRecordingDisplay.Paused,
+        { Recording: true, CanTakeScreenshot: true } => ScenarioRecordingDisplay.Recording,
+        { Recording: true } when _waitingAfterResume => ScenarioRecordingDisplay.WaitingAfterResume,
+        { Recording: true } => ScenarioRecordingDisplay.WaitingForText,
+        { CanStart: false, BlockedByOtherGame: false } => ScenarioRecordingDisplay.Unconfigured,
+        _ => ScenarioRecordingDisplay.NotRecording
     };
 
-    private sealed record RangeDraft(PlayRecordingRangeSelection Selection, bool Shared = false, bool AutoFocus = false,
-        CaptureTextItem? First = null, CaptureTextItem? Last = null);
+    /// <summary>Owns one draft's values outside the shared form; closing the form leaves them intact.</summary>
+    private sealed class RangeDraft(PlayRecordingRangeSelection selection, bool shared, bool open,
+        CaptureTextItem? first = null, CaptureTextItem? last = null)
+    {
+        public PlayRecordingRangeSelection Selection { get; } = selection;
+        public bool Shared { get; } = shared;
+        public bool AutoFocus { get; } = open;
+        public CaptureTextItem? First { get; } = first;
+        public CaptureTextItem? Last { get; } = last;
+        public bool Open { get; set; } = open;
+        public string Name { get; set; } = "";
+        public string[] Tags { get; set; } = [];
+    }
 
     private sealed record FinishConfirmation(string Title, CapturePosition? RangeStart,
-        PlayRecordingRangeSelection? PendingRange)
+        PlayRecordingRangeSelection? PendingRange, RangeDraft? Draft)
     {
-        public bool HasUnsavedRange => RangeStart is not null || PendingRange is not null;
+        public bool HasUnsavedRange => RangeStart is not null || PendingRange is not null || Draft is not null;
 
         // A new command version alone (for example, after a screenshot) does not change the impact.
-        public bool Matches(PlayRecordingState state) =>
+        public bool Matches(PlayRecordingState state, RangeDraft? draft) =>
             state.CanFinish &&
-            Title == state.Title && Equals(RangeStart, state.RangeStart) && ReferenceEquals(PendingRange, state.PendingRange);
+            Title == state.Title && Equals(RangeStart, state.RangeStart) && ReferenceEquals(PendingRange, state.PendingRange)
+            && ReferenceEquals(Draft, draft);
     }
 
     // A command version can change without replacing the workspace (pause, screenshot, etc.).
@@ -122,15 +139,17 @@ public partial class PlayRecordingPanel
 
         if (state.PendingRange is { } pending)
         {
-            if (_rangeDraft is null || _rangeDraft.Shared && !Equals(_rangeDraft.Selection, pending))
+            if (_rangeDraft is null || _rangeDraft.Shared && !ReferenceEquals(_rangeDraft.Selection, pending))
             {
-                _rangeDraft = new(pending, Shared: true, AutoFocus: _focusNextSharedRange);
+                _rangeDraft = new(pending, shared: true, open: _focusNextSharedRange);
+                _finishAfterRangeSave = false;
                 await LoadRangesAsync();
             }
         }
         else if (_rangeDraft?.Shared == true)
         {
             _rangeDraft = null;
+            _finishAfterRangeSave = false;
             if (_savedRangesOpen) await LoadRangesAsync();
         }
 
@@ -151,12 +170,17 @@ public partial class PlayRecordingPanel
         if (read.Order <= _appliedStatusRead) return;
         _appliedStatusRead = read.Order;
         var state = read.State;
-        var changed = !SameWorkspace(_state, state);
+        var previous = _state;
+        var changed = !SameWorkspace(previous, state);
         if (changed) ClearTargetData();
+        // A pause/resume can be observed from the PC, not only from a Web click.
+        if (state is not { Recording: true, CanTakeScreenshot: false }) _waitingAfterResume = false;
+        else if (!changed && previous is { Paused: true } or { Recording: true, CanTakeScreenshot: true })
+            _waitingAfterResume = true;
         _state = state;
         _statusLoaded = true;
         _statusError = false;
-        if (_finishConfirmation is { } confirmation && state is not null && !confirmation.Matches(state)) CloseFinishConfirmation();
+        if (_finishConfirmation is { } confirmation && state is not null && !confirmation.Matches(state, _rangeDraft)) CloseFinishConfirmation();
         if (changed)
         {
             _paneNeedsLoad = state is not null;
@@ -173,8 +197,11 @@ public partial class PlayRecordingPanel
         _paneNeedsLoad = false;
         _focusNextSharedRange = false;
         _actionError = null;
+        _actionSuccess = null;
         _rangeDraft = null;
         _finishConfirmation = null;
+        _finishAfterRangeSave = false;
+        _waitingAfterResume = false;
         _latest = true;
         _scrollToLatest = false;
         ResetTextPages();
@@ -231,16 +258,36 @@ public partial class PlayRecordingPanel
     private Task CancelRangeAsync(DisplayTarget target) => RunMutationAsync(target, async () =>
     {
         await UseActionAsync(target, gameId => Operations.CancelRangeAsync(gameId, target.Recording));
-        _rangeDraft = null;
+        if (_rangeDraft?.Shared == true) _rangeDraft = null;
+        _finishAfterRangeSave = false;
         await RefreshStatusAsync(loadPane: false);
         if (IsWorkspaceCurrent(target)) FocusAfterRender(FocusTarget.RangeStart);
     }, "区間取消失敗");
 
-    private Task CloseRangeEditorAsync(DisplayTarget target, RangeDraft draft)
+    /// <summary>Hides the shared editor without changing the range, name, tags, or unsubmitted input.</summary>
+    private void CloseRangeEditor(DisplayTarget target, RangeDraft draft)
+    {
+        if (ControlsDisabled || !IsDisplayedTargetCurrent(target) || !ReferenceEquals(draft, _rangeDraft)) return;
+        draft.Open = false;
+        _finishAfterRangeSave = false;
+        FocusAfterRender(FocusTarget.RangeDraft);
+    }
+
+    /// <summary>Reopens the existing draft, without resolving or reselecting its endpoints.</summary>
+    private void OpenRangeEditor(DisplayTarget target, RangeDraft draft)
+    {
+        if (!IsDisplayedTargetCurrent(target) || !ReferenceEquals(draft, _rangeDraft)) return;
+        draft.Open = true;
+        FocusAfterRender(FocusTarget.RangeEditor);
+    }
+
+    /// <summary>Only an explicit discard cancels a live range or drops a retrospective draft.</summary>
+    private Task DiscardRangeEditorAsync(DisplayTarget target, RangeDraft draft)
     {
         if (ControlsDisabled || !IsDisplayedTargetCurrent(target) || !ReferenceEquals(draft, _rangeDraft)) return Task.CompletedTask;
         if (draft.Shared) return CancelRangeAsync(target);
         _rangeDraft = null;
+        _finishAfterRangeSave = false;
         FocusAfterRender(FocusTarget.RangePicker);
         return Task.CompletedTask;
     }
@@ -250,22 +297,36 @@ public partial class PlayRecordingPanel
         if (!TextRangeValid || _first is not { } first || _last is not { } last) return;
         var selection = await UseAsync(target, gameId => Operations.SelectRangeAsync(gameId, target.Recording, first, last));
         if (_disposed) return;
-        _rangeDraft = new(selection, AutoFocus: true, First: first, Last: last);
+        _rangeDraft = new(selection, shared: false, open: true, first, last);
         ClearRangePick();
         await LoadRangesAsync();
     }, "区間指定失敗");
 
-    private Task SaveRangeAsync(DisplayTarget target, RangeDraft draft, (string Name, string[] Tags) data) => RunMutationAsync(target, async () =>
+    private Task SaveRangeAsync(DisplayTarget target, RangeDraft draft) => RunMutationAsync(target, async () =>
     {
-        if (!ReferenceEquals(draft, _rangeDraft)) return;
+        if (!ReferenceEquals(draft, _rangeDraft) || string.IsNullOrWhiteSpace(draft.Name)) return;
+        var finishAfterSave = _finishAfterRangeSave;
         var selection = draft.Selection;
         // A new Save can revalidate the original displayed endpoints; an old command is still rejected above.
         if (!draft.Shared && selection.Target != target.Recording && draft.First is { } first && draft.Last is { } last)
             selection = await UseAsync(target, gameId => Operations.SelectRangeAsync(gameId, target.Recording, first, last));
-        await UseAsync(target, gameId => Operations.SaveRangeAsync(gameId, target.Recording, selection, data.Name, data.Tags));
+        var currentTarget = ForDisplay(_state!);
+        await UseAsync(currentTarget, gameId => Operations.SaveRangeAsync(gameId, currentTarget.Recording, selection, draft.Name.Trim(), draft.Tags));
 
-        if (_disposed) return;
         _rangeDraft = null;
+        _finishAfterRangeSave = false;
+        _actionSuccess = "区間を保存しました";
+        // Saving changes the command version. Finish only the same session and only if no other draft appeared.
+        if (finishAfterSave && _state is { CanFinish: true, RangeStart: null, PendingRange: null } finishedRange && IsWorkspaceCurrent(target))
+        {
+            var finishTarget = ForDisplay(finishedRange);
+            try { await UseActionAsync(finishTarget, gameId => Operations.FinishAsync(gameId, finishTarget.Recording)); }
+            catch (InvalidOperationException)
+            {
+                // The range was already saved; do not turn a failed finish into a failed save.
+                _actionError = new("記録終了失敗", "区間は保存しました。現在の記録を確認して、もう一度終了してください。");
+            }
+        }
         if (_savedRangesOpen) await LoadRangesAsync();
         await RefreshStatusAsync(loadPane: false, refreshLatestText: false);
         if (IsWorkspaceCurrent(target))
@@ -287,7 +348,7 @@ public partial class PlayRecordingPanel
         if (!ReferenceEquals(_finishConfirmation, confirmation)) return Task.CompletedTask;
         return RunMutationAsync(target, async () =>
         {
-            if (_state is not { } state || !confirmation.Matches(state))
+            if (_state is not { } state || !confirmation.Matches(state, _rangeDraft))
             {
                 CloseFinishConfirmation();
                 return;
@@ -300,6 +361,30 @@ public partial class PlayRecordingPanel
         }, "記録終了失敗", isStillRelevant: () => ReferenceEquals(_finishConfirmation, confirmation));
     }
 
+    /// <summary>Routes save-before-finish through the existing draft, or freezes a live range before naming it.</summary>
+    private Task OpenFinishSaveAsync(DisplayTarget target, FinishConfirmation confirmation) => RunMutationAsync(target, async () =>
+    {
+        if (!ReferenceEquals(_finishConfirmation, confirmation) || _state is not { } state || !confirmation.Matches(state, _rangeDraft))
+            return;
+        if (_rangeDraft is null)
+        {
+            if (state.PendingRange is null && !state.CanEndRange) return;
+            _focusNextSharedRange = true;
+            try
+            {
+                if (state.PendingRange is null)
+                    await UseAsync(target, gameId => Operations.EndRangeAsync(gameId, target.Recording));
+                await RefreshStatusAsync(loadPane: false, refreshLatestText: false);
+            }
+            finally { _focusNextSharedRange = false; }
+        }
+        if (!IsWorkspaceCurrent(target) || _rangeDraft is not { } draft || _state is not { } current) return;
+        _finishConfirmation = null;
+        _nextFocus = null;
+        _finishAfterRangeSave = true;
+        OpenRangeEditor(ForDisplay(current), draft);
+    }, "区間固定失敗");
+
     private Task ChangeRecordingAsync(DisplayTarget target, Func<string, Task> operation, string failureLabel, string? rejection = null, FocusTarget? focus = null) => RunMutationAsync(target, async () =>
     {
         await UseActionAsync(target, operation);
@@ -310,7 +395,8 @@ public partial class PlayRecordingPanel
     private Task BreakLivePathAsync(DisplayTarget target) => RunMutationAsync(target, async () =>
     {
         await UseActionAsync(target, gameId => Operations.BreakPathAsync(gameId, target.Recording));
-        await RefreshStatusAsync(loadPane: true);
+        _actionSuccess = "次の本文から別経路";
+        await RefreshStatusAsync(loadPane: _pane == Pane.Paths, refreshLatestText: false);
     }, "経路変更失敗");
 
     private async Task TakeScreenshotAsync(DisplayTarget target)
@@ -319,12 +405,11 @@ public partial class PlayRecordingPanel
 
         await RunMutationAsync(target, async () =>
         {
-            ClearScreenshotResult();
             var shot = await UseAsync(target, gameId => Operations.TakeScreenshotAsync(gameId, target.Recording));
             await RefreshStatusAsync(loadPane: false, refreshLatestText: false);
             if (StillShowingRecording() && _state?.Target.SessionId == shot.Event.SessionId)
                 _screenshotResult = shot;
-        }, "撮影失敗", "ゲーム画像を保存できませんでした。PCで対象のゲームを確認してください。");
+        }, "撮影失敗", "ゲーム画像を保存できませんでした。PCのゲーム画面を最前面にして、もう一度撮影してください。");
 
         if (StillShowingRecording()) FocusAfterRender(FocusTarget.Screenshot);
     }

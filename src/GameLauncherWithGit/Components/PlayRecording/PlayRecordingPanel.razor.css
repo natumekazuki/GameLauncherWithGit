@@ -24,7 +24,9 @@
 .play-body[hidden] { display:none; }
 .play-workspace { grid-template-rows: auto minmax(0,1fr); }
 .play-workspace[hidden] { display:none; }
-.play-body { display:flex; flex-direction:column; min-height:0; }
+.play-body { display:flex; flex-direction:column; min-height:0; position:relative; }
+.play-draft-layer { position:absolute; inset:0; z-index:1; overflow:auto; }
+.play-draft-layer[hidden] { display:none; }
 .play-view { display:flex; flex:1 1 auto; min-height:0; }
 .play-view[hidden], .play-text-scroll[hidden] { display:none; }
 .play-view > .play-panel { flex:1 1 auto; display:flex; flex-direction:column; overflow:auto; }
@@ -68,7 +70,12 @@
 .play-shell ::deep label, .play-shell ::deep .range-editor { display: grid; gap: .4rem; min-width: 0; }
 .play-shell ::deep label:has(input[type=checkbox]) { display: flex; align-items: center; min-height: 2.75rem; }
 .play-shell ::deep .range-editor { gap: .75rem; }
-.play-shell ::deep .range-editor-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: .5rem; }
+.play-shell ::deep .range-editor[hidden] { display:none; }
+.play-shell ::deep .scenario-range-draft-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:.5rem; }
+.play-shell ::deep .scenario-recording-bar { display:grid; gap:.5rem; }
+.play-shell ::deep .scenario-recording-actions { display:flex; flex-wrap:wrap; align-items:center; gap:.375rem; }
+.play-shell ::deep .scenario-recording-actions button { display:inline-flex; align-items:center; gap:.375rem; }
+.play-device-actions .play-camera { flex:1 1 auto; }
 .play-shell ::deep .capture-tag-input button { flex-shrink: 0; }
 .play-shell ::deep .capture-tag-input input { flex: 1; }
 .play-shell ::deep .capture-tag-list button { width: auto; }

@@ -10,7 +10,6 @@
                 <div class="play-toolbar">
                     <h2>@current.Title</h2>
                     <span class="play-record-root">記録先：@RecordingRootLabel(current)</span>
-                    <span class="play-status" role="status">@RecordingStatus</span>
                 </div>
             }
         </header>
@@ -52,6 +51,10 @@
                                     <button type="button" class="play-labeled-button" aria-label="撮影した本文・画像へ" disabled="@ControlsDisabled" @onclick="() => OpenCapturedEventAsync(workspaceTarget, shot)"><CaptureIcon Name="Image" />撮影結果</button>
                                 </div>
                             }
+                            else if (_actionSuccess is { } success)
+                            {
+                                <span class="play-control-result play-status" role="status">@success</span>
+                            }
                         </div>
                         @RecordingControls
                         @RangeControls
@@ -59,14 +62,14 @@
                 </section>
                 <div class="play-body">
                     @if (_rangeDraft is not null) { @RangeEditor }
-                    <nav class="play-nav" aria-label="記録内容">
+                    <nav class="play-nav" aria-label="記録内容" inert="@(_rangeDraft?.Open == true)">
                         <button type="button" aria-pressed="@Pressed(Pane.Text)" disabled="@_busy" @onclick="() => SelectPaneAsync(workspaceTarget, Pane.Text)">本文</button>
                         <button type="button" class="play-labeled-button" aria-pressed="@Pressed(Pane.Paths)" disabled="@_busy" @onclick="() => SelectPaneAsync(workspaceTarget, Pane.Paths)"><CaptureIcon Name="Flow" />フロー</button>
                     </nav>
-                    <div class="play-view" hidden="@(_pane != Pane.Text)">
+                    <div class="play-view" hidden="@(_pane != Pane.Text)" inert="@(_rangeDraft?.Open == true)">
                         @TextPane
                     </div>
-                    <div class="play-view" hidden="@(_pane != Pane.Paths)">
+                    <div class="play-view" hidden="@(_pane != Pane.Paths)" inert="@(_rangeDraft?.Open == true)">
                         @if (_pane == Pane.Paths || _graph is not null) { @PathsPane }
                     </div>
                 </div>
@@ -80,46 +83,45 @@
         @if (_state is { } state)
         {
             var target = ForDisplay(state);
-            <div class="play-actions">
-                @if (state.CanStart)
-                {
-                    <button type="button" class="primary play-labeled-button" disabled="@ControlsDisabled" @onclick="() => StartRecordingAsync(target)"><CaptureIcon Name="Play" />記録を開始</button>
-                }
-                @if (state.Paused)
-                {
-                    <button type="button" class="primary play-labeled-button" @ref="_resumeButton" aria-label="記録を再開" disabled="@ControlsDisabled" @onclick="() => ResumeRecordingAsync(target)"><CaptureIcon Name="Play" />再開</button>
-                }
-                else if (state.Recording)
-                {
-                    <button type="button" class="play-icon-button" @ref="_pauseButton" title="記録を一時停止" aria-label="記録を一時停止" disabled="@ControlsDisabled" @onclick="() => PauseRecordingAsync(target)"><CaptureIcon Name="Pause" /></button>
-                    <button type="button" class="play-labeled-button" aria-label="ゲームを撮影" @ref="_screenshotButton" disabled="@(ControlsDisabled || !state.CanTakeScreenshot)" @onclick="() => TakeScreenshotAsync(target)"><CaptureIcon Name="Camera" />撮影</button>
-                }
-                @if (state.Recording || state.CanFinish)
-                {
-                    <button type="button" class="play-labeled-button" @ref="_finishButton" disabled="@ControlsDisabled" popovertarget="play-recording-tools" aria-haspopup="dialog"><CaptureIcon Name="Settings" />操作</button>
-                    <section id="play-recording-tools" class="play-row-actions" popover="auto" role="dialog" aria-label="記録中のその他の操作">
-                        <h3>記録中のその他の操作</h3>
-                        <div class="play-actions">
-                            @if (state.Recording && !state.Paused)
-                            {
-                                <button type="button" class="play-labeled-button" popovertarget="play-recording-tools" popovertargetaction="hide" disabled="@ControlsDisabled" @onclick="() => BreakLivePathAsync(target)"><CaptureIcon Name="PathBreak" />次の本文から別経路</button>
-                            }
-                            @if (state.CanFinish && _finishConfirmation is null)
-                            {
-                                <button type="button" class="play-labeled-button" popovertarget="play-recording-tools" popovertargetaction="hide" disabled="@ControlsDisabled" @onclick="() => OpenFinishConfirmation(target, state)"><CaptureIcon Name="Stop" />記録を終了…</button>
-                            }
-                            <button type="button" popovertarget="play-recording-tools" popovertargetaction="hide">閉じる</button>
-                        </div>
-                    </section>
-                }
-            </div>
+            <ScenarioRecordingBar @ref="_recordingBar" State="@RecordingDisplay" ShowControls="state.CanFinish"
+                                  CanTogglePause="state.CanFinish" CanBreakPath="@(state.Recording && !state.Paused)" Disabled="ControlsDisabled"
+                                  TogglePause="() => state.Paused ? ResumeRecordingAsync(target) : PauseRecordingAsync(target)"
+                                  BreakPath="() => BreakLivePathAsync(target)">
+                <div class="play-actions play-device-actions">
+                    @if (state.CanStart)
+                    {
+                        <button type="button" class="scenario-action scenario-action--primary play-labeled-button" disabled="@ControlsDisabled" @onclick="() => StartRecordingAsync(target)"><CaptureIcon Name="Play" />記録を開始</button>
+                    }
+                    else if (RecordingDisplay == ScenarioRecordingDisplay.Unconfigured)
+                    {
+                        <p>PCで記録の準備をしてください。</p>
+                    }
+                    @if (state.CanFinish)
+                    {
+                        <button type="button" class="scenario-action scenario-action--primary play-labeled-button play-camera" aria-label="ゲームを撮影" @ref="_screenshotButton"
+                                disabled="@(ControlsDisabled || !state.CanTakeScreenshot)" @onclick="() => TakeScreenshotAsync(target)"><CaptureIcon Name="Camera" />撮影</button>
+                        <button type="button" class="scenario-action play-labeled-button" @ref="_finishButton" disabled="@ControlsDisabled" popovertarget="play-recording-tools" aria-haspopup="dialog"><CaptureIcon Name="Settings" />その他</button>
+                        <section id="play-recording-tools" class="play-row-actions" popover="auto" role="dialog" aria-label="記録のその他の操作">
+                            <h3>記録のその他の操作</h3>
+                            <div class="play-actions">
+                                <button type="button" class="scenario-action play-labeled-button" popovertarget="play-recording-tools" popovertargetaction="hide" disabled="@ControlsDisabled" @onclick="() => OpenFinishConfirmation(target, state)"><CaptureIcon Name="Stop" />記録を終了…</button>
+                                <button type="button" class="scenario-action" popovertarget="play-recording-tools" popovertargetaction="hide">閉じる</button>
+                            </div>
+                        </section>
+                    }
+                </div>
+            </ScenarioRecordingBar>
             @if (_finishConfirmation is { } confirmation && state.CanFinish)
             {
                 <div class="play-stack play-selection" role="group" aria-label="記録終了の確認" @onkeydown="e => HandleEscape(target, e, CloseFinishConfirmation)">
-                    <p class="play-finish-impact" @ref="_finishImpact" tabindex="-1">「@confirmation.Title」の記録を終了します。@(confirmation.HasUnsavedRange ? "保存していないプレイ中の区間は残りません。" : "")</p>
+                    <p class="play-finish-impact" @ref="_finishImpact" tabindex="-1">「@confirmation.Title」の記録を終了します。@(confirmation.HasUnsavedRange ? "未保存の区間があります。" : "")</p>
                     <div class="play-actions">
-                        <button type="button" disabled="@ControlsDisabled" @onclick="() => EditWorkspace(target, CloseFinishConfirmation)">取消</button>
-                        <button type="button" class="play-labeled-button" disabled="@ControlsDisabled" @onclick="() => FinishRecordingAsync(target, confirmation)"><CaptureIcon Name="Stop" />記録を終了</button>
+                        @if (confirmation.HasUnsavedRange)
+                        {
+                            <button type="button" class="scenario-action scenario-action--primary" disabled="@(ControlsDisabled || (_rangeDraft is null && state.PendingRange is null && !state.CanEndRange))" @onclick="() => OpenFinishSaveAsync(target, confirmation)">保存して終了</button>
+                        }
+                        <button type="button" class="scenario-action play-labeled-button" disabled="@ControlsDisabled" @onclick="() => FinishRecordingAsync(target, confirmation)"><CaptureIcon Name="Stop" />@(confirmation.HasUnsavedRange ? "破棄して終了" : "記録を終了")</button>
+                        <button type="button" class="scenario-action" disabled="@ControlsDisabled" @onclick="() => EditWorkspace(target, CloseFinishConfirmation)">戻る</button>
                     </div>
                 </div>
             }
@@ -131,6 +133,10 @@
         {
             var target = ForDisplay(state);
             <div class="play-actions play-range-controls">
+                @if (_rangeDraft is { Open: false } draft)
+                {
+                    <button type="button" class="scenario-action play-labeled-button" @ref="_rangeDraftButton" disabled="@ControlsDisabled" @onclick="() => OpenRangeEditor(target, draft)"><CaptureIcon Name="Range" />区間草稿を開く</button>
+                }
                 @if (state.PendingRange is not null)
                 {
                     <p class="play-status" role="status">区間の末尾を固定済み</p>
@@ -149,14 +155,20 @@
         }
     </div>;
 
-    private RenderFragment RangeEditor => @<div>
+    private RenderFragment RangeEditor => @<div class="play-draft-layer" hidden="@(_rangeDraft?.Open != true)">
         @if (_rangeDraft is { } draft)
         {
             var target = ForDisplay(_state!);
-            <PlayRecordingRangeEditor @key="draft"
-                AvailableTags="_rangeTags" SuggestedTags="_speakers" Disabled="ControlsDisabled" AutoFocus="draft.AutoFocus"
-                Save="data => SaveRangeAsync(target, draft, data)"
-                Cancel="() => CloseRangeEditorAsync(target, draft)" />
+            <section class="range-editor" @key="draft" hidden="@(!draft.Open)" aria-label="区間名とタグ">
+                <h3 @ref="_rangeEditorHeading" tabindex="-1">@(_finishAfterRangeSave ? "終了前に区間を保存" : "区間名とタグ")</h3>
+                <ScenarioRangeDraftEditor Name="@draft.Name" Tags="@draft.Tags"
+                    NameChanged="value => EditWorkspace(target, () => { if (ReferenceEquals(draft, _rangeDraft)) draft.Name = value; })"
+                    TagsChanged="value => EditWorkspace(target, () => { if (ReferenceEquals(draft, _rangeDraft)) draft.Tags = value; })"
+                    AvailableTags="_rangeTags" SuggestedTags="_speakers" Disabled="ControlsDisabled" AutoFocus="@(draft.AutoFocus && draft.Open)"
+                    Save="() => SaveRangeAsync(target, draft)"
+                    Close="() => CloseRangeEditor(target, draft)"
+                    Discard="() => DiscardRangeEditorAsync(target, draft)" />
+            </section>
         }
     </div>;
 
