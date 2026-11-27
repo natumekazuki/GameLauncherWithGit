@@ -323,7 +323,7 @@ public sealed class ScenarioScreenshotService : IAsyncDisposable
         catch (Exception ex) { _logger.LogWarning(ex, "Screenshot failure notification could not be shown"); }
     }
 
-    private static string DescribeHotkey(ScreenshotHotkey key)
+    internal static string DescribeHotkey(ScreenshotHotkey key)
     {
         var modifiers = new List<string>();
         if ((key.Modifiers & 2) != 0) modifiers.Add("Ctrl");

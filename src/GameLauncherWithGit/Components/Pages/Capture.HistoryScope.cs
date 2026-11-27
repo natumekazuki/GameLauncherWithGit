@@ -209,11 +209,15 @@ public partial class Capture
         var editorWasOpen = EditorOpen;
         CloseEditors();
         ClearRangeDraft();
+        ClearDetail();
+        DiscardCorrection();
         _restoreFocus |= editorWasOpen;
         _focusFeed |= hadView && !editorWasOpen;
-        _focusEditor = _focusExportSave = _focusRangeFilter = _focusHistoryContent = false;
+        _focusEditor = _focusExportSave = _focusHistoryContent = false;
         _flowOpen = false;
         _flowGraph = null;
+        _flowLoading = false;
+        _flowReadError = null;
         _flowHighlighted = null;
         _pendingLiveRange = null;
         _rangeDraftTarget = _settingsTarget = null;
