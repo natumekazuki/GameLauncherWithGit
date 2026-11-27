@@ -1,0 +1,45 @@
+<div class="scenario-recording-bar">
+    <span role="status">@StatusLabel</span>
+    @if (ShowControls)
+    {
+        <div class="scenario-recording-actions" aria-label="記録と経路">
+            <button @ref="_pauseButton" type="button" class="secondary-button" disabled="@(Disabled || !CanTogglePause)" @onclick="TogglePause">
+                <CaptureIcon Name="@(State == ScenarioRecordingDisplay.Paused ? "Play" : "Pause")" />
+                @(State == ScenarioRecordingDisplay.Paused ? "記録を再開" : "記録を一時停止")
+            </button>
+            <button type="button" class="secondary-button" disabled="@(Disabled || !CanBreakPath)" @onclick="BreakPath">
+                <CaptureIcon Name="PathBreak" />次の本文から別経路
+            </button>
+        </div>
+    }
+    @ChildContent
+</div>
+
+@code {
+    [Parameter, EditorRequired] public ScenarioRecordingDisplay State { get; set; }
+    [Parameter] public bool ShowControls { get; set; }
+    [Parameter] public bool CanTogglePause { get; set; }
+    [Parameter] public bool CanBreakPath { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public EventCallback TogglePause { get; set; }
+    [Parameter] public EventCallback BreakPath { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private ElementReference _pauseButton;
+    private string StatusLabel => State switch
+    {
+        ScenarioRecordingDisplay.Unconfigured => "記録未設定",
+        ScenarioRecordingDisplay.Preparing => "記録を準備中",
+        ScenarioRecordingDisplay.WaitingForText => "本文待ち",
+        ScenarioRecordingDisplay.Recording => "記録中",
+        ScenarioRecordingDisplay.Paused => "一時停止中",
+        ScenarioRecordingDisplay.WaitingAfterResume => "再開後の本文待ち",
+        ScenarioRecordingDisplay.Failed => "記録に失敗しました",
+        _ => "記録していません",
+    };
+
+    /// <summary>Restores focus to the same operation after pause or resume.</summary>
+    public ValueTask FocusPauseAsync() => ShowControls && CanTogglePause && !Disabled && _pauseButton.Id is not null
+        ? _pauseButton.FocusAsync(preventScroll: true)
+        : ValueTask.CompletedTask;
+}

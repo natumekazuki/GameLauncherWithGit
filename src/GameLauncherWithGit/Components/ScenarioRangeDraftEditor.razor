@@ -1,0 +1,25 @@
+<CaptureRangeFields Name="@Name" NameChanged="@NameChanged" Tags="@Tags" TagsChanged="@TagsChanged"
+                    AvailableTags="@AvailableTags" SuggestedTags="@SuggestedTags" Disabled="@Disabled" AutoFocus="@AutoFocus" />
+<div class="scenario-range-draft-actions">
+    <button type="button" class="secondary-button" disabled="@Disabled" @onclick="Close">閉じる</button>
+    <button type="button" class="secondary-button" disabled="@Disabled" @onclick="Discard">区間指定を破棄</button>
+    <button type="button" class="launch-button" disabled="@(Disabled || string.IsNullOrWhiteSpace(Name))" @onclick="Save">
+        <CaptureIcon Name="Save" />区間を保存
+    </button>
+</div>
+
+@code {
+    [Parameter] public string Name { get; set; } = "";
+    [Parameter] public EventCallback<string> NameChanged { get; set; }
+    [Parameter] public string[] Tags { get; set; } = [];
+    [Parameter] public EventCallback<string[]> TagsChanged { get; set; }
+    [Parameter] public IReadOnlyList<string> AvailableTags { get; set; } = [];
+    [Parameter] public IReadOnlyList<string> SuggestedTags { get; set; } = [];
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public bool AutoFocus { get; set; }
+
+    // The caller keeps the range and its target, and resolves or retains it after each request.
+    [Parameter, EditorRequired] public EventCallback Save { get; set; }
+    [Parameter, EditorRequired] public EventCallback Close { get; set; }
+    [Parameter, EditorRequired] public EventCallback Discard { get; set; }
+}

@@ -1,4 +1,4 @@
-<label>区間名<input value="@Name" @oninput="ChangeNameAsync" disabled="@Disabled" /></label>
+<label>区間名<input @ref="_nameInput" value="@Name" @oninput="ChangeNameAsync" disabled="@Disabled" /></label>
 <CaptureTagsEditor Label="区間タグ" Tags="@Tags" TagsChanged="@TagsChanged" AvailableTags="@AvailableTags"
                    SuggestedTags="@SuggestedTags" Disabled="@Disabled" />
 
@@ -10,6 +10,20 @@
     [Parameter] public IReadOnlyList<string> AvailableTags { get; set; } = [];
     [Parameter] public IReadOnlyList<string> SuggestedTags { get; set; } = [];
     [Parameter] public bool Disabled { get; set; }
+    [Parameter] public bool AutoFocus { get; set; }
 
+    private ElementReference _nameInput;
+    private bool _focused;
+
+    /// <summary>Focuses the name once when the caller opens a draft for editing.</summary>
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!AutoFocus || _focused || Disabled) return;
+        _focused = true;
+        try { await _nameInput.FocusAsync(preventScroll: true); }
+        catch (JSDisconnectedException) { /* A detached Web circuit cannot receive focus. */ }
+    }
+
+    /// <summary>Reports input without replacing the caller-owned draft.</summary>
     private Task ChangeNameAsync(ChangeEventArgs e) => NameChanged.InvokeAsync(e.Value?.ToString() ?? "");
 }
