@@ -1,0 +1,50 @@
+/* Shared by the desktop WebView and the recording Web host; only opt-in controls use these rules. */
+:root {
+    --scenario-background: #0c1528;
+    --scenario-surface: #142239;
+    --scenario-text: #e6edf7;
+    --scenario-muted: #adbed5;
+    --scenario-border: #41516b;
+    --scenario-input: #101d30;
+    --scenario-action-bg: #182338;
+    --scenario-action-hover: #202f4a;
+    --scenario-selected: #253c5a;
+    --scenario-focus: 2px solid #a4c8ff;
+    --scenario-focus-offset: 3px;
+}
+
+.scenario-action {
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: .35rem;
+    min-inline-size: 0;
+    min-block-size: 2.75rem;
+    padding: .45rem .7rem;
+    border: 1px solid var(--scenario-border);
+    border-radius: .45rem;
+    background: var(--scenario-action-bg);
+    color: var(--scenario-text);
+    font: inherit;
+    line-height: 1.25;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.scenario-action:hover { background: var(--scenario-action-hover); }
+
+.scenario-action--primary {
+    background: linear-gradient(135deg, #2b66f5, #1f4dc0);
+    font-weight: 650;
+}
+
+.scenario-action--primary:hover { background: linear-gradient(135deg, #3a75ff, #2a58cd); }
+.scenario-action[aria-pressed="true"] { background: var(--scenario-selected); }
+.scenario-action:is(:disabled, [aria-disabled="true"]) { opacity: .6; cursor: not-allowed; }
+
+.scenario-action:focus-visible,
+.scenario-focus:focus-visible {
+    outline: var(--scenario-focus);
+    outline-offset: var(--scenario-focus-offset);
+}
