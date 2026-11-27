@@ -60,7 +60,7 @@
             </nav>
         }
     </header>
-    @if (_loading) { <p role="status">読込中…</p> }
+    @if (_loading) { <ScenarioLoading Label="シナリオを読込中…" /> }
     else if (_initialError is not null)
     {
         <button type="button" class="secondary-button capture-text-button" @ref="_initialRetry" @onclick="RetryInitialAsync"><CaptureIcon Name="Refresh" />シナリオを再読込</button>
@@ -167,7 +167,7 @@
                     </form>
                     <button class="secondary-button capture-text-button" @onclick="() => AtScopeAsync(displayedScope, OpenHistoryManagementAsync)" disabled="@(_busy || _recordId == 0)"><CaptureIcon Name="History" />履歴管理</button>
                 </div>
-                <span class="capture-sr-only" role="status">@(_busy ? "読込中…" : HistorySearchPending ? "検索条件は未適用" : "")</span>
+                <span class="capture-sr-only" role="status">@(!_busy && HistorySearchPending ? "検索条件は未適用" : "")</span>
             }
             <div class="capture-tools">
                 <div class="capture-tool-group capture-view-tools">
@@ -255,7 +255,7 @@
                             CutOccurrence="occurrence => AtScopeAsync(displayedScope, () => CutFlowOccurrenceAsync(displayedProfile, occurrence))" />
                     </div>
                 }
-                @if (_flowLoading) { <p role="status">フローチャートを読込中…</p> }
+                @if (_flowLoading) { <ScenarioLoading Label="フローチャートを読込中…" /> }
                 else if (_flowReadError is { } flowError)
                 {
                     <div class="capture-feed-error">
