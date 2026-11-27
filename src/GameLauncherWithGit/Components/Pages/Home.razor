@@ -1,6 +1,7 @@
 @page "/"
 @implements IDisposable
 @using System.Runtime.CompilerServices
+@using GameLauncherWithGit.Application.Services
 @inject IGameLibraryService GameLibraryService
 @inject ILauncherService LauncherService
 @inject IPathPickerService PathPickerService
@@ -13,12 +14,15 @@
 @inject IRepositoryStateStore RepositoryStateStore
 @inject ISettingsPanelService SettingsPanelService
 @inject ISaveLinkService SaveLinkService
+@inject IScenarioCaptureStore CaptureStore
+@inject ScenarioCaptureService CaptureService
 @inject IJSRuntime JS
 @inject NavigationManager Navigation
 
 <PageTitle>GameLauncherWithGit</PageTitle>
 
 @{
+    var capture = _games is null ? new CaptureSnapshot() : CaptureService.Snapshot;
     RenderFragment notificationContent = @<div class="home-feedback">
         @if (_notification is { } feedback)
         {
@@ -34,24 +38,6 @@
 }
 
 <header class="home-header">
-    <h1 tabindex="-1" @ref="_libraryHeading">ゲーム一覧</h1>
-    @if (HasFeedback && !_isHelpOpen && !_isSettingsOpen && !_isDeleteConfirmOpen && !_isEditorOpen && GetSelectedGame() is null)
-    {
-        @notificationContent
-    }
-    <nav class="home-navigation" aria-label="ランチャー">
-        <a class="secondary-button home-labeled-action" href="capture"><CaptureIcon Name="History" /> シナリオ</a>
-        @if (OperatingSystem.IsWindows())
-        {
-            <a class="secondary-button home-labeled-action" href="play-recording-web" aria-label="記録Webのスマホ接続"><CaptureIcon Name="Link" /> スマホ接続</a>
-        }
-        <button type="button" class="secondary-button utility-icon-button" title="設定" aria-label="設定" @onclick="OpenSettingsAsync" disabled="@(_isStartupChecking || _isCardSizeSaving)"><CaptureIcon Name="Settings" /></button>
-        <button type="button" class="secondary-button utility-icon-button" title="ヘルプ" aria-label="ヘルプ" @onclick="OpenHelp"><span aria-hidden="true" class="home-help-icon">?</span></button>
-    </nav>
-</header>
-
-@if (!_isStartupChecking && _isGitReady)
-{
     <section class="utility-bar" aria-label="ゲーム一覧の操作">
         <div class="search-control">
             <input type="search"
@@ -67,7 +53,7 @@
                     title="カードサイズを小さくする"
                     aria-label="カードサイズを小さくする"
                     @onclick="DecreaseGameCardSizeAsync"
-                    disabled="@(_isCardSizeSaving || _gameCardSizePercent <= AppSettings.GameCardSizePercentMin)">
+                    disabled="@(_isStartupChecking || !_isGitReady || _isCardSizeSaving || _gameCardSizePercent <= AppSettings.GameCardSizePercentMin)">
                 <span aria-hidden="true">−</span>
             </button>
             <output class="card-size-label">@_gameCardSizePercent%</output>
@@ -76,102 +62,106 @@
                     title="カードサイズを大きくする"
                     aria-label="カードサイズを大きくする"
                     @onclick="IncreaseGameCardSizeAsync"
-                    disabled="@(_isCardSizeSaving || _gameCardSizePercent >= AppSettings.GameCardSizePercentMax)">
+                    disabled="@(_isStartupChecking || !_isGitReady || _isCardSizeSaving || _gameCardSizePercent >= AppSettings.GameCardSizePercentMax)">
                 <CaptureIcon Name="Plus" />
             </button>
         </div>
         <button type="button"
                 class="launch-button home-labeled-action"
                 @onclick="OpenCreateEditor"
-                disabled="@(_games is null || _libraryLoadError is not null)">
+                disabled="@(_isStartupChecking || !_isGitReady || _games is null || _libraryLoadError is not null)">
             <CaptureIcon Name="Plus" /> ゲーム追加
         </button>
     </section>
-}
+    @if (HasFeedback && !_isHelpOpen && !_isSettingsOpen && !_isDeleteConfirmOpen && !_isEditorOpen && GetSelectedGame() is null)
+    {
+        @notificationContent
+    }
+    <nav class="home-navigation" aria-label="ランチャー">
+        <button type="button" class="secondary-button utility-icon-button" title="設定" aria-label="設定" @onclick="OpenSettingsAsync" disabled="@(_isStartupChecking || _isCardSizeSaving)"><CaptureIcon Name="Settings" /></button>
+        <button type="button" class="secondary-button utility-icon-button" title="ヘルプ" aria-label="ヘルプ" @onclick="OpenHelp"><span aria-hidden="true" class="home-help-icon">?</span></button>
+    </nav>
+</header>
 
-@if (_isStartupChecking)
-{
-    <section class="library-page startup-check-panel" role="status">
-        <p>Gitを確認中…</p>
-    </section>
-}
-else if (!_isGitReady)
-{
-    <section class="startup-error-panel">
-        <div role="alert"><h2>Git が利用できません</h2></div>
-        <button type="button" class="secondary-button home-labeled-action" @onclick="RetryStartupAsync"><CaptureIcon Name="Refresh" /> 再試行</button>
-        <button type="button" class="secondary-button home-labeled-action" aria-haspopup="dialog" aria-label="Git起動エラーの詳細"
-                @onclick='() => OpenResultDetails("Git起動エラー", $"{_startupError} Gitの設定を確認して、再試行してください。")'>詳細</button>
-    </section>
-}
-else if (_libraryLoadError is not null)
-{
-    <section class="startup-error-panel">
-        <div role="alert"><h2>ゲーム一覧を読み込めません</h2></div>
-        <button type="button" class="secondary-button home-labeled-action" @onclick="RetryLibraryAsync" disabled="@_isLibraryRetrying"><CaptureIcon Name="Refresh" /> 再試行</button>
-        <button type="button" class="secondary-button home-labeled-action" aria-haspopup="dialog" aria-label="一覧エラーの詳細"
-                @onclick='() => OpenResultDetails("一覧エラー", _libraryLoadError)'>詳細</button>
-    </section>
-}
-else
-{
-    <section class="library-page">
+<section class="library-page" aria-label="ゲーム一覧" tabindex="-1" @ref="_libraryRegion">
+    @if (_isStartupChecking || (_isGitReady && _games is null && _libraryLoadError is null))
+    {
+        <div class="library-loading" role="status" aria-label="ゲーム一覧を読み込み中">
+            <span class="library-spinner" aria-hidden="true"></span>
+        </div>
+    }
+    else if (!_isGitReady)
+    {
+        <section class="startup-error-panel">
+            <div role="alert"><h2>Git が利用できません</h2></div>
+            <button type="button" class="secondary-button home-labeled-action" @onclick="RetryStartupAsync"><CaptureIcon Name="Refresh" /> 再試行</button>
+            <button type="button" class="secondary-button home-labeled-action" aria-haspopup="dialog" aria-label="Git起動エラーの詳細"
+                    @onclick='() => OpenResultDetails("Git起動エラー", $"{_startupError} Gitの設定を確認して、再試行してください。")'>詳細</button>
+        </section>
+    }
+    else if (_libraryLoadError is not null)
+    {
+        <section class="startup-error-panel">
+            <div role="alert"><h2>ゲーム一覧を読み込めません</h2></div>
+            <button type="button" class="secondary-button home-labeled-action" @onclick="RetryLibraryAsync" disabled="@_isLibraryRetrying"><CaptureIcon Name="Refresh" /> 再試行</button>
+            <button type="button" class="secondary-button home-labeled-action" aria-haspopup="dialog" aria-label="一覧エラーの詳細"
+                    @onclick='() => OpenResultDetails("一覧エラー", _libraryLoadError)'>詳細</button>
+        </section>
+    }
+    else
+    {
+        var filteredGames = GetFilteredGames();
         <div class="game-grid" style="@GetGameGridStyle()">
-            @if (_games is null)
+            @if (filteredGames.Count == 0)
             {
-                <p role="status">読み込み中…</p>
+                <p role="status">@(_games is { Count: 0 } ? "ゲーム未登録" : "一致するゲームなし")</p>
             }
             else
             {
-                var filteredGames = GetFilteredGames();
-                if (filteredGames.Count == 0)
+                @foreach (var game in filteredGames)
                 {
-                    <p role="status">@(_games.Count == 0 ? "ゲーム未登録" : "一致するゲームなし")</p>
-                }
-                else
-                {
-                    @foreach (var game in filteredGames)
-                    {
-                        var canResumeSync = CanResumeRepositorySync(game);
-                        var hasThumbnail = HasThumbnail(game);
-                        var thumbnail = hasThumbnail ? GetThumbnailSource(game) : null;
-                        var hasDisplayImage = thumbnail is { DecodeFailed: false };
-                        var problem = GetCardProblem(game, hasThumbnail && !hasDisplayImage);
-                        <article @key="game.Id" class="game-card" aria-label="@game.Title">
-                            <h2 class="home-card-heading">
-                                <button type="button" class="home-card-selection" aria-haspopup="dialog"
-                                        data-home-game="@game.Id" aria-label="@($"{game.Title}の詳細")" @onclick="() => OpenGameDetails(game)">
-                                    @if (hasThumbnail)
+                    var canResumeSync = CanResumeRepositorySync(game);
+                    var hasThumbnail = HasThumbnail(game);
+                    var thumbnail = hasThumbnail ? GetThumbnailSource(game) : null;
+                    var hasDisplayImage = thumbnail is { DecodeFailed: false };
+                    var problem = GetCardProblem(game, hasThumbnail && !hasDisplayImage);
+                    <article @key="game.Id" class="game-card" aria-label="@game.Title">
+                        <h2 class="home-card-heading">
+                            <button type="button" class="home-card-selection" aria-haspopup="dialog"
+                                    data-home-game="@game.Id" aria-label="@($"{game.Title}の詳細")" @onclick="() => OpenGameDetails(game)">
+                                <span class="game-thumbnail-panel">
+                                    @if (thumbnail is { DecodeFailed: false })
                                     {
-                                        <span class="game-thumbnail-panel">
-                                            @if (thumbnail is { DecodeFailed: false })
-                                            {
-                                                <img @key="thumbnail" class="game-thumbnail-image" src="@thumbnail.DataUri" alt=""
-                                                     @onerror="() => MarkThumbnailDecodeFailed(game.Id, thumbnail)" />
-                                            }
-                                            else if (!_showCardTitle)
-                                            {
-                                                <span class="home-thumbnail-title">@game.Title</span>
-                                            }
-                                            else
-                                            {
-                                                <span class="home-thumbnail-placeholder"><CaptureIcon Name="Image" /></span>
-                                            }
-                                        </span>
+                                        <img @key="thumbnail" class="game-thumbnail-image" src="@thumbnail.DataUri" alt=""
+                                             @onerror="() => MarkThumbnailDecodeFailed(game.Id, thumbnail)" />
                                     }
-                                    @if (_showCardTitle || !hasThumbnail)
+                                    else if (hasThumbnail && !_showCardTitle)
                                     {
-                                        <span class="home-card-title">@game.Title</span>
+                                        <span class="home-thumbnail-title">@game.Title</span>
                                     }
-                                </button>
-                            </h2>
-                            <div class="game-card-actions" role="group" aria-label="@($"{game.Title}の操作")">
-                                <button type="button" class="launch-button action-icon-button"
-                                        @onclick="() => LaunchAsync(game)" title="@GetLaunchButtonTitle(game)"
-                                        aria-label="@($"{game.Title}：{GetLaunchButtonTitle(game)}")" disabled="@IsLaunchDisabled(game)"
-                                        aria-disabled="@(_isLaunching ? "true" : null)">
-                                    <CaptureIcon Name="Play" />
-                                </button>
+                                    else
+                                    {
+                                        <span class="home-thumbnail-placeholder"><CaptureIcon Name="Image" /></span>
+                                    }
+                                </span>
+                                @if (_showCardTitle || !hasThumbnail)
+                                {
+                                    <span class="home-card-title">@game.Title</span>
+                                }
+                            </button>
+                        </h2>
+                        <div class="game-card-actions" role="group" aria-label="@($"{game.Title}の操作")">
+                            <button type="button" class="launch-button action-icon-button"
+                                    @onclick="() => LaunchAsync(game)" title="@GetLaunchButtonTitle(game)"
+                                    aria-label="@($"{game.Title}：{GetLaunchButtonTitle(game)}")" disabled="@IsLaunchDisabled(game)"
+                                    aria-disabled="@(_isLaunching ? "true" : null)">
+                                <CaptureIcon Name="Play" />
+                            </button>
+                            <div class="game-card-status">
+                                @if (string.Equals(capture.PlayGameId, game.Id, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    <span class="home-playing">プレイ中</span>
+                                }
                                 @if (problem is not null)
                                 {
                                     <button type="button" class="secondary-button home-card-problem" aria-haspopup="dialog"
@@ -184,13 +174,23 @@ else
                                             aria-label="@($"同期を再開：{game.Title}")" aria-disabled="@(IsResumePending(game) ? "true" : null)">同期を再開</button>
                                 }
                             </div>
-                        </article>
-                    }
+                            <button type="button" class="secondary-button pin-toggle-button @(game.IsPinned ? "pin-toggle-active" : null)"
+                                    @ref="_pinButtons[game.Id]"
+                                    @onclick="() => TogglePinnedAsync(game)" title="@(game.IsPinned ? "ピン留め解除" : "ピン留め")"
+                                    aria-label="@($"{game.Title}：ピン留め")" aria-pressed="@(game.IsPinned ? "true" : "false")"
+                                    disabled="@IsPinToggleBusy(game)">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                     stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                                    <path d="M9 3h6l-1 6 4 4v2H6v-2l4-4-1-6Zm3 12v6" />
+                                </svg>
+                            </button>
+                        </div>
+                    </article>
                 }
             }
         </div>
-    </section>
-}
+    }
+</section>
 
 <span class="visually-hidden" role="status" aria-atomic="true">@(_operationAnnouncement)</span>
 
@@ -237,6 +237,19 @@ else
                     <dt>関連リポジトリ</dt><dd>@GetEditorSaveLinkPathLabel(selected.RelatedRepositoryPath)</dd>
                     <dt>セーブリンク</dt><dd>@GetSaveLinkSummary(selected)</dd>
                     <dt>最終プレイ</dt><dd>@FormatLastPlayed(selected.LastPlayedAt)</dd>
+                    <dt>現在の記録</dt><dd>@GetCurrentRecordingLabel(capture, selected.Id)</dd>
+                    <dt>次回起動時に記録</dt>
+                    <dd>
+                        @if (_selectedCapturePreferenceError is { } preferenceError)
+                        {
+                            <button type="button" class="secondary-button" aria-haspopup="dialog"
+                                    @onclick="() => OpenCapturePreferenceError(preferenceError)">設定を読み込めません</button>
+                        }
+                        else
+                        {
+                            @(_selectedCaptureEnabled is { } enabled ? enabled ? "ON" : "OFF" : "確認中…")
+                        }
+                    </dd>
                 </dl>
                 @if (HasThumbnail(selected) && GetThumbnailSource(selected) is not { DecodeFailed: false })
                 {
@@ -263,10 +276,12 @@ else
                 }
             </div>
             <div class="editor-actions dialog-footer">
+                <button type="button" class="launch-button home-labeled-action" @onclick="() => LaunchAsync(selected)"
+                        title="@GetLaunchButtonTitle(selected)" disabled="@IsLaunchDisabled(selected)"
+                        aria-disabled="@(_isLaunching ? "true" : null)"><CaptureIcon Name="Play" /> 起動する</button>
+                <a class="secondary-button home-labeled-action" href="@GetScenarioUrl(selected.Id)"><CaptureIcon Name="History" /> シナリオを見る</a>
                 <button type="button" class="secondary-button" @onclick="() => OpenEditEditorAsync(selected)"
                         disabled="@(!HasLoadedSaveLinks(selected.Id))">ゲーム設定</button>
-                <button type="button" class="secondary-button" @onclick="() => TogglePinnedAsync(selected)"
-                        aria-pressed="@(selected.IsPinned ? "true" : "false")" disabled="@IsPinToggleBusy(selected)">@(selected.IsPinned ? "ピン留め解除" : "ピン留め")</button>
                 <button type="button" class="secondary-button" data-dialog-dismiss @onclick="CloseGameDetails">閉じる</button>
             </div>
         </section>
@@ -414,7 +429,7 @@ else
                     <h3>同期・通知</h3>
                     <div class="settings-sync-grid">
                         <label class="settings-value-row">
-                            <span class="settings-value-label">自動コミット間隔（分）</span>
+                            <span class="settings-value-label">自動コミット間隔（分、0＝追加待ちなし）</span>
                             <input type="number"
                                    min="0"
                                    max="@AppSettings.AutoSyncIntervalMinutesMax"
@@ -422,7 +437,7 @@ else
                                    disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
                         </label>
                         <label class="settings-value-row">
-                            <span class="settings-value-label">自動プッシュ間隔（分）</span>
+                            <span class="settings-value-label">自動プッシュ間隔（分、0＝追加待ちなし）</span>
                             <input type="number"
                                    min="0"
                                    max="@AppSettings.AutoSyncIntervalMinutesMax"
@@ -483,13 +498,13 @@ else
                 <div class="settings-section">
                     <h3>カード表示</h3>
                     <label class="settings-toggle-row">
-                        <span>画像付きカードのタイトル</span>
+                        <span>画像付きカードのタイトルを表示</span>
                         <input type="checkbox"
                                @bind="_showCardTitle"
                                disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
                     </label>
                     <label class="settings-toggle-row">
-                        <span>通常時の同期状態</span>
+                        <span>作品詳細に通常時の同期状態を表示</span>
                         <input type="checkbox"
                                @bind="_showCardSyncStatus"
                                disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
@@ -997,6 +1012,8 @@ else
     private string? _selectedGameId;
     private bool _selectedFromProblem;
     private string? _focusCardId;
+    private string? _focusPinId;
+    private readonly Dictionary<string, ElementReference> _pinButtons = new(StringComparer.OrdinalIgnoreCase);
     private bool _isEditorOpen;
     private bool _isEditMode;
     private bool _isSaving;
@@ -1061,10 +1078,13 @@ else
     private string? _startupError;
     private string? _libraryLoadError;
     private DraftKind? _discardChanges;
-    private ElementReference _libraryHeading;
+    private ElementReference _libraryRegion;
     private ElementReference _notificationHeading;
     private ElementReference _logHeading;
-    private bool _focusLibraryHeading;
+    private bool _focusLibraryRegion;
+    private int _selectedCaptureReadVersion;
+    private bool? _selectedCaptureEnabled;
+    private string? _selectedCapturePreferenceError;
     private bool _focusLogHeading;
     private readonly HashSet<string> _registeredWatcherRepositoryIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _pinningGameIds = new(StringComparer.OrdinalIgnoreCase);
@@ -1100,15 +1120,27 @@ else
             await FocusLogHeadingAsync();
         }
 
-        if (_focusLibraryHeading)
+        if (_focusLibraryRegion)
         {
-            _focusLibraryHeading = false;
-            await _libraryHeading.FocusAsync();
+            _focusLibraryRegion = false;
+            await _libraryRegion.FocusAsync();
         }
         else if (_focusCardId is { } gameId)
         {
             _focusCardId = null;
             await JS.InvokeVoidAsync("gameLauncherFocusHomeGame", gameId);
+        }
+
+        if (_focusPinId is { } pinId)
+        {
+            // Pinning can move the keyed card to another position, which drops browser focus.
+            _focusPinId = null;
+            if (!_isHelpOpen && !_isSettingsOpen && !_isEditorOpen && _openResult is null && GetSelectedGame() is null
+                && _libraryLoadError is null && GetFilteredGames().Any(game => game.Id == pinId)
+                && _pinButtons.TryGetValue(pinId, out var pinButton))
+            {
+                await pinButton.FocusAsync();
+            }
         }
     }
 
@@ -1156,7 +1188,7 @@ else
     {
         if (_isStartupChecking) return;
         await InitializeLibraryAsync();
-        _focusLibraryHeading = true;
+        _focusLibraryRegion = true;
     }
 
     private async Task LaunchAsync(GameCardItem game)
@@ -1172,7 +1204,7 @@ else
                     var result = await LauncherService.LaunchAsync(game.Id);
                     if (result.ShowCapture)
                     {
-                        Navigation.NavigateTo("capture", new NavigationOptions
+                        Navigation.NavigateTo(GetScenarioUrl(game.Id), new NavigationOptions
                         {
                             HistoryEntryState = result.HasWarnings ? result.Message : null
                         });
@@ -1837,10 +1869,11 @@ else
                     {
                         _selectedGameId = null;
                     }
-                    _focusLibraryHeading = true;
+                    _focusLibraryRegion = true;
                     if (_games is not null)
                     {
                         _games = _games.Where(game => !string.Equals(game.Id, targetGameId, StringComparison.OrdinalIgnoreCase)).ToArray();
+                        _pinButtons.Remove(targetGameId);
                     }
                     OnGitRegistrationsCommitted();
 
@@ -1985,6 +2018,11 @@ else
                             try
                             {
                                 await _capturePreference.SaveAsync();
+                                // Refresh the selected work's read-only summary after the editor commits its draft.
+                                if (_selectedGameId == updated.Id)
+                                {
+                                    await LoadSelectedCapturePreferenceAsync(updated.Id);
+                                }
                             }
                             catch (Exception ex)
                             {
@@ -2015,7 +2053,7 @@ else
                     }
                     else
                     {
-                        _focusLibraryHeading = true;
+                        _focusLibraryRegion = true;
                         SetNotification($"「{savedTitle}」は保存しました。一覧の再読込に失敗しました。", false,
                             summary: "保存済み・一覧エラー", operation: nameof(RetryLibraryAsync));
                     }
@@ -2936,7 +2974,7 @@ else
                     SetNotification(error ?? "ゲーム一覧を読み込みました。", error is null,
                         summary: error is null ? "一覧更新" : "一覧更新エラー");
                 }
-                _focusLibraryHeading = GetSelectedGame() is null;
+                _focusLibraryRegion = GetSelectedGame() is null;
             });
         }
         finally
@@ -3136,6 +3174,7 @@ else
             : "起動";
     }
 
+    /// <summary>Persists the selected card's pin, reloads its order, and returns focus to its action.</summary>
     private async Task TogglePinnedAsync(GameCardItem game)
     {
         if (string.IsNullOrWhiteSpace(game.Id) || !_pinningGameIds.Add(game.Id))
@@ -3164,7 +3203,9 @@ else
                 }
                 finally
                 {
+                    // Restore after the button is enabled and the new sort order has rendered.
                     _pinningGameIds.Remove(game.Id);
+                    _focusPinId = game.Id;
                 }
             });
     }
@@ -3868,11 +3909,48 @@ else
 
     private void OpenCapturePreferenceError(string detail) => OpenResultDetails("抽出設定エラー", detail);
 
-    private void OpenGameDetails(GameCardItem game, bool fromProblem = false)
+    /// <summary>Opens the selected registration without launching it or creating capture data.</summary>
+    private Task OpenGameDetails(GameCardItem game, bool fromProblem = false)
     {
         _selectedGameId = game.Id;
         _selectedFromProblem = fromProblem;
+        return LoadSelectedCapturePreferenceAsync(game.Id);
     }
+
+    /// <summary>Reads the saved next-launch preference without changing the live capture target.</summary>
+    private async Task LoadSelectedCapturePreferenceAsync(string gameId)
+    {
+        var version = ++_selectedCaptureReadVersion;
+        _selectedCaptureEnabled = null;
+        _selectedCapturePreferenceError = null;
+        try
+        {
+            // An unconfigured registration uses the same ON default as a newly created capture profile.
+            var profile = await CaptureStore.FindCaptureProfileAsync(gameId);
+            if (version == _selectedCaptureReadVersion && _selectedGameId == gameId)
+            {
+                _selectedCaptureEnabled = profile?.Enabled ?? true;
+            }
+        }
+        catch (Exception ex)
+        {
+            // Keep a failed preference read separate from both OFF and the live recording state.
+            if (version == _selectedCaptureReadVersion && _selectedGameId == gameId)
+            {
+                _selectedCapturePreferenceError = ex.Message;
+            }
+        }
+    }
+
+    /// <summary>Builds the shared scenario route with the selected registration as one query value.</summary>
+    private static string GetScenarioUrl(string gameId) => $"/capture?gameId={Uri.EscapeDataString(gameId)}";
+
+    /// <summary>Reports live capture for this registration only, independent of its next-launch preference.</summary>
+    private static string GetCurrentRecordingLabel(CaptureSnapshot capture, string gameId) =>
+        !string.Equals(capture.Profile?.GameId, gameId, StringComparison.OrdinalIgnoreCase) ? "記録していません"
+            : capture.Recording ? "記録中"
+            : capture.Paused ? "一時停止"
+            : "記録していません";
 
     private GameCardItem? GetSelectedGame() => _selectedGameId is null
         ? null
@@ -3882,7 +3960,7 @@ else
     {
         if (_libraryLoadError is not null)
         {
-            _focusLibraryHeading = true;
+            _focusLibraryRegion = true;
         }
         else if (_selectedFromProblem && GetSelectedGame() is { } game
             && GetCardProblem(game, HasThumbnail(game) && GetThumbnailSource(game) is not { DecodeFailed: false }) is null)
