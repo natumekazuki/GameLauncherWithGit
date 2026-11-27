@@ -18,8 +18,8 @@ public partial class Capture
     private string? _detailImageSource, _detailImageError, _detailOpener;
     private string? _detailMessage;
     private bool _detailImagesLoading, _focusDetail, _restoreDetailFocus;
-    private bool _correctionOpen;
-    private ElementReference _detailHost;
+    private bool _correctionOpen, _focusCorrection;
+    private ElementReference _detailHost, _correctionHost;
 
     private ScreenshotSuccess? VisibleShot(ScreenshotStatus status) =>
         ViewingLiveRecord && status.LastSuccess is { } shot && shot.Target.CaptureGameId == _recordId &&
@@ -183,6 +183,7 @@ public partial class Capture
             _editSpeaker = item.Speaker ?? "";
         }
         _correctionOpen = true;
+        _focusCorrection = true;
     }
 
     private void DiscardCorrection()
@@ -205,6 +206,11 @@ public partial class Capture
             _restoreDetailFocus = false;
             await _module.InvokeVoidAsync("focusTextDetailOpener", _detailOpener);
             _detailOpener = null;
+        }
+        if (_focusCorrection && _correctionOpen && _detailKey is not null)
+        {
+            _focusCorrection = false;
+            await _correctionHost.FocusAsync();
         }
     }
 }

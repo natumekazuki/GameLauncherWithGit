@@ -81,10 +81,12 @@ input[type=checkbox] { width:1rem; height:1rem; margin:0; accent-color:#85b4ff; 
 .capture-text-with-detail { grid-template-columns:minmax(0,1fr) minmax(21rem, 43%); }
 .capture-feed { contain:size; min-width:0; min-height:0; overflow:auto; border:1px solid #30415a; border-radius:8px; background:var(--scenario-background); scrollbar-gutter:stable; overflow-anchor:none; }
 .capture-detail-pane { contain:size; min-width:0; min-height:0; overflow:auto; padding:.75rem 1rem; border:1px solid var(--scenario-border); border-radius:8px; background:var(--scenario-surface); }
+.capture-detail-pane ::deep .capture-occurrence-detail { display:flex; flex-direction:column; gap:.25rem; }
 .capture-detail-pane ::deep .capture-occurrence-heading { display:flex; justify-content:space-between; gap:.75rem; align-items:center; }
 .capture-detail-pane ::deep .capture-occurrence-heading h3 { font-size:1.1rem; margin:0; }
-.capture-detail-pane ::deep .capture-occurrence-text { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.65; }
+.capture-detail-pane ::deep .capture-occurrence-text { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.65; margin:0; }
 .capture-detail-actions,.capture-detail-pane ::deep .capture-occurrence-actions,.capture-detail-pane ::deep .capture-occurrence-image-nav { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; margin-block:.5rem; }
+.capture-detail-pane ::deep .capture-occurrence-detail button { width:auto; }
 .capture-detail-pane ::deep .capture-occurrence-image { margin:0; }
 .capture-detail-pane ::deep .capture-occurrence-image img { display:block; max-width:100%; max-height:60vh; object-fit:contain; }
 .capture-inline-edit { display:grid; gap:.5rem; margin-block:.6rem; }
@@ -109,7 +111,7 @@ input[type=checkbox] { width:1rem; height:1rem; margin:0; accent-color:#85b4ff; 
 .capture-action-list > label,.capture-action-list > span { flex-basis:100%; }
 .capture-raw,.capture-part p { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.8; margin:.6rem 0 0; }
 .capture-range-edge { background:#1a2d46; box-shadow:inset 3px 0 #8db8ff; }
-.capture-empty { padding:2rem 1rem; color:#adbed5; }
+.capture-empty { padding:2rem 1rem; color:var(--scenario-muted); }
 .capture-feed-error { padding:1rem; overflow-wrap:anywhere; }
 .capture-settings { display:flex; flex-direction:column; gap:1rem; min-width:0; min-height:0; }
 .capture-settings section { min-width:0; min-height:0; }

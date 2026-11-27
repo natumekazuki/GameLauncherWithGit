@@ -316,12 +316,13 @@
                         ImageCount="@(_detailImages?.Count ?? ScreenshotCount(detail))" ImageIndex="_detailImageIndex"
                         ImageSource="@_detailImageSource" ImageError="@_detailImageError" ImagesLoading="_detailImagesLoading" Disabled="_busy"
                         Close="CloseDetail" Edit="EditDetail" Copy="CopyDetailAsync" RetryImages="RetryDetailImagesAsync"
-                        MoveImage="MoveDetailImageAsync" ImageDecodeFailed="DetailDecodeFailed">
+                        MoveImage="MoveDetailImageAsync" ImageDecodeFailed="DetailDecodeFailed" />
+                        <div class="capture-detail-fields">
                         <small class="capture-muted"><time datetime="@detail.ReceivedAt.ToString("O")">@detail.ReceivedAt.ToLocalTime().ToString("M/d HH:mm:ss")</time> · @(detail.LabelName ?? "未判定")</small>
                         <div class="capture-operation-result" role="status">@_detailMessage</div>
                         @if (_correctionOpen && _edit is { } editedItem)
                         {
-                            <div class="capture-inline-edit">
+                            <div class="capture-inline-edit" @ref="_correctionHost" tabindex="-1">
                                 @DialogFailure("訂正失敗")
                                 <label>分類<select @bind="_editLabel" disabled="@_busy">
                                     <option value="0">未判定</option>
@@ -355,7 +356,7 @@
                                 @if (range.Tags.Length > 0) { <span>@string.Join(" · ", range.Tags)</span> }
                             </div>
                         }
-                    </CaptureOccurrenceDetail>
+                        </div>
                 </aside>
             }
             </div>
@@ -932,7 +933,10 @@
         catch (InvalidOperationException) when (CaptureService.Snapshot.OperationVersion != next.OperationVersion) { }
         if (FollowingView && _following && !_busy && !EditorOpen && _selected.Count == 0 && ViewingLiveRecord &&
             _feedSnapshot != (next.RecordId, next.SessionId, next.Saved))
-        { await LoadItemsAsync(); _scrollToEnd = true; }
+        {
+            await LoadItemsAsync(followPoll: true);
+            if (FollowingView && _following && !EditorOpen && _detailKey is null) _scrollToEnd = true;
+        }
         else if (!_busy && Screenshots.Snapshot.SavedCount != _countsSavedCount)
             await LoadScreenshotCountsAsync();
     }
@@ -1014,7 +1018,7 @@
         await LoadScopeListsAsync();
         _rangeListsVersion = displayed.OperationVersion;
     }
-    private async Task LoadItemsAsync()
+    private async Task LoadItemsAsync(bool followPoll = false)
     {
         var expected = _displayedScope;
         IReadOnlyList<CaptureTextItem> items;
@@ -1022,6 +1026,8 @@
         {
             items = expected is null ? [] : await QueryItemsAsync(201, _offset, _following && _offset == 0 ? null : _pageCeiling);
             if (!await CanPublishAsync(expected)) return;
+            // Scrolling can stop following while the read is in flight.
+            if (followPoll && (!FollowingView || !_following || EditorOpen || _detailKey is not null || _selected.Count != 0)) return;
             _itemsError = null;
         }
         catch (Exception ex)
