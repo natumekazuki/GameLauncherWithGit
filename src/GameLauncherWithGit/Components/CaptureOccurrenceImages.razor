@@ -1,0 +1,57 @@
+<div class="capture-occurrence-images">
+    @{ var key = Occurrence; }
+    @if (ImageCount is > 0)
+    {
+        <div class="capture-occurrence-image-nav" aria-label="画像の操作">
+            @if (MoveImage.HasDelegate)
+            {
+                <button type="button" class="scenario-action" aria-label="前の画像" disabled="@(Disabled || ImageIndex <= 0)" @onclick="() => MoveImage.InvokeAsync((key, -1))"><CaptureIcon Name="Previous" /></button>
+            }
+            <span role="status">@(ImageIndex + 1) / @ImageCount 枚</span>
+            @if (MoveImage.HasDelegate)
+            {
+                <button type="button" class="scenario-action" aria-label="次の画像" disabled="@(Disabled || ImageIndex + 1 >= ImageCount)" @onclick="() => MoveImage.InvokeAsync((key, 1))"><CaptureIcon Name="Next" /></button>
+            }
+        </div>
+    }
+    @if (ImageError is not null)
+    {
+        <div class="capture-occurrence-actions" role="status">
+            <span>@ImageError</span>
+            @if (RetryImages.HasDelegate)
+            {
+                <button type="button" class="scenario-action" disabled="@Disabled" @onclick="() => RetryImages.InvokeAsync(key)">画像を再読込</button>
+            }
+        </div>
+    }
+    else if (ImageSource is { } source)
+    {
+        <figure class="capture-occurrence-image">
+            <img @key="(key, source)" src="@source" alt="この本文に対応するゲーム画面" @onerror="() => ImageDecodeFailed.InvokeAsync((key, source))" />
+        </figure>
+    }
+    else if (ImagesLoading)
+    {
+        <p role="status">画像を読み込み中…</p>
+    }
+    else if (ImageCount == 0)
+    {
+        <p>画像はありません。</p>
+    }
+</div>
+
+@code {
+    /// <summary>The host-confirmed occurrence in the displayed recording; all events carry this key.</summary>
+    [Parameter, EditorRequired] public CaptureOccurrenceKey Occurrence { get; set; }
+
+    /// <summary>Controlled image display. Zero means known absence; null means unavailable, not zero.</summary>
+    [Parameter] public int? ImageCount { get; set; }
+    [Parameter] public int ImageIndex { get; set; }
+    [Parameter] public string? ImageSource { get; set; }
+    [Parameter] public bool ImagesLoading { get; set; }
+    [Parameter] public string? ImageError { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public EventCallback<CaptureOccurrenceKey> RetryImages { get; set; }
+    [Parameter] public EventCallback<(CaptureOccurrenceKey Occurrence, int Direction)> MoveImage { get; set; }
+    [Parameter] public EventCallback<(CaptureOccurrenceKey Occurrence, string Source)> ImageDecodeFailed { get; set; }
+}
