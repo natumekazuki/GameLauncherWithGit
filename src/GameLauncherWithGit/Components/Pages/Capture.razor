@@ -321,7 +321,7 @@
             </div>
             @if (_detailItem is { } detail && _detailKey is { } key)
             {
-                <aside class="capture-detail-pane scenario-focus" @ref="_detailHost" tabindex="-1" @onkeydown="HandleDetailKey">
+                <aside class="capture-detail-pane scenario-focus @(_detailRangeEdit is null ? null : "capture-detail-editing-range")" @ref="_detailHost" tabindex="-1" @onkeydown="HandleDetailKey">
                     <CaptureOccurrenceDetail @key="key" RecordId="key.RecordId" Item="detail"
                         ImageCount="@(_detailImages?.Count ?? ScreenshotCount(detail))" ImageIndex="_detailImageIndex"
                         ImageSource="@_detailImageSource" ImageError="@_detailImageError" ImagesLoading="_detailImagesLoading" Disabled="_busy"
@@ -373,9 +373,9 @@
                                 </div>
                                 @if (rangeEditor is not null)
                                 {
-                                    <div class="capture-inline-edit">
+                                    <div class="capture-inline-edit scenario-focus" role="group" aria-label="区間名とタグ" tabindex="-1" @ref="_detailRangeForm">
                                         <CaptureRangeFields @bind-Name="rangeEditor.Name" @bind-Tags="rangeEditor.Tags"
-                                            AvailableTags="AvailableRangeTags" SuggestedTags="_gameSpeakers" Disabled="_busy" AutoFocus="true" />
+                                            AvailableTags="AvailableRangeTags" SuggestedTags="_gameSpeakers" Disabled="_busy" />
                                         <div class="capture-detail-actions">
                                             <button type="button" class="scenario-action" @onclick="() => CloseDetailRangeEdit(rangeEditor)" disabled="@_busy">キャンセル</button>
                                             <button type="button" class="scenario-action scenario-action--primary" @onclick="() => AtScopeAsync(displayedScope, () => SaveDetailRangeAsync(rangeEditor, displayedProfile))" disabled="@(_busy || string.IsNullOrWhiteSpace(rangeEditor.Name))">名前とタグを保存</button>

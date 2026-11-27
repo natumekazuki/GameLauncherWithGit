@@ -22,6 +22,8 @@ public partial class Capture
     private ElementReference _detailHost, _correctionHost;
     private DetailRangeEdit? _detailRangeEdit;
     private long? _restoreDetailRangeFocus;
+    private bool _focusDetailRange;
+    private ElementReference _detailRangeForm;
 
     /// <summary>Holds name and tags for one saved range without changing the selected occurrence.</summary>
     private sealed class DetailRangeEdit(CaptureOccurrenceKey occurrence, CaptureRange range)
@@ -70,6 +72,7 @@ public partial class Capture
         _detailMessage = null;
         _detailRangeEdit = null;
         _restoreDetailRangeFocus = null;
+        _focusDetailRange = false;
         _detailImageIndex = 0;
         _following = false;
         _correctionOpen = _edit?.StartPosition == item.StartPosition;
@@ -216,6 +219,7 @@ public partial class Capture
         _detailMessage = null;
         _detailRangeEdit = null;
         _restoreDetailRangeFocus = null;
+        _focusDetailRange = false;
         _detailImageSource = _detailImageError = null;
         _detailImagesLoading = _focusDetail = _correctionOpen = false;
     }
@@ -248,6 +252,7 @@ public partial class Capture
         if (DetailRanges(key, item).FirstOrDefault(range => range.Id == rangeId) is not { } range) return;
         _error = _errorLabel = _detailMessage = null;
         _detailRangeEdit = new(key, range);
+        _focusDetailRange = true;
     }
 
     /// <summary>Discards the local edit and restores its opener, leaving the preview mounted.</summary>
@@ -255,6 +260,7 @@ public partial class Capture
     {
         if (!ReferenceEquals(edit, _detailRangeEdit)) return;
         _detailRangeEdit = null;
+        _focusDetailRange = false;
         _error = _errorLabel = null;
         _restoreDetailRangeFocus = edit.RangeId;
     }
@@ -319,6 +325,12 @@ public partial class Capture
         {
             _restoreDetailRangeFocus = null;
             await _module.InvokeVoidAsync("focusTextDetailOpener", DetailRangeButtonId(rangeId));
+        }
+        if (_focusDetailRange && _detailRangeEdit is not null)
+        {
+            // Reveal the newly opened inputs inside the scrolling detail, not by moving the feed.
+            _focusDetailRange = false;
+            await _detailRangeForm.FocusAsync();
         }
     }
 }
