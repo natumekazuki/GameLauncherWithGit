@@ -425,6 +425,13 @@
                     }
                 </div>
 
+                @if (OperatingSystem.IsWindows())
+                {
+                    <div class="settings-section">
+                        <PlayRecordingWebSettings />
+                    </div>
+                }
+
                 <div class="settings-section settings-sync-section">
                     <h3>同期・通知</h3>
                     <div class="settings-sync-grid">
