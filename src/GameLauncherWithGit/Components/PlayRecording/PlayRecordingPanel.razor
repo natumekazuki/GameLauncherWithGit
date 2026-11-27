@@ -8,7 +8,7 @@
             {
                 <div class="play-toolbar">
                     <h1>@current.Title</h1>
-                    <span class="play-record-root">記録先：@RecordingRootLabel(current)</span>
+                    <span class="play-record-root">記録先：@current.RecordingDestinationLabel</span>
                 </div>
             }
             else
@@ -26,11 +26,11 @@
         }
         @if (_state is not { } displayed)
         {
-            if (!_statusError && !_statusLoaded)
+            if (!_statusError && _statusLoading)
             {
-                <p role="status">記録対象を読み込み中…</p>
+                <ScenarioLoading Label="記録対象を読み込み中…" />
             }
-            else if (!_statusError)
+            else if (!_statusError && _statusLoaded)
             {
                 <p role="status">PCのプレイ対象を待っています。</p>
             }
@@ -229,7 +229,7 @@
         <div class="play-text-scroll scenario-focus" @ref="_textScroller" tabindex="0" aria-label="本文一覧">
         @if (_textItems is null)
         {
-            @if (!_textError) { <p role="status">本文を読み込み中…</p> }
+            @if (_textLoading && !_textError) { <ScenarioLoading Label="本文を読み込み中…" /> }
         }
         else if (_textItems.Count == 0)
         {
@@ -298,14 +298,14 @@
     </div>;
 
     private RenderFragment Gallery(DisplayTarget target) => @<div class="play-detail scenario-focus" @ref="_galleryHeading" tabindex="-1"
-            @onkeydown="e => HandleEscape(target, e, ReturnFromGallery)">
+            @onkeydown="e => HandleEscape(target, e, _detailRangeEdit is null ? ReturnFromGallery : CloseDetailRangeEdit)">
         @if (_galleryItem is { } item)
         {
             var key = new CaptureOccurrenceKey(target.Recording.HistoryRoot, item.StartPosition);
             var shownImage = _galleryImage;
             <CaptureOccurrenceDetail @key="key" RecordId="key.RecordId" Item="item"
                 ImageCount="@_galleryImages?.Count" ImageIndex="_galleryIndex" ImageSource="@shownImage?.Source"
-                ImagesLoading="@(!_galleryError && (_galleryImages is null || _galleryImages.Count > 0 && shownImage is null))"
+                ImagesLoading="_galleryLoading"
                 ImageError="@(_galleryError ? "選んだ本文の画像を読み込めませんでした。" : null)" Disabled="ControlsDisabled"
                 Close="selected => { if (IsDetailCurrent(target, selected)) ReturnFromGallery(); }"
                 Edit="selected => IsDetailCurrent(target, selected) ? EditTextAsync(target, item) : Task.CompletedTask"
@@ -327,7 +327,29 @@
                 </div>
                 @foreach (var range in RangesFor(item))
                 {
-                    <p @key="range.Id">@RangeName(range.Id)@if (range.Tags.Length > 0) { <small> · @string.Join(" · ", range.Tags)</small> }</p>
+                    var label = RangeName(range.Id);
+                    if (!_detailRangeButtons.TryGetValue(range.Id, out var rangeButton))
+                        _detailRangeButtons[range.Id] = rangeButton = new();
+                    <div class="play-detail-range" @key="range.Id">
+                        <p>@label@if (range.Tags.Length > 0) { <small> · @string.Join(" · ", range.Tags)</small> }</p>
+                        @if (_detailRangeEdit is { } draft && draft.Id == range.Id)
+                        {
+                            <div class="play-stack" role="group" aria-label="@($"{label}の名前・タグ")">
+                                <CaptureRangeFields @key="draft" Name="@draft.Name" NameChanged="value => EditWorkspace(target, () => { if (IsDetailRangeEditCurrent(target, draft)) draft.Name = value; })"
+                                                    Tags="draft.Tags" TagsChanged="value => EditWorkspace(target, () => { if (IsDetailRangeEditCurrent(target, draft)) draft.Tags = value; })"
+                                                    AvailableTags="_rangeTags" SuggestedTags="_speakers" AutoFocus="true" Disabled="ControlsDisabled" />
+                                <div class="play-actions">
+                                    <button type="button" class="scenario-action scenario-action--primary" disabled="@(ControlsDisabled || !draft.CanSave)" @onclick="() => SaveDetailRangeAsync(target, draft)">名前・タグを保存</button>
+                                    <button type="button" class="scenario-action" disabled="@ControlsDisabled" @onclick="() => EditWorkspace(target, CloseDetailRangeEdit)">閉じる</button>
+                                </div>
+                            </div>
+                        }
+                        else
+                        {
+                            <button type="button" class="scenario-action" @ref="rangeButton.Open" aria-label="@($"{label}の名前・タグを編集")"
+                                    disabled="@ControlsDisabled" @onclick="() => OpenDetailRangeEdit(target, key, range)">名前・タグを編集</button>
+                        }
+                    </div>
                 }
             </CaptureOccurrenceDetail>
         }
@@ -340,15 +362,15 @@
         {
             <div><CaptureFailureDetails Label="区間の取得失敗" Detail="区間を読み込めませんでした。区間を更新してください。" Web="true" /></div>
         }
-        else if (_ranges is null)
+        else if (_rangesLoading && _ranges is null)
         {
-            <p role="status">区間を読み込み中…</p>
+            <ScenarioLoading Label="区間を読み込み中…" />
         }
-        else if (_ranges.Count == 0)
+        else if (_ranges is { Count: 0 })
         {
             <p>保存した区間はありません。</p>
         }
-        else
+        else if (_ranges is not null)
         {
             <ul class="play-list">
                 @foreach (var range in _ranges)
@@ -376,9 +398,9 @@
             {
                 <SavedSceneList Snapshot="savedScenes" RangeName="SavedSceneRangeName" />
             }
-            else
+            else if (_scenesLoading)
             {
-                <p role="status">場面を読み込み中…</p>
+                <ScenarioLoading Label="場面を読み込み中…" />
             }
         }
     </section>;
@@ -387,16 +409,24 @@
         @{ var target = ForDisplay(_state!); }
         <div class="play-toolbar"><h2 id="play-paths-title">観測した経路</h2><button type="button" class="scenario-action play-icon-button" title="経路を更新" aria-label="経路を更新" disabled="@_busy" @onclick="() => ReadForDisplayedTargetAsync(target, LoadPathsAsync)"><CaptureIcon Name="Refresh" /></button></div>
         @if (_pathsError) { <div><CaptureFailureDetails Label="経路の取得失敗" Detail="経路を読み込めませんでした。経路を更新してください。" Web="true" /></div> }
-        else if (_pathsLoading || _graph is null) { <p role="status">経路を読み込み中…</p> }
-        else if (_graph.Occurrences.Count == 0) { <p>観測した経路はありません。</p> }
+        else if (_pathsLoading) { <ScenarioLoading Label="経路を読み込み中…" /> }
+        else if (_graph is { Occurrences.Count: 0 }) { <p>観測した経路はありません。</p> }
         @if (_graph is { } graph)
         {
-            var hidden = _pathsLoading || _pathsError || graph.Occurrences.Count == 0;
+            var hidden = _pathsLoading || _pathsNeedReload || _pathsError || graph.Occurrences.Count == 0;
             <div hidden="@hidden" inert="@(_busy || hidden)">
                 <ScenarioFlowView @key="(target.GameId, target.Recording.HistoryRoot, target.ConnectionVersion)"
                                   Graph="graph" MatchingComplete="_matchingComplete"
                                   OpenOccurrence="occurrence => OpenOccurrenceAsync(target, occurrence)"
-                                  CutOccurrence="occurrence => CutOccurrenceAsync(target, occurrence)" />
+                                  CutOccurrence="occurrence => CutOccurrenceAsync(target, occurrence)">
+                    <OccurrenceImages Context="occurrence">
+                        @{ var key = new CaptureOccurrenceKey(target.Recording.HistoryRoot, occurrence.Start); }
+                        <CaptureFlowOccurrenceImages @key="(target.GameId, key.RecordId, target.ConnectionVersion)"
+                                                     Occurrence="key"
+                                                     LoadImageIds="(requested, token) => LoadFlowImageIdsAsync(target, key, requested, token)"
+                                                     ReadImage="(requested, imageId, token) => ReadFlowImageBytesAsync(target, key, requested, imageId, token)" />
+                    </OccurrenceImages>
+                </ScenarioFlowView>
             </div>
         }
     </section>;

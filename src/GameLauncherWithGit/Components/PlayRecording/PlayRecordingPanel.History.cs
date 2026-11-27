@@ -33,7 +33,8 @@ public partial class PlayRecordingPanel
         var rangeId = _textRangeId;
         PlayRecordingPage? page = null;
         await ReadAsync(target, "texts", gameId => Operations.GetItemsAsync(gameId, target.Recording, TextPageSize, before: before,
-            rangeId: rangeId, textSearch: _textSearch, speakerSearch: _speakerSearch), value => page = value, () => _textError = true);
+            rangeId: rangeId, textSearch: _textSearch, speakerSearch: _speakerSearch), value => page = value, () => _textError = true,
+            _textItems is null ? loading => _textLoading = loading : null);
         if (page is null || !IsWorkspaceCurrent(target)) return;
         // Reading can resume during the server fetch; do not overwrite a page that is no longer at the tail.
         if (checkScrollBeforeApply)
@@ -80,6 +81,7 @@ public partial class PlayRecordingPanel
     {
         await ReadAsync(target, "labels", gameId => Operations.GetLabelsAsync(gameId, target.Recording), labels =>
         {
+            _detailRangeEdit = null;
             _labels = labels.ToArray();
             BeginTextEdit(item);
         }, () => _actionError = new("分類の取得失敗", "分類を読み込めませんでした。本文を更新してください。"));
@@ -109,6 +111,39 @@ public partial class PlayRecordingPanel
 
     private Task OpenOccurrenceAsync(DisplayTarget target, ScenarioFlowOccurrence occurrence) =>
         ReadForDisplayedTargetAsync(target, () => OpenResolvedTextAsync(target, occurrence.Start));
+
+    /// <summary>Returns only metadata for the occurrence selected in the current flow.</summary>
+    private Task<IReadOnlyList<string>> LoadFlowImageIdsAsync(DisplayTarget target, CaptureOccurrenceKey selected,
+        CaptureOccurrenceKey requested, CancellationToken cancellationToken) =>
+        ReadFlowImageAsync(target, selected, requested, cancellationToken, async gameId =>
+        {
+            var images = await Operations.GetScreenshotsAsync(gameId, target.Recording, requested.EventKey);
+            return (IReadOnlyList<string>)images.Select(image => image.ImageId).ToArray();
+        });
+
+    /// <summary>Confirms that one selected image still belongs to this occurrence before returning bytes.</summary>
+    private Task<byte[]> ReadFlowImageBytesAsync(DisplayTarget target, CaptureOccurrenceKey selected,
+        CaptureOccurrenceKey requested, string imageId, CancellationToken cancellationToken) =>
+        ReadFlowImageAsync(target, selected, requested, cancellationToken,
+            gameId => Operations.ReadScreenshotAsync(gameId, target.Recording, requested.EventKey, imageId));
+
+    /// <summary>Uses the rendered command token and discards results if the selection or display has changed.</summary>
+    private async Task<T> ReadFlowImageAsync<T>(DisplayTarget target, CaptureOccurrenceKey selected,
+        CaptureOccurrenceKey requested, CancellationToken cancellationToken, Func<string, Task<T>> read)
+    {
+        void RequireSelection()
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (requested != selected || selected.RecordId != target.Recording.HistoryRoot
+                || !IsWorkspaceCurrent(target) || _statusError || _graph is null)
+                throw new DisplayChangedException();
+        }
+
+        RequireSelection();
+        var result = await UseAsync(target, read);
+        RequireSelection();
+        return result;
+    }
 
     private Task OpenCapturedEventAsync(DisplayTarget target, PlayRecordingScreenshotResult shot) =>
         ReadForDisplayedTargetAsync(target, () => OpenResolvedTextAsync(target, new(shot.Event.SessionId, shot.Event.Sequence, 0), shot.ImageId));
@@ -151,7 +186,7 @@ public partial class PlayRecordingPanel
         if (refreshList)
         {
             await ReadAsync(target, "screenshot list", gameId => Operations.GetScreenshotsAsync(gameId, target.Recording, key),
-                images => _galleryImages = images, () => { _galleryImages = null; _galleryError = true; });
+                images => _galleryImages = images, () => { _galleryImages = null; _galleryError = true; }, loading => _galleryLoading = loading);
         }
         if (!IsWorkspaceCurrent(target) || _galleryImages is not { Count: > 0 } images) return;
         _galleryIndex = Math.Clamp(_galleryIndex, 0, images.Count - 1);
@@ -168,10 +203,11 @@ public partial class PlayRecordingPanel
         var imageId = images[_galleryIndex].ImageId;
         var imageTarget = ForDisplay(_state!);
         await ReadAsync(imageTarget, "screenshot", gameId => Operations.ReadScreenshotAsync(gameId, imageTarget.Recording, key, imageId),
-            png => _galleryImage = new("data:image/png;base64," + Convert.ToBase64String(png)), () => _galleryError = true);
+            png => _galleryImage = new("data:image/png;base64," + Convert.ToBase64String(png)), () => _galleryError = true,
+            loading => _galleryLoading = loading);
     }
 
-    private bool _pathsLoading;
+    private bool _pathsLoading, _pathsNeedReload;
     private long _flowReadOrder;
 
     /// <summary>Reads the current root's flow while keeping the existing child hidden until the new result is confirmed.</summary>
@@ -182,6 +218,7 @@ public partial class PlayRecordingPanel
         var order = ++_flowReadOrder;
         bool IsCurrentRead() => order == _flowReadOrder && IsWorkspaceCurrent(target);
         _pathsError = false;
+        _pathsNeedReload = false;
         _pathsLoading = true;
         StateHasChanged();
         try
@@ -216,7 +253,7 @@ public partial class PlayRecordingPanel
     {
         _flowReadOrder++;
         _graph = null;
-        _matchingComplete = _pathsError = _pathsLoading = false;
+        _matchingComplete = _pathsError = _pathsLoading = _pathsNeedReload = false;
     }
 
     private Task CutPathAsync(DisplayTarget target, CaptureTextItem item) =>
@@ -245,6 +282,6 @@ public partial class PlayRecordingPanel
 
         // ReadAsync discards responses after the displayed target or connection changes.
         await ReadAsync(ForDisplay(state), "scene flow", gameId => Operations.GetSceneFlowAsync(gameId, state.Target),
-            flow => _sceneFlow = flow, () => _scenesError = true);
+            flow => _sceneFlow = flow, () => _scenesError = true, loading => _scenesLoading = loading);
     }
 }

@@ -36,6 +36,21 @@ public sealed partial class PlayRecordingOperations
     public Task<CaptureTextItem> GetItemAtAsync(string gameId, PlayRecordingTarget expected, CapturePosition position) =>
         ForGameAsync(gameId, expected, () => RequireItemAtAsync(expected.ProfileId, position));
 
+    /// <summary>Updates only the saved range intersecting the selected occurrence in this Web recording.</summary>
+    internal Task RenameDisplayedRangeAsync(string gameId, PlayRecordingTarget expected, CapturePosition occurrence,
+        long rangeId, string name, IReadOnlyCollection<string> tags) =>
+        ForGameAsync(gameId, expected, async () =>
+        {
+            var recordId = expected.HistoryRoot;
+            var item = await RequireItemAtAsync(recordId, occurrence);
+            var range = (await Store.GetCaptureRangesAsync(recordId)).FirstOrDefault(x => x.Id == rangeId);
+            // The ID must still belong to this record and intersect the text displayed when editing began.
+            if (range is null || item.EndPosition.CompareTo(range.Start) <= 0 || item.StartPosition.CompareTo(range.End) >= 0)
+                throw new InvalidOperationException("選んだ本文の区間が見つかりません。");
+            await Store.UpdateCaptureRangeAsync(recordId, rangeId, name, tags);
+            Capture.ChangeOperationVersion();
+        });
+
     private async Task<CaptureTextItem> RequireItemAtAsync(long profileId, CapturePosition position) =>
         await Store.FindCaptureItemAtAsync(profileId, position)
             ?? throw new InvalidOperationException("選択した位置の本文が見つかりません。記録を読み込み直してください。");

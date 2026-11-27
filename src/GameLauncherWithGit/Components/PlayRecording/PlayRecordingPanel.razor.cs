@@ -14,7 +14,7 @@ public partial class PlayRecordingPanel
     [Inject] private IJSRuntime Js { get; set; } = default!;
 
     private enum Pane { Text, Paths }
-    private enum FocusTarget { FinishImpact, FinishButton, Pause, Resume, Screenshot, RangeStatus, RangeStart, RangePicker, RangeDraft, RangeEditor, Ranges, Classification, EditButton, PathRow, Gallery, GalleryButton, Text }
+    private enum FocusTarget { FinishImpact, FinishButton, Pause, Resume, Screenshot, RangeStatus, RangeStart, RangePicker, RangeDraft, RangeEditor, Ranges, Classification, EditButton, PathRow, Gallery, GalleryButton, DetailRange, Text }
     private (FocusTarget Target, long ItemId)? _nextFocus;
     private ElementReference _finishImpact, _finishButton, _rangeStatus, _rangeDraftButton, _rangeEditorHeading,
         _startRangeButton, _pickRangeButton, _rangesTab, _editClassification, _galleryHeading, _screenshotButton;
@@ -30,7 +30,7 @@ public partial class PlayRecordingPanel
     private readonly record struct DisplayTarget(string GameId, PlayRecordingTarget Recording, long ConnectionVersion, object Workspace);
     private DisplayTarget ForDisplay(PlayRecordingState state) => new(state.GameId, state.Target, _displayedConnectionVersion, _workspace);
     private sealed class DisplayChangedException : Exception { }
-    private bool _busy, _disposed, _statusLoaded, _statusError, _paneNeedsLoad;
+    private bool _busy, _disposed, _statusLoaded, _statusLoading, _statusError, _paneNeedsLoad;
     private sealed record OperationFailure(string Label, string Detail);
     private OperationFailure? _actionError;
     private string? _actionSuccess;
@@ -96,13 +96,15 @@ public partial class PlayRecordingPanel
             FocusTarget.Classification when _pane == Pane.Text && _editItem?.Id == request.ItemId => _editClassification,
             FocusTarget.EditButton or FocusTarget.PathRow when rowVisible && _textRangeId is null && _editItem?.Id != request.ItemId && row is not null => row.Open,
             FocusTarget.Gallery when _pane == Pane.Text && _galleryItem is not null => _galleryHeading,
+            FocusTarget.DetailRange when _pane == Pane.Text && _galleryItem is not null =>
+                _detailRangeButtons.TryGetValue(request.ItemId, out var detailRange) ? detailRange.Open : _galleryHeading,
             FocusTarget.GalleryButton when rowVisible && _editItem?.Id != request.ItemId && row is not null => row.Open,
             FocusTarget.EditButton or FocusTarget.GalleryButton or FocusTarget.Text when textVisible => _textScroller,
             _ => default
         };
         if (destination.Id is not null)
         {
-            try { await destination.FocusAsync(preventScroll: request.Target is FocusTarget.Screenshot or FocusTarget.PathRow or FocusTarget.FinishButton or FocusTarget.GalleryButton); }
+            try { await destination.FocusAsync(preventScroll: request.Target is FocusTarget.Screenshot or FocusTarget.PathRow or FocusTarget.FinishButton or FocusTarget.GalleryButton or FocusTarget.DetailRange); }
             catch (JSDisconnectedException) { }
         }
     }
@@ -242,7 +244,7 @@ public partial class PlayRecordingPanel
         if (_displayedConnectionVersion == connectionVersion) return connectionVersion;
         _displayedConnectionVersion = connectionVersion;
         ClearTargetData();
-        _statusLoaded = _statusError = false;
+        _statusLoaded = _statusLoading = _statusError = false;
         if (!_disposed) StateHasChanged();
         return connectionVersion;
     }
@@ -259,7 +261,7 @@ public partial class PlayRecordingPanel
         if (!IsWorkspaceCurrent(target)) return;
         _pane = pane;
         if (pane == Pane.Text && _galleryItem is null) _restoreReadingPosition = _readingPosition;
-        if (pane == Pane.Paths ? _graph is null || _pathsError || _pathsLoading : _textItems is null || _textError)
+        if (pane == Pane.Paths ? _graph is null || _pathsError || _pathsNeedReload : _textItems is null || _textError)
             await LoadPaneAsync();
     });
 
@@ -305,17 +307,5 @@ public partial class PlayRecordingPanel
         CaptureKind.Other => other ?? "未判定",
         _ => "未判定"
     };
-
-    /// <summary>Shows only the current record label, never another branch selection.</summary>
-    private static string RecordingRootLabel(PlayRecordingState state)
-    {
-        const string heads = "refs/heads/";
-        return state.RecordingBranchRef switch
-        {
-            { } branch when branch.StartsWith(heads, StringComparison.Ordinal) => branch[heads.Length..],
-            { } branch => branch,
-            _ => "作品の記録"
-        };
-    }
 
 }

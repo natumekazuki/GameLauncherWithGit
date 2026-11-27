@@ -30,12 +30,15 @@
 .play-detail { min-width:0; min-height:0; padding:.65rem; overflow:auto; background:var(--scenario-surface); border:1px solid var(--scenario-border); border-radius:.5rem; }
 .play-detail ::deep .capture-occurrence-detail { display:grid; gap:.65rem; }
 .play-detail ::deep .capture-occurrence-heading,
-.play-detail ::deep .capture-occurrence-actions,
-.play-detail ::deep .capture-occurrence-image-nav { display:flex; align-items:center; flex-wrap:wrap; gap:.45rem; }
+.play-shell ::deep .capture-occurrence-actions,
+.play-shell ::deep .capture-occurrence-image-nav { display:flex; align-items:center; flex-wrap:wrap; gap:.45rem; }
 .play-detail ::deep .capture-occurrence-heading { justify-content:space-between; }
 .play-detail ::deep .capture-occurrence-text { white-space:pre-wrap; }
-.play-detail ::deep .capture-occurrence-image { margin:0; }
-.play-detail ::deep .capture-occurrence-image img { display:block; max-width:100%; max-height:64dvh; object-fit:contain; }
+.play-shell ::deep .capture-occurrence-images { display:grid; min-width:0; gap:.45rem; }
+.play-shell ::deep .capture-occurrence-image { margin:0; }
+.play-shell ::deep .capture-occurrence-image img { display:block; max-width:100%; max-height:64dvh; object-fit:contain; }
+.play-detail-range { display:grid; gap:.45rem; justify-items:start; border-top:1px solid var(--scenario-border); padding-block-start:.55rem; }
+.play-detail-range > .play-stack { inline-size:100%; }
 .play-search { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)) auto; align-items:center; gap:.375rem; }
 .play-record-root { margin-inline-end:auto; }
 .play-header { margin-block-end: 1rem; }
