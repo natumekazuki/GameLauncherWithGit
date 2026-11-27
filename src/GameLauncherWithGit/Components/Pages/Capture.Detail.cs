@@ -179,9 +179,12 @@ public partial class Capture
         Func<bool> isSelected, Func<Task<T>> read, CancellationToken token)
     {
         await RequireImageSelectionAsync(expected, key, isSelected, token);
-        var data = await read();
-        await RequireImageSelectionAsync(expected, key, isSelected, token);
-        return data;
+        try { return await read(); }
+        finally
+        {
+            // Retired selections must not publish either a late image or a late read error.
+            await RequireImageSelectionAsync(expected, key, isSelected, token);
+        }
     }
 
     /// <summary>Uses the existing display boundary rather than trusting a record ID from a child.</summary>
