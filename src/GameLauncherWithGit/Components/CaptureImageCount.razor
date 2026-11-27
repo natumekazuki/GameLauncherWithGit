@@ -1,0 +1,16 @@
+@if (Count is > 0)
+{
+    <span class="capture-image-count"><CaptureIcon Name="Image" />画像 @Count</span>
+}
+else if (Failed)
+{
+    <span class="capture-image-count capture-image-count-unavailable">画像件数不明</span>
+}
+
+@code {
+    /// <summary>The event's image count; zero is confirmed absence, null means not available.</summary>
+    [Parameter] public int? Count { get; set; }
+
+    /// <summary>Shows an unavailable count when loading failed; initial loading stays quiet.</summary>
+    [Parameter] public bool Failed { get; set; }
+}

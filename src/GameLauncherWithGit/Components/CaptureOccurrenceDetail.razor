@@ -1,0 +1,88 @@
+<section class="capture-occurrence-detail" aria-label="本文の詳細">
+    @{ var key = new CaptureOccurrenceKey(RecordId, Item.StartPosition); }
+    <header class="capture-occurrence-heading">
+        <h3>本文の詳細</h3>
+        @if (Close.HasDelegate)
+        {
+            <button type="button" class="secondary-button" disabled="@Disabled" @onclick="() => Close.InvokeAsync(key)">閉じる</button>
+        }
+    </header>
+    @if (!string.IsNullOrWhiteSpace(Item.Speaker))
+    {
+        <strong class="capture-occurrence-speaker">@Item.Speaker</strong>
+    }
+    <p class="capture-occurrence-text">@Item.Text</p>
+    @if (Edit.HasDelegate || Copy.HasDelegate)
+    {
+        <div class="capture-occurrence-actions">
+            @if (Edit.HasDelegate)
+            {
+                <button type="button" class="secondary-button" disabled="@Disabled" @onclick="() => Edit.InvokeAsync(key)">話者・分類を訂正</button>
+            }
+            @if (Copy.HasDelegate)
+            {
+                <button type="button" class="secondary-button" disabled="@Disabled" @onclick="() => Copy.InvokeAsync(key)">本文をコピー</button>
+            }
+        </div>
+    }
+    @ChildContent
+    @if (ImageError is not null)
+    {
+        <div class="capture-occurrence-actions" role="status">
+            <span>@ImageError</span>
+            @if (RetryImages.HasDelegate)
+            {
+                <button type="button" class="secondary-button" disabled="@Disabled" @onclick="() => RetryImages.InvokeAsync(key)">画像を再読込</button>
+            }
+        </div>
+    }
+    @if (ImageCount is > 0)
+    {
+        <div class="capture-occurrence-image-nav" aria-label="画像の操作">
+            @if (MoveImage.HasDelegate)
+            {
+                <button type="button" class="secondary-button" aria-label="前の画像" disabled="@(Disabled || ImageIndex <= 0)" @onclick="() => MoveImage.InvokeAsync((key, -1))"><CaptureIcon Name="Previous" /></button>
+            }
+            <span role="status">@(ImageIndex + 1) / @ImageCount 枚</span>
+            @if (MoveImage.HasDelegate)
+            {
+                <button type="button" class="secondary-button" aria-label="次の画像" disabled="@(Disabled || ImageIndex + 1 >= ImageCount)" @onclick="() => MoveImage.InvokeAsync((key, 1))"><CaptureIcon Name="Next" /></button>
+            }
+        </div>
+        @if (ImageSource is { } source)
+        {
+            <figure class="capture-occurrence-image">
+                <img @key="(key, source)" src="@source" alt="この本文に対応するゲーム画面" @onerror="() => ImageDecodeFailed.InvokeAsync((key, source))" />
+            </figure>
+        }
+    }
+    @if (ImagesLoading && ImageError is null && ImageSource is null)
+    {
+        <p role="status">画像を読み込み中…</p>
+    }
+</section>
+
+@code {
+    /// <summary>The host's current recording root and its resolved item; together they identify all emitted actions.</summary>
+    [Parameter, EditorRequired] public long RecordId { get; set; }
+    [Parameter, EditorRequired] public CaptureTextItem Item { get; set; } = default!;
+
+    /// <summary>Controlled image display. Zero means known absence; null means unavailable, not zero.</summary>
+    [Parameter] public int? ImageCount { get; set; }
+    [Parameter] public int ImageIndex { get; set; }
+    [Parameter] public string? ImageSource { get; set; }
+    [Parameter] public bool ImagesLoading { get; set; }
+    [Parameter] public string? ImageError { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+
+    /// <summary>Optional host editor and existing range actions, anchored to the displayed item.</summary>
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>Requests closing the view without modifying its item or discarding any host draft.</summary>
+    [Parameter] public EventCallback<CaptureOccurrenceKey> Close { get; set; }
+    [Parameter] public EventCallback<CaptureOccurrenceKey> Edit { get; set; }
+    [Parameter] public EventCallback<CaptureOccurrenceKey> Copy { get; set; }
+    [Parameter] public EventCallback<CaptureOccurrenceKey> RetryImages { get; set; }
+    [Parameter] public EventCallback<(CaptureOccurrenceKey Occurrence, int Direction)> MoveImage { get; set; }
+    [Parameter] public EventCallback<(CaptureOccurrenceKey Occurrence, string Source)> ImageDecodeFailed { get; set; }
+}
