@@ -379,7 +379,7 @@
                                         @onclick="() => AtScope(displayedScope, () => EditDetailRange(key, range.Id))"
                                         disabled="@(_busy || _detailRangeEdit is not null && rangeEditor is null)">@RangeName(range) の名前・タグ</button>
                                     @if (range.Tags.Length > 0) { <span>@string.Join(" · ", range.Tags)</span> }
-                                    @if (rangeEditor is not null) { @DialogFailure("区間の名前・タグを保存できませんでした") }
+                                    @if (rangeEditor is not null && _errorLabel == DetailRangeFailureLabel) { @DialogFailure(DetailRangeFailureLabel) }
                                 </div>
                                 @if (rangeEditor is not null)
                                 {
@@ -807,7 +807,7 @@
         if (_launchMessage is { } launch) yield return ("起動後警告", launch);
         if (_initialError is { } initial) yield return ("シナリオの取得失敗", initial);
         if (_pollError is { } poll) yield return ("取得状態の更新失敗", poll);
-        if (!EditorOpen && _error is { } error)
+        if (!EditorOpen && (_flowOpen || _detailRangeEdit is null || _errorLabel != DetailRangeFailureLabel) && _error is { } error)
             yield return (_errorLabel ?? (_flowOpen ? "経路の操作失敗" : _pickingRange ? "区間指定エラー" : "シナリオの操作失敗"), error);
         if (ViewingLiveRecord && _snapshot.Profile?.Id == _profileId && CaptureStatusLabel != _snapshot.Status) yield return (CaptureStatusLabel, _snapshot.Status);
         if (ViewingLiveRecord && Screenshots.Snapshot is { LastFailure: { } shot } screenshotStatus)

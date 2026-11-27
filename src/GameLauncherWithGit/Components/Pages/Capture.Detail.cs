@@ -24,6 +24,7 @@ public partial class Capture
     private long? _restoreDetailRangeFocus;
     private bool _focusDetailRange;
     private ElementReference _detailRangeForm;
+    private const string DetailRangeFailureLabel = "区間の名前・タグを保存できませんでした";
 
     /// <summary>Holds name and tags for one saved range without changing the selected occurrence.</summary>
     private sealed class DetailRangeEdit(CaptureOccurrenceKey occurrence, CaptureRange range)
@@ -303,7 +304,7 @@ public partial class Capture
         if (!await CanPublishAsync(expected) || !ReferenceEquals(edit, _detailRangeEdit) || !IsDetailCurrent(edit.Occurrence)) return;
         _ranges = ranges;
         CloseDetailRangeEdit(edit);
-    }, failureLabel: "区間の名前・タグを保存できませんでした");
+    }, failureLabel: DetailRangeFailureLabel);
 
     /// <summary>Resumes the current item’s correction draft without replacing an unsaved draft for another line.</summary>
     private void EditDetail(CaptureOccurrenceKey key)
