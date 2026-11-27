@@ -24,7 +24,7 @@
     var displayedProfile = HistoryTarget(_snapshot);
     var displayedPlay = _playState;
     var liveSnapshot = _snapshot.Profile?.Id == _profileId ? _snapshot : new CaptureSnapshot { Status = _profileId == 0 ? "未接続" : "記録開始前" };
-    var displayedGameId = _profile?.GameId;
+    var displayedGameId = SelectedGameId;
     var displayedWorkId = _profileId;
     var displayedPaused = _snapshot.Paused;
     var displayedProcessId = _processId;
@@ -50,22 +50,40 @@
                     Detail="@(pageFailures.Length == 1 ? pageFailures[0].Detail : string.Join("\n\n", pageFailures.Select(x => $"{x.Label}\n{x.Detail}")))" />
             </div>
         }
-        <div class="capture-tabs" aria-label="表示切替">
-            <button class="secondary-button capture-icon-button" title="取得中" aria-label="取得中のゲーム" aria-pressed="@(_live ? "true" : "false")" @onclick="ShowLiveAsync"><CaptureIcon Name="Live" /></button>
-            <button class="secondary-button capture-icon-button" title="履歴" aria-label="保存履歴" aria-pressed="@(!_live ? "true" : "false")" @onclick="ShowHistoryAsync"><CaptureIcon Name="History" /></button>
-        </div>
+        @if (!_loading && _initialError is null && !InvalidGameId)
+        {
+            <nav class="capture-tabs" aria-label="表示切替">
+                <button class="secondary-button capture-text-button" aria-pressed="@(!_flowOpen)" @onclick="() => ShowViewAsync(false)" disabled="@_busy">本文</button>
+                <button class="secondary-button capture-text-button" aria-pressed="@_flowOpen" @onclick="() => ShowViewAsync(true)" disabled="@(_busy || displayedScope is null)">フロー</button>
+            </nav>
+        }
     </header>
     @if (_loading) { <p role="status">読込中…</p> }
     else if (_initialError is not null)
     {
         <button type="button" class="secondary-button capture-text-button" @ref="_initialRetry" @onclick="RetryInitialAsync"><CaptureIcon Name="Refresh" />シナリオを再読込</button>
     }
+    else if (InvalidGameId)
+    {
+        <p role="status">指定の作品は見つかりません。</p>
+    }
     else
     {
-        @if (_live)
+        <div class="capture-targets">
+            @if (SelectedGameTitle is { } title)
+            {
+                <strong>@title</strong>
+                <span>@(ViewingLiveRecord ? "記録先" : "閲覧中")：@(_scopeLabel ?? "通常の記録")</span>
+            }
+            @if (displayedPlay is { GameId: not null } current && !ViewingLiveRecord)
+            {
+                <button class="secondary-button capture-text-button" @onclick="() => ReturnToRecordingAsync(current.GameId)" disabled="@_busy">記録先：@current.Title</button>
+            }
+        </div>
+        @if (ViewingLiveRecord)
         {
             <div class="capture-livebar">
-                <strong class="capture-game-title" title="@ScopeTitle">@(_profile?.Title ?? "ゲームなし")@(_scopeLabel is { } scope ? $" · {scope}" : "")</strong>
+                <strong class="capture-game-title">@SelectedGameTitle</strong>
                 <div class="capture-recording-actions" aria-label="記録と経路">
                     <button class="secondary-button capture-icon-button" title="@(liveSnapshot.Paused ? "記録を再開（次の本文から別経路）" : "記録を一時停止")" aria-label="@(liveSnapshot.Paused ? "記録を再開" : "記録を一時停止")" aria-pressed="@(liveSnapshot.Paused ? "true" : "false")" @onclick="() => AtScopeAsync(displayedScope, () => ToggleRecordingPauseAsync(displayedLive, !displayedPaused))" disabled="@(_busy || !liveSnapshot.Connected || liveSnapshot.Preview)"><CaptureIcon Name="@(liveSnapshot.Paused ? "Play" : "Pause")" /></button>
                     <button class="secondary-button capture-icon-button" title="次の本文から別経路" aria-label="次の本文から別経路" @onclick="() => AtScopeAsync(displayedScope, () => BreakLivePathAsync(displayedLive))" disabled="@(_busy || !liveSnapshot.Recording)"><CaptureIcon Name="PathBreak" /></button>
@@ -93,11 +111,11 @@
             </div>
         }
         <section class="capture-content" aria-busy="@(_busy ? "true" : "false")">
-            <div class="capture-filters @(_live ? "capture-filters-live" : ShowHistoryScopes ? "capture-filters-scoped" : "")" hidden="@_flowOpen">
-                @if (!_live)
+            <div class="capture-filters @(ShowHistoryScopes ? "capture-filters-scoped" : "")" hidden="@_flowOpen">
+                @if (_profiles.Count > 0)
                 {
                     <label class="capture-filter" title="ゲーム"><CaptureIcon Name="Game" /><select aria-label="ゲーム" value="@_profileId" @onchange="ChangeProfileAsync" disabled="@_busy">
-                        <option value="0">ゲームを選択</option>
+                        <option value="0">@(_requestedGame is { } requested && !_profiles.Any(p => p.GameId == requested.Id) ? requested.Title : "ゲームを選択")</option>
                         @foreach (var profile in _profiles) { <option value="@profile.Id">@profile.Title@(profile.GameId is null ? "（登録なし）" : "")</option> }
                     </select></label>
                     @if (ShowHistoryScopes)
@@ -120,7 +138,7 @@
                     <option value="dialogue">セリフ</option><option value="narration">地の文</option>
                 </select></label>
             </div>
-            @if (!_live && !_flowOpen)
+            @if (!_flowOpen)
             {
                 <div class="capture-history-toolbar">
                     <form class="capture-search" @onsubmit="() => AtScopeAsync(displayedScope, SearchHistoryAsync)" @onsubmit:preventDefault>
@@ -139,16 +157,11 @@
                     {
                         <button class="secondary-button capture-icon-button" title="フローチャートを更新" aria-label="フローチャートを更新" @onclick="() => AtScopeAsync(displayedScope, RefreshAsync)" disabled="@_busy"><CaptureIcon Name="Refresh" /></button>
                     }
-                    else if (LatestOrder)
-                    {
-                        <button class="secondary-button capture-icon-button" title="@(_following ? "末尾に追従中" : "末尾へ戻る")" aria-label="末尾を表示" aria-pressed="@(_following ? "true" : "false")" @onclick="() => AtScopeAsync(displayedScope, FollowAsync)" disabled="@(_busy || _following || _selected.Count > 0 || _pickingRange)"><CaptureIcon Name="Follow" /></button>
-                    }
                     else
                     {
-                        <button class="secondary-button capture-icon-button" title="前の200件" aria-label="前の200件" @onclick="() => AtScopeAsync(displayedScope, PreviousAsync)" disabled="@(_busy || _offset == 0)"><CaptureIcon Name="Previous" /></button>
-                        <span class="capture-page-count">@(_itemsError is not null ? "—" : _items.Count == 0 ? "0" : $"{_offset + 1}–{_offset + _items.Count}")</span>
-                        <button class="secondary-button capture-icon-button" title="次の200件" aria-label="次の200件" @onclick="() => AtScopeAsync(displayedScope, NextAsync)" disabled="@(_busy || !_hasMore)"><CaptureIcon Name="Next" /></button>
-                        <button class="secondary-button capture-icon-button" title="更新" aria-label="更新" @onclick="() => AtScopeAsync(displayedScope, RefreshAsync)" disabled="@_busy"><CaptureIcon Name="Refresh" /></button>
+                        <button class="secondary-button capture-text-button" aria-pressed="@(_following && _offset == 0)" @onclick="() => AtScopeAsync(displayedScope, FollowAsync)" disabled="@(_busy || displayedScope is null || _selected.Count > 0 || _pickingRange)"><CaptureIcon Name="Follow" />最新へ</button>
+                        <button class="secondary-button capture-icon-button" title="古い200件" aria-label="古い200件" @onclick="() => AtScopeAsync(displayedScope, NextAsync)" disabled="@(_busy || !_hasMore)"><CaptureIcon Name="Previous" /></button>
+                        <button class="secondary-button capture-icon-button" title="新しい200件" aria-label="新しい200件" @onclick="() => AtScopeAsync(displayedScope, PreviousAsync)" disabled="@(_busy || _offset == 0)"><CaptureIcon Name="Next" /></button>
                     }
                 </div>
                 @if (!_flowOpen)
@@ -164,20 +177,20 @@
                     </div>
                 }
                 <div class="capture-tool-group capture-utilities">
-                    <button class="secondary-button capture-icon-button" title="観測した経路" aria-label="観測した経路を表示" aria-pressed="@(_flowOpen ? "true" : "false")" @onclick="() => AtScopeAsync(displayedScope, ToggleFlowAsync)" disabled="@(_busy || _recordId == 0)"><CaptureIcon Name="Flow" /></button>
+
                     <button @ref="_toolsButton" type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" aria-haspopup="dialog" disabled="@_busy"><CaptureIcon Name="Settings" />その他</button>
                     <section id="capture-tools-menu" class="capture-action-popover" popover="auto" role="dialog" aria-label="その他の操作">
                         <h3>その他の操作</h3>
                         <div class="capture-action-list">
-                            @if (_live && displayedPlay is { CanStart: true, GameId: not null } && displayedPlay.Target.RecordId == _recordId)
+                            @if (ViewingLiveRecord && displayedPlay is { CanStart: true, GameId: not null })
                             {
                                 <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="() => AtScopeAsync(displayedScope, () => StartRecordingAsync(displayedPlay))" disabled="@_busy"><CaptureIcon Name="Play" />記録を開始</button>
                             }
-                            @if (_live && displayedPlay is { CanFinish: true } && displayedPlay.Target.RecordId == _recordId)
+                            @if (ViewingLiveRecord && displayedPlay is { CanFinish: true })
                             {
                                 <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="() => AtScopeAsync(displayedScope, () => FinishRecordingAsync(displayedLive))" disabled="@_busy"><CaptureIcon Name="Stop" />記録を終了</button>
                             }
-                            @if (!_live && displayedGameId is not null)
+                            @if (CanPrepareRecording && displayedGameId is not null)
                             {
                                 <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="() => PrepareRecordingAsync(displayedGameId, displayedWorkId)" disabled="@_busy"><CaptureIcon Name="Link" />記録の準備</button>
                             }
@@ -187,12 +200,15 @@
                                 <span role="status">@_selected.Count 件選択</span>
                                 <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="() => AtScope(displayedScope, () => OpenBulk())" disabled="@(_busy || !CanOperateOnSelection)"><CaptureIcon Name="BulkEdit" />一括修正</button>
                                 <button type="button" class="secondary-button capture-text-button" @onclick="() => AtScope(displayedScope, () => ClearSelection())" disabled="@(_busy || _selected.Count == 0)"><CaptureIcon Name="ClearSelection" />選択解除</button>
-                                @if (!_live)
+                                @if (!ViewingLiveRecord || !_snapshot.Active)
                                 {
                                     <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="() => AtScopeAsync(displayedScope, OpenSelectedDeletionAsync)" disabled="@(_busy || !CanOperateOnSelection)"><CaptureIcon Name="Trash" />選択した本文の原文を削除</button>
                                 }
                             }
-                            <button type="button" class="secondary-button capture-text-button" aria-label="スクリーンショット設定" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="OpenScreenshotSettings" disabled="@_busy"><CaptureIcon Name="Camera" />撮影設定</button>
+                            @if (ViewingLiveRecord)
+                            {
+                                <button type="button" class="secondary-button capture-text-button" aria-label="スクリーンショット設定" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="OpenScreenshotSettings" disabled="@_busy"><CaptureIcon Name="Camera" />撮影設定</button>
+                            }
                             <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="OpenExtractionSettings" disabled="@_busy"><CaptureIcon Name="Settings" />抽出設定</button>
                             <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="() => AtScopeAsync(displayedScope, OpenExportAsync)" disabled="@(_busy || _recordId == 0)"><CaptureIcon Name="Export" />書き出し</button>
                             <button type="button" class="secondary-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="() => AtScopeAsync(displayedScope, () => OpenSavedScenesAsync(displayedScope!))" disabled="@(_busy || _recordId == 0)">保存済みの手動場面</button>
@@ -216,17 +232,15 @@
                     <span><CaptureIcon Name="End" />@(_rangeLast is null ? "—" : CandidatePreview(_rangeLast.Text))</span>
                 </div>
             }
-            @if (_flowOpen)
-            {
-                @if (!_live) { <h2 class="capture-flow-title">@ScopeTitle</h2> }
+            <div class="capture-flow-workspace" hidden="@(!_flowOpen)">
                 @if (_flowGraph is not null)
                 {
                     <ScenarioFlowView Graph="_flowGraph" MatchingComplete="_flowMatchingComplete"
                         OpenOccurrence="occurrence => AtScopeAsync(displayedScope, () => OpenFlowOccurrenceAsync(occurrence))"
                         CutOccurrence="occurrence => AtScopeAsync(displayedScope, () => CutFlowOccurrenceAsync(displayedProfile, occurrence))" />
                 }
-                else if (_busy) { <span class="capture-sr-only" role="status">フローチャートを読込中…</span> }
-            }
+                else if (_flowOpen && _busy) { <p role="status">フローチャートを読込中…</p> }
+            </div>
             <div class="capture-feed" hidden="@_flowOpen" @ref="_feed" tabindex="0" aria-label="抽出本文" data-capture-scope="@displayedScope?.ViewKey">
                 @if (_scopeError is not null)
                 {
@@ -273,7 +287,7 @@
                                     <button type="button" class="secondary-button capture-text-button" aria-label="@ScreenshotLabel(item)" popovertarget="@rowActionsId" popovertargetaction="hide" @onclick="() => AtScopeAsync(displayedScope, () => OpenScreenshotsAsync(item))" disabled="@(_busy || ScreenshotCount(item) is not > 0)"><CaptureIcon Name="Image" />画像 @(ScreenshotCount(item)?.ToString() ?? "?")</button>
                                     <button type="button" class="secondary-button capture-text-button" popovertarget="@rowActionsId" popovertargetaction="hide" @onclick="() => AtScope(displayedScope, () => Edit(item))" disabled="@(_busy || !CanEdit)"><CaptureIcon Name="Edit" />話者・分類を訂正</button>
                                     <button type="button" class="secondary-button capture-text-button" popovertarget="@rowActionsId" popovertargetaction="hide" @onclick="() => AtScopeAsync(displayedScope, () => OpenPartitionAsync(item))" disabled="@(_busy || !CanEdit)"><CaptureIcon Name="Split" />原文・分割</button>
-                                    @if (!_live)
+                                    @if (!ViewingLiveRecord || !_snapshot.Active)
                                     {
                                         <button type="button" class="secondary-button capture-text-button" popovertarget="@rowActionsId" popovertargetaction="hide" @onclick="() => AtScopeAsync(displayedScope, () => CutHistoryOccurrenceAsync(displayedProfile, item))" disabled="@_busy"><CaptureIcon Name="PathBreak" />ここから別経路</button>
                                     }
@@ -409,7 +423,10 @@
             {
                 <div class="capture-history-section" role="status">
                     <p>このゲームは取得中です。削除するには取得を停止してください。ゲーム自体は終了しません。</p>
-                    <button class="secondary-button capture-text-button" @onclick="() => AtScopeAsync(displayedScope, () => StopHistoryCaptureAsync(displayedLive))" disabled="@_busy"><CaptureIcon Name="Stop" />取得を停止</button>
+                    @if (ViewingLiveRecord)
+                    {
+                        <button class="secondary-button capture-text-button" @onclick="() => AtScopeAsync(displayedScope, () => StopHistoryCaptureAsync(displayedLive))" disabled="@_busy"><CaptureIcon Name="Stop" />取得を停止</button>
+                    }
                 </div>
             }
         </div>
@@ -664,7 +681,7 @@
     private CaptureProfile? _profile;
     private long _profileId, _rangeId, _bulkLabel;
     private int _processId, _offset;
-    private bool _live = true, _following = true, _busy, _loading = true, _split = true, _outside;
+    private bool _following = true, _busy, _loading = true, _split = true, _outside;
     private string _filter = "all", _processSearch = "";
     private string _textSearchInput = "", _textSearch = "", _speakerSearchInput = "", _speakerSearch = "";
     private bool HasHistorySearch => _textSearch.Length > 0 || _speakerSearch.Length > 0;
@@ -686,7 +703,7 @@
     private string ExportScope => string.Join(" · ", new[] { ScopeTitle, _ranges.FirstOrDefault(x => x.Id == _rangeId) is { } range ? RangeName(range) : "全本文", _filter switch { "dialogue" => "セリフ", "narration" => "地の文", "none" => "未判定", _ => "分類すべて" } }
         .Concat(_speakerSearch.Length > 0 ? [$"名前：{_speakerSearch}"] : Array.Empty<string>())
         .Concat(_textSearch.Length > 0 ? [$"本文：{_textSearch}"] : Array.Empty<string>()));
-    private bool HistoryCaptureActive => CaptureService.Snapshot is { Active: true, Profile: { } profile } && profile.Id == _profileId;
+    private bool HistoryCaptureActive => _recordId != 0 && CaptureService.Snapshot is { Active: true, RecordId: { } active } && active == _recordId;
     private string ManagedRangeDisplayName => _ranges.FirstOrDefault(x => x.Id == _managedRangeId) is { } range ? RangeName(range) : "";
     private string HistoryDialogTitle => _historyDialog switch { HistoryDialog.Manage => "履歴管理", HistoryDialog.DeleteSelected => "原文を削除", HistoryDialog.Clear => "全履歴を消去", _ => "区間を削除" };
     private string? _launchMessage, _message, _error, _errorLabel;
@@ -706,8 +723,8 @@
         if (_pollError is { } poll) yield return ("取得状態の更新失敗", poll);
         if (!EditorOpen && _error is { } error)
             yield return (_errorLabel ?? (_flowOpen ? "経路の操作失敗" : _pickingRange ? "区間指定エラー" : "シナリオの操作失敗"), error);
-        if (_live && _snapshot.Profile?.Id == _profileId && CaptureStatusLabel != _snapshot.Status) yield return (CaptureStatusLabel, _snapshot.Status);
-        if (_live && Screenshots.Snapshot is { LastFailure: { } shot } screenshotStatus)
+        if (ViewingLiveRecord && _snapshot.Profile?.Id == _profileId && CaptureStatusLabel != _snapshot.Status) yield return (CaptureStatusLabel, _snapshot.Status);
+        if (ViewingLiveRecord && Screenshots.Snapshot is { LastFailure: { } shot } screenshotStatus)
             yield return ("撮影失敗", ScreenshotFailureDetails(shot, screenshotStatus));
         if (_screenshotCountsError is { } counts) yield return ("画像件数の取得失敗", counts);
         if (_screenshotCleanup is { RemainingImageCount: > 0 } cleanup) yield return ("後片付け未完了", CleanupDetails(cleanup));
@@ -725,7 +742,8 @@
     private readonly HashSet<long> _selected = [];
     private readonly CancellationTokenSource _stop = new();
     private TaskCompletionSource? _pollComplete;
-    private ElementReference _feed, _rawInput, _initialRetry;
+    private ElementReference _feed, _observedFeed, _rawInput, _initialRetry;
+    private (long? Record, long? Session, long Saved) _feedSnapshot;
     private bool _focusAfterInitialRetry, _focusFeed;
     private IJSObjectReference? _module;
     private DotNetObjectReference<Capture>? _self;
@@ -747,8 +765,8 @@
     private long _rangeListsVersion = -1;
     private string _rangeName = "";
     private bool EditorOpen => _savedScenes is not null || _independentFlowConfirm || _exportOpen || _screenshotSettingsOpen || _screenshotItem is not null || _settingsOpen || _bulkOpen || _edit is not null || _partition is not null || _rangeSelection is not null || _historyDialog != HistoryDialog.None;
-    private bool FollowingView => _live && _rangeId == 0 && !_pickingRange;
-    private bool LatestOrder => _live && _rangeId == 0;
+    private bool FollowingView => !_flowOpen && _offset == 0 && !_pickingRange;
+    private CapturePosition? _pageCeiling;
     private bool CanEdit => _rangeId == 0 && !_pickingRange;
     private bool TextRangeValid => _rangeFirst is not null && _rangeLast is not null && _rangeFirst.StartPosition.CompareTo(_rangeLast.EndPosition) < 0;
     private string TextRangeSummary => !_pickingRange ? ""
@@ -772,34 +790,11 @@
     private static string ClassificationName(CaptureKind kind) => kind == CaptureKind.Dialogue ? "セリフ" : "地の文";
     private IEnumerable<CaptureLabel> ClassificationChoices(long current) => FixedLabels.Concat(_labels.Where(x => x.Id == current && !FixedLabels.Any(y => y.Id == current)));
     private static string ClassificationChoiceName(CaptureLabel label) => label.Kind is CaptureKind.Dialogue or CaptureKind.Narration ? ClassificationName(label.Kind) : label.Name;
-    private string EmptyMessage => _profileId == 0
-        ? (_live ? "ゲームなし" : "ゲーム未選択")
-        : HasHistorySearch || _filter != "all" || _rangeId != 0 ? "条件に一致する本文はありません" : _live ? "本文待ち" : "保存された本文はありません";
+    private string EmptyMessage => SelectedGameTitle is null ? "ゲーム未選択"
+        : HasHistorySearch || _filter != "all" || _rangeId != 0 ? "条件に一致する本文はありません" : "保存された本文はありません";
     private static string CandidatePreview(string text) => string.Concat(text.Take(60)).ReplaceLineEndings(" ");
     private sealed class PartDraft { public string Text { get; set; } = ""; public long Label { get; set; } public string Speaker { get; set; } = ""; }
-    protected override async Task OnInitializedAsync()
-    {
-        _launchMessage = Navigation.HistoryEntryState;
-        await LoadInitialAsync();
-        _ = PollAsync();
-    }
-    private async Task LoadInitialAsync()
-    {
-        _loading = true;
-        _initialError = null;
-        try
-        {
-            await ReadRecordingStateAsync();
-            _profiles = await Store.GetCaptureProfilesAsync();
-            var play = CaptureService.CurrentPlayTarget;
-            _live = play.Profile is not null;
-            _profileId = play.Profile?.Id ?? _profiles.FirstOrDefault()?.Id ?? 0;
-            await LoadProfileAsync();
-            if (_snapshot.NeedsProcess) FindProcesses();
-        }
-        catch (Exception ex) { _initialError = $"シナリオ画面を読み込めませんでした：{ex.Message}"; }
-        finally { _loading = false; }
-    }
+    protected override void OnInitialized() => _ = PollAsync();
     private async Task RetryInitialAsync()
     {
         if (_loading) return;
@@ -818,13 +813,18 @@
             }
             return;
         }
+        if (InvalidGameId || _feed.Id is null) return;
         if (_module is null)
         {
-            if (_feed.Id is null) return;
             _module = await JS.InvokeAsync<IJSObjectReference>("import", "./capture-view.js");
             _self = DotNetObjectReference.Create(this);
+        }
+        if (_observedFeed.Id != _feed.Id)
+        {
+            if (_observedFeed.Id is not null) await _module.InvokeVoidAsync("unobserveFeed", _observedFeed);
+            _observedFeed = _feed;
             await _module.InvokeVoidAsync("observeFeed", _feed, _self);
-            _scrollToEnd = _live;
+            _scrollToEnd ??= _following;
         }
         if (_scrollToEnd is { } end) { _scrollToEnd = null; await _module.InvokeVoidAsync("scrollFeed", _feed, end); }
         if (_focusAfterInitialRetry || _focusFeed)
@@ -887,7 +887,8 @@
         await SynchronizeViewAsync();
         try { await RefreshRangeStateAsync(next); }
         catch (InvalidOperationException) when (CaptureService.Snapshot.OperationVersion != next.OperationVersion) { }
-        if (FollowingView && _following && !_busy && !EditorOpen && _selected.Count == 0)
+        if (FollowingView && _following && !_busy && !EditorOpen && _selected.Count == 0 && ViewingLiveRecord &&
+            _feedSnapshot != (next.RecordId, next.SessionId, next.Saved))
         { await LoadItemsAsync(); _scrollToEnd = true; }
         else if (!_busy && Screenshots.Snapshot.SavedCount != _countsSavedCount)
             await LoadScreenshotCountsAsync();
@@ -902,9 +903,9 @@
     private async Task SynchronizeViewAsync()
     {
         var play = CaptureService.CurrentPlayTarget;
-        if (_live && (play.Profile?.Id ?? 0) != _profileId)
+        if (_followPlaySelection && play.Profile is { } active && active.Id != _profileId)
         {
-            _profileId = play.Profile?.Id ?? 0;
+            _profileId = active.Id;
             _profiles = await Store.GetCaptureProfilesAsync();
             await LoadProfileAsync();
         }
@@ -952,7 +953,7 @@
     }
     private async Task RefreshRangeStateAsync(CaptureSnapshot displayed)
     {
-        _pendingLiveRange = _live && _recordId != 0 && displayed.Profile?.Id == _profileId
+        _pendingLiveRange = ViewingLiveRecord && displayed.Profile?.Id == _profileId
             ? await RecordingOperations.GetDesktopPendingRangeAsync(PlayRecordingOperations.DesktopTarget(displayed, _profileId)) : null;
         if (_rangeSelection is { Live: true } draft && !ReferenceEquals(draft, _pendingLiveRange))
         {
@@ -974,7 +975,7 @@
         IReadOnlyList<CaptureTextItem> items;
         try
         {
-            items = expected is null ? [] : await QueryItemsAsync(LatestOrder ? 200 : 201, FollowingView ? 0 : _offset, LatestOrder);
+            items = expected is null ? [] : await QueryItemsAsync(201, _offset, _following && _offset == 0 ? null : _pageCeiling);
             if (!await CanPublishAsync(expected)) return;
             _itemsError = null;
         }
@@ -987,7 +988,10 @@
             return;
         }
         _hasMore = items.Count > 200;
-        _items = items.Take(200).ToArray();
+        _items = _hasMore ? items.Skip(1).ToArray() : items;
+        _feedSnapshot = (_snapshot.RecordId, _snapshot.SessionId, _snapshot.Saved);
+        if (_items.LastOrDefault() is { } last && (_offset == 0 && (_following || _pageCeiling is null)))
+            _pageCeiling = last.EndPosition;
         if (_selected.Count > 0) _selected.IntersectWith(_items.Select(x => x.Id));
         await LoadScreenshotCountsAsync();
     }
@@ -1010,20 +1014,19 @@
         }
         catch (Exception ex) { if (IsDisplayed(expected)) { _screenshotCounts = null; _screenshotCountsError = $"画像件数を取得できませんでした。更新して再試行してください：{ex.Message}"; } }
     }
-    private Task<IReadOnlyList<CaptureTextItem>> QueryItemsAsync(int limit, int offset = 0, bool latest = false)
+    private Task<IReadOnlyList<CaptureTextItem>> QueryItemsAsync(int limit, int offset, CapturePosition? before)
     {
         // SQLite reads and substring matching must not block the UI while browsing large histories.
         var recordId = _recordId; var rangeId = _rangeId; var kind = FilterKind; var unclassified = _filter == "none";
         var text = _textSearch; var speaker = _speakerSearch;
-        Task<IReadOnlyList<CaptureTextItem>> Query() => Store.GetGameCaptureItemsAsync(recordId, limit, offset,
-            unclassifiedOnly: unclassified, latest: latest, rangeId: rangeId == 0 ? null : rangeId, kind: kind,
-            textSearch: text, speakerSearch: speaker);
-        return _live && limit > 0 ? Query() : Task.Run(Query);
+        return Task.Run(() => Store.GetGameCaptureItemsAsync(recordId, limit, offset,
+            unclassifiedOnly: unclassified, latest: true, rangeId: rangeId == 0 ? null : rangeId, kind: kind,
+            textSearch: text, speakerSearch: speaker, before: before));
     }
     private Task SearchHistoryAsync() => RunAsync(async () =>
     {
         _textSearch = _textSearchInput.Trim(); _speakerSearch = _speakerSearchInput.Trim();
-        _offset = 0; _selected.Clear(); await LoadItemsAsync(); _scrollToEnd = false;
+        await ReloadFilteredItemsAsync();
     });
     private Task ClearHistorySearchAsync() { _textSearchInput = _speakerSearchInput = ""; return SearchHistoryAsync(); }
     private Task OpenHistoryManagementAsync() => RunAsync(async () =>
@@ -1058,7 +1061,7 @@
     });
     private Task StopHistoryCaptureAsync(PlayRecordingTarget expected) => RunAsync(async () =>
     {
-        if (!HistoryCaptureActive) return;
+        if (!ViewingLiveRecord || !HistoryCaptureActive) return;
         await RecordingOperations.FinishDesktopAsync(expected); _snapshot = CaptureService.Snapshot;
         _historyCounts = await Store.GetCaptureHistoryCountsAsync(_recordId);
         _focusHistoryContent = true;
@@ -1093,7 +1096,14 @@
         _screenshotCleanup = await ScreenshotStore.CleanupUnreferencedScreenshotsAsync();
         _message = _screenshotCleanup.RemainingImageCount == 0 ? "不要画像の後片付けが完了しました。" : $"不要画像 {_screenshotCleanup.RemainingImageCount} 件の後片付けが残っています。履歴管理で詳細を確認できます。";
     });
-    private Task ChangeProfileAsync(ChangeEventArgs e) => RunAsync(async () => { _profileId = long.Parse(e.Value!.ToString()!); await LoadProfileAsync(); _scrollToEnd = false; }, refreshScope: false);
+    /// <summary>Selects a history without changing the PC play target or Git branch.</summary>
+    private Task ChangeProfileAsync(ChangeEventArgs e) => RunAsync(async () =>
+    {
+        if (!long.TryParse(e.Value?.ToString(), out var id) || id != 0 && !_profiles.Any(profile => profile.Id == id)) return;
+        _followPlaySelection = false;
+        _profileId = id;
+        await LoadProfileAsync();
+    }, refreshScope: false);
     private Task ChangeRangeAsync(ChangeEventArgs e) => RunAsync(async () =>
     {
         if (!long.TryParse(e.Value?.ToString(), out var rangeId) || rangeId != 0 && !_ranges.Any(range => range.Id == rangeId)) return;
@@ -1108,19 +1118,20 @@
     });
     private async Task ReloadFilteredItemsAsync()
     {
-        _offset = 0;
+        _offset = 0; _pageCeiling = null;
         _selected.Clear();
         await LoadItemsAsync();
-        _scrollToEnd = FollowingView && _following;
+        _scrollToEnd = true;
     }
     private Task PreviousAsync() => RunAsync(async () =>
     {
+        _following = false;
         _offset = Math.Max(0, _offset - 200); _selected.Clear();
         await LoadItemsAsync();
         _scrollToEnd = false;
         _focusFeed = _itemsError is null;
     });
-    private Task NextAsync() => RunAsync(async () => { _offset += 200; _selected.Clear(); await LoadItemsAsync(); _scrollToEnd = false; });
+    private Task NextAsync() => RunAsync(async () => { _following = false; _offset += 200; _selected.Clear(); await LoadItemsAsync(); _scrollToEnd = false; });
     private Task RefreshAsync() => RunAsync(() => _flowOpen ? LoadFlowAsync() : LoadItemsAsync());
     private Task RetryItemsAsync() => RunAsync(async () =>
     {
@@ -1158,7 +1169,17 @@
         await ReadRecordingStateAsync();
     }, failureLabel: "記録終了失敗");
     private Task BreakLivePathAsync(PlayRecordingTarget expected) => RunAsync(async () => { await RecordingOperations.BreakDesktopPathAsync(expected); _snapshot = CaptureService.Snapshot; }, failureLabel: "経路変更失敗");
-    private Task ToggleFlowAsync() => RunAsync(async () => { _flowOpen = !_flowOpen; if (_flowOpen) { _following = false; await LoadFlowAsync(); } });
+    /// <summary>Switches the workspace without clearing the text query or the mounted flow.</summary>
+    private Task ShowViewAsync(bool flow) => RunAsync(async () =>
+    {
+        if (flow == _flowOpen) return;
+        _flowOpen = flow;
+        if (flow)
+        {
+            _following = false;
+            if (_flowGraph is null) await LoadFlowAsync();
+        }
+    });
     private async Task LoadFlowAsync()
     {
         var expected = _displayedScope;
@@ -1190,18 +1211,26 @@
     {
         await WriteHistoryAsync(target, recordId => Store.SetScenarioFlowCutAsync(recordId, occurrence.Start)); await LoadFlowAsync();
     }, "この出現から別経路にしました。他の周回の接続は残ります。");
+    /// <summary>Opens an exact occurrence by raw position, without replacing the applied text query.</summary>
     private Task OpenFlowOccurrenceAsync(ScenarioFlowOccurrence occurrence) => RunAsync(async () =>
     {
-        var all = await Store.GetGameCaptureItemsAsync(_recordId, limit: 0);
-        var index = all.ToList().FindIndex(x => x.SessionId == occurrence.Start.SessionId && x.Sequence == occurrence.Start.Sequence
-            && x.Start <= occurrence.Start.Offset && x.Start + x.Length > occurrence.Start.Offset);
-        if (index < 0) throw new InvalidOperationException("本文が更新されています。フローチャートを更新してください。");
-        _live = false; _flowOpen = false; _rangeId = 0; _filter = "all";
-        _textSearchInput = _textSearch = _speakerSearchInput = _speakerSearch = "";
-        _selected.Clear(); ClearTextRange(); _following = false; _offset = index;
-        _flowHighlighted = all[index].StartPosition;
-        await LoadItemsAsync(); _scrollToEnd = false;
+        var item = await FindOccurrenceItemAsync(_recordId, occurrence.Start);
+        _flowOpen = false;
+        _following = false;
+        _flowHighlighted = item.StartPosition;
+        await LoadOccurrenceGalleryAsync(item);
     });
+
+    /// <summary>Finds the item that still owns the supplied UTF-16 offset in this record.</summary>
+    private async Task<CaptureTextItem> FindOccurrenceItemAsync(long recordId, CapturePosition position)
+    {
+        var ceiling = position with { Offset = checked(position.Offset + 1) };
+        var items = await Store.GetGameCaptureItemsAsync(recordId, limit: 1, latest: true, before: ceiling);
+        if (items.FirstOrDefault() is not { } item || item.SessionId != position.SessionId
+            || item.Sequence != position.Sequence || item.EndPosition.CompareTo(position) <= 0)
+            throw new InvalidOperationException("本文が更新されています。対象の本文を確認してください。");
+        return item;
+    }
     private void OpenIndependentFlow() { if (!TextRangeValid) return; _error = null; _independentFlowConfirm = true; _focusEditor = true; }
     private Task CreateIndependentFlowAsync(PlayRecordingTarget target) => RunAsync(async () =>
     {
@@ -1209,9 +1238,13 @@
         await WriteHistoryAsync(target, recordId => Store.CreateIndependentScenarioFlowAsync(recordId, _rangeFirst!.StartPosition, _rangeLast!.EndPosition));
         CloseEditors(); ClearTextRange(); _flowOpen = true; _following = false; await LoadFlowAsync();
     });
-    private Task ShowHistoryAsync() => RunAsync(async () => { _live = false; _profiles = await Store.GetCaptureProfilesAsync(); if (_profileId == 0) _profileId = _profiles.FirstOrDefault()?.Id ?? 0; await LoadProfileAsync(); _scrollToEnd = false; }, refreshScope: false);
-    private Task ShowLiveAsync() => RunAsync(async () => { await ReadRecordingStateAsync(); _live = true; _profileId = CaptureService.CurrentPlayTarget.Profile?.Id ?? 0; _profiles = await Store.GetCaptureProfilesAsync(); await LoadProfileAsync(); _scrollToEnd = true; }, refreshScope: false);
-    private Task FollowAsync() => RunAsync(async () => { _following = true; await LoadItemsAsync(); _scrollToEnd = true; });
+    private Task FollowAsync() => RunAsync(async () =>
+    {
+        _offset = 0; _pageCeiling = null;
+        _following = true;
+        await LoadItemsAsync();
+        _scrollToEnd = true;
+    });
     private Task StartLiveRangeAsync(PlayRecordingTarget expected) => RunAsync(async () =>
     { await RecordingOperations.StartDesktopRangeAsync(expected); _snapshot = CaptureService.Snapshot; }, failureLabel: "区間開始失敗");
     private Task EndLiveRangeAsync(PlayRecordingTarget expected) => RunAsync(async () =>
@@ -1227,12 +1260,11 @@
         _pendingLiveRange = null;
         _snapshot = CaptureService.Snapshot;
     }, failureLabel: "区間取消失敗");
-    private Task ToggleTextRange() => RunAsync(async () =>
+    private Task ToggleTextRange() => RunAsync(() =>
     {
         _pickingRange = !_pickingRange; _selected.Clear(); _following = false;
-        if (LatestOrder) _offset = 0;
         if (!_pickingRange) _rangeFirst = _rangeLast = null;
-        await LoadItemsAsync();
+        return Task.CompletedTask;
     });
     private void ClearTextRange() { _rangeFirst = _rangeLast = null; _pickingRange = false; }
     private Task ClearTextRangeAsync() => RunAsync(async () => { ClearTextRange(); _offset = 0; await LoadItemsAsync(); });
@@ -1300,13 +1332,19 @@
     }
     private Task PrepareRecordingAsync(string gameId, long profileId) => RunAsync(async () =>
     {
-        if (_live || _profileId != profileId || _profile?.GameId != gameId) throw ScopeChanged();
+        if (!CanPrepareRecording || _profileId != profileId || SelectedGameId != gameId) throw ScopeChanged();
         await CaptureService.PreparePlayTargetAsync(gameId);
         _snapshot = CaptureService.Snapshot;
+        if (_profileId == 0 && _snapshot.Profile is { } prepared)
+        {
+            _profiles = await Store.GetCaptureProfilesAsync();
+            _profileId = prepared.Id;
+            await LoadProfileAsync();
+        }
         OpenSettings(connection: true);
     }, failureLabel: "記録の準備失敗");
 
-    private void OpenExtractionSettings() => OpenSettings(connection: _live && _snapshot.Profile?.Id == _profileId);
+    private void OpenExtractionSettings() => OpenSettings(connection: ViewingSetup && _snapshot.Profile?.Id == _profileId);
 
     private void OpenSettings(bool connection)
     {
@@ -1392,7 +1430,7 @@
         await ApplyRulesAsync(expected);
         await RecordingOperations.ConfirmDesktopAsync(expected);
         await ReadRecordingStateAsync();
-        _live = true;
+        _followPlaySelection = RequestedGameId is null;
         _profileId = CaptureService.CurrentPlayTarget.Profile?.Id ?? 0;
         _profiles = await Store.GetCaptureProfilesAsync();
         await LoadProfileAsync();
@@ -1514,12 +1552,15 @@
             Screenshots.SelectWindow(window);
         });
     }
-    private Task OpenScreenshotsAsync(CaptureTextItem item) => RunAsync(async () =>
+    private Task OpenScreenshotsAsync(CaptureTextItem item) => RunAsync(() => LoadOccurrenceGalleryAsync(item));
+
+    /// <summary>Shows images only for a selected occurrence in the displayed record.</summary>
+    private async Task LoadOccurrenceGalleryAsync(CaptureTextItem item)
     {
         _screenshotItem = item; _following = false; _focusEditor = true;
         _galleryIndex = 0;
         await LoadScreenshotGalleryAsync(item);
-    });
+    }
     private Task ReloadScreenshotAsync() => RunAsync(() =>
         _screenshotItem is { } item ? LoadScreenshotGalleryAsync(item) : Task.CompletedTask);
     private async Task LoadScreenshotGalleryAsync(CaptureTextItem item)
@@ -1618,7 +1659,7 @@
     {
         CancelWindowPick(); _stop.Cancel();
         ReleaseHistoryObservation();
-        if (_module is not null) { try { await _module.InvokeVoidAsync("unobserveFeed", _feed); await _module.DisposeAsync(); } catch (JSDisconnectedException) { } }
+        if (_module is not null) { try { if (_observedFeed.Id is not null) await _module.InvokeVoidAsync("unobserveFeed", _observedFeed); await _module.DisposeAsync(); } catch (JSDisconnectedException) { } }
         _self?.Dispose(); _stop.Dispose();
     }
 }

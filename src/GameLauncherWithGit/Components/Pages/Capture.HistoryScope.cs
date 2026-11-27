@@ -47,7 +47,7 @@ public partial class Capture
     private bool IsDisplayed(DisplayedScope? expected) => expected is not null && ReferenceEquals(expected, _displayedScope)
         && !_stop.IsCancellationRequested;
 
-    private bool TracksCurrentScope => _live || _historyChoice == 0;
+    private bool TracksCurrentScope => _historyChoice == 0;
 
     private PlayRecordingTarget HistoryTarget(CaptureSnapshot snapshot) => _profile?.GameId is { } gameId
         ? PlayRecordingOperations.DesktopHistoryTarget(snapshot, gameId, _recordId, fixedRecord: !TracksCurrentScope,
@@ -90,7 +90,7 @@ public partial class Capture
         var play = CaptureService.CurrentPlayTarget;
         if (_profile is not { } profile) return false;
         if (play.Profile?.Id == profile.Id) return FromPlayTarget(play.RecordId, play.ScopeVersion) == expected.Boundary;
-        return !_live && profile.GameId is { } gameId && expected.Boundary.History is { } observation
+        return profile.GameId is { } gameId && expected.Boundary.History is { } observation
             && ReferenceEquals(observation, _historyObservation)
             && await observation.IsCurrentAsync(gameId, expected.RecordId, _stop.Token)
             && CaptureService.CurrentPlayTarget.Profile?.Id != profile.Id;
@@ -100,12 +100,12 @@ public partial class Capture
     {
         if (_stop.IsCancellationRequested || _profile is not { } profile) return default;
         var play = CaptureService.CurrentPlayTarget;
-        if (play.Profile?.Id == profile.Id || _live || profile.GameId is null)
+        if (play.Profile?.Id == profile.Id || profile.GameId is null)
         {
             ReleaseHistoryObservation();
             if (play.Profile?.Id == profile.Id)
                 return FromPlayTarget(play.RecordId, play.ScopeVersion);
-            return _live ? default : new(profile.Id, null, null);
+            return new(profile.Id, null, null);
         }
 
         var token = _stop.Token;
@@ -117,7 +117,7 @@ public partial class Capture
 
         var next = await HistoryResolver.ObserveDesktopHistoryAsync(profile.GameId, profile.Id, token);
         // A nested editor may load while polling, or the page can close while Git is resolving HEAD.
-        if (token.IsCancellationRequested || _profile?.Id != profile.Id || _live
+        if (token.IsCancellationRequested || _profile?.Id != profile.Id
             || CaptureService.CurrentPlayTarget.Profile?.Id == profile.Id || !ReferenceEquals(observed, _historyObservation))
         {
             next.Dispose();
@@ -177,7 +177,7 @@ public partial class Capture
             }
         }
         _currentRecordId = current;
-        var chosen = _live || _historyChoice == 0 ? current : _historyChoice;
+        var chosen = TracksCurrentScope ? current : _historyChoice;
         var scope = _historyScopes.FirstOrDefault(item => item.RecordId == chosen);
         _scopeError = _profile is null || scope is not null ? null
             : error ?? "現在のブランチを特定できません。ブランチを確認して再試行してください。";
@@ -186,13 +186,21 @@ public partial class Capture
         var boundary = TracksCurrentScope ? currentScope : default;
         if (!reload && (scope?.RecordId ?? 0) == _recordId && (scope is null || _displayedScope?.Boundary == boundary)) return;
 
+        if (scope is not null && _recordId == scope.RecordId)
+        {
+            // Retire callbacks for the old session without losing the reader's filters or scroll position.
+            _displayedScope = new(scope.RecordId, (++_viewSequence).ToString(System.Globalization.CultureInfo.InvariantCulture), boundary);
+            _rangeListsVersion = -1;
+            return;
+        }
+
         ResetScopeContent();
         _displayedScope = scope is null ? null : new(scope.RecordId,
             (++_viewSequence).ToString(System.Globalization.CultureInfo.InvariantCulture), boundary);
         if (_displayedScope is null) return;
         await LoadScopeListsAsync();
         await LoadItemsAsync();
-        _scrollToEnd = LatestOrder;
+        _scrollToEnd = true;
     }
 
     private void ResetScopeContent()
@@ -223,7 +231,8 @@ public partial class Capture
         _filter = "all";
         _textSearchInput = _textSearch = _speakerSearchInput = _speakerSearch = "";
         _exportIncludeTags = _exportExcludeTags = [];
-        _following = _live;
+        _following = true;
+        _pageCeiling = null;
     }
 
     private async Task LoadScopeListsAsync()
