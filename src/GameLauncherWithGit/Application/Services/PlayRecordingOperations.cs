@@ -44,6 +44,8 @@ public sealed record PlayRecordingState(PlayRecordingTarget Target, string Title
     public string GameId { get; init; } = "";
     /// <summary>The current Web recording root's branch, if it is branch-specific.</summary>
     public string? RecordingBranchRef { get; init; }
+    /// <summary>The verified recording destination label used by both in-process views.</summary>
+    internal string RecordingDestinationLabel { get; init; } = ScenarioRecordLabels.Unresolved;
     public bool CanStartRange { get; init; }
     public bool CanEndRange { get; init; }
     public bool CanTakeScreenshot { get; init; }
@@ -112,16 +114,19 @@ public sealed partial class PlayRecordingOperations(ScenarioCaptureService captu
         var profile = await store.FindCaptureProfileAsync(gameId);
         if (profile is null || capture.CurrentPlayTarget.RecordId != recordId) return null;
         // Use metadata for the same recording root; never resolve or open another branch.
-        string? branch = null;
+        IReadOnlyList<ScenarioHistoryScope>? scopes = null;
         if (recordId != profile.Id && store is IScenarioHistoryStore history)
         {
-            var scopes = await history.GetScenarioHistoryScopesAsync(profile.Id);
-            branch = scopes.FirstOrDefault(scope => scope.RecordId == recordId)?.BranchRef;
+            scopes = await history.GetScenarioHistoryScopesAsync(profile.Id);
         }
         var after = capture.CurrentPlayTarget;
         if (after.RecordId != recordId || after.ScopeVersion != selected.ScopeVersion)
             return null;
-        return BuildState(profile, recordId) with { RecordingBranchRef = branch };
+        return BuildState(profile, recordId) with
+        {
+            RecordingBranchRef = scopes?.FirstOrDefault(scope => scope.ProfileId == profile.Id && scope.RecordId == recordId)?.BranchRef,
+            RecordingDestinationLabel = ScenarioRecordLabels.ForRecord(profile.Id, recordId, scopes)
+        };
     });
 
     /// <summary>Reads state for a known game. In the app, a non-current or unresolved game cannot be operated.</summary>
