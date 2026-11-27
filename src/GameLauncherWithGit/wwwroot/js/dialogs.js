@@ -13,7 +13,12 @@
         if (!body) return;
 
         const section = heading.closest('section[id]') ?? heading;
-        body.scrollTop += section.getBoundingClientRect().top - body.getBoundingClientRect().top;
+        if (getComputedStyle(body).overflowY === 'visible') {
+            // In short windows the dialog, not its body, owns scrolling.
+            heading.scrollIntoView({ block: 'nearest' });
+        } else {
+            body.scrollTop += section.getBoundingClientRect().top - body.getBoundingClientRect().top;
+        }
         heading.focus({ preventScroll: true });
     };
 
@@ -53,12 +58,16 @@
             const closed = previous.filter(layer => !next.includes(layer)).reverse();
             const returnTarget = closed
                 .map(layer => openers.get(layer))
-                .find(element => element?.isConnected && (!nextTop || dialogOf(nextTop).contains(element)));
+                .find(element => element?.isConnected && element !== document.body && (!nextTop || dialogOf(nextTop).contains(element)));
 
             if (returnTarget && typeof returnTarget.focus === 'function') {
                 returnTarget.focus({ preventScroll: true });
             } else if (nextTop) {
                 focusDialog(nextTop);
+            } else {
+                // A native tray request can open settings without a focused button in the web view.
+                const fallbackId = closed.map(layer => dialogOf(layer)?.dataset.dialogReturn).find(Boolean);
+                if (fallbackId) document.getElementById(fallbackId)?.focus({ preventScroll: true });
             }
         } else if (nextTop && !dialogOf(nextTop).contains(document.activeElement)) {
             focusDialog(nextTop);
