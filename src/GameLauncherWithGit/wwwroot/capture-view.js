@@ -14,6 +14,24 @@ export function unobserveFeed(element) {
     restoreFocus();
 }
 export function scrollFeed(element, end) { element.scrollTop = end ? element.scrollHeight : 0; }
+export function focusTextDetail(element) {
+    element.focus({ preventScroll: true });
+    element.onkeydown = event => {
+        // Wide panes stay keyboard-accessible alongside the feed; the narrow overlay keeps Tab inside.
+        if (event.key !== 'Tab' || !matchMedia('(max-width: 900px)').matches) return;
+        const controls = [...element.querySelectorAll('button, input, select, textarea, a[href]')]
+            .filter(control => !control.disabled && control.getClientRects().length > 0);
+        const first = controls[0], last = controls.at(-1);
+        if (event.shiftKey && [element, first].includes(document.activeElement)) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    };
+}
+export function focusTextDetailOpener(id) {
+    // The item may be outside the current filter or an older page.
+    const row = id ? document.getElementById(id) : null;
+    const target = row?.getClientRects().length ? row : document.querySelector('.capture-feed');
+    target?.focus({ preventScroll: true });
+}
 export function selectionStart(element) { return element.selectionStart; }
 export function focusEditorContent() {
     const dialog = document.getElementById('capture-editor');
@@ -23,16 +41,19 @@ export function focusEditorContent() {
 let previousFocus;
 let previousBodyStyle;
 export function focusEditor(owner, scope) {
-    previousFocus = document.activeElement;
     const dialog = document.getElementById('capture-editor');
     if (!dialog) return;
     const controls = () => [...dialog.querySelectorAll('button, input, select, textarea, [tabindex="0"]')]
         .filter(x => !x.disabled && x.getClientRects().length > 0 && getComputedStyle(x).visibility !== 'hidden');
-    document.querySelector('.capture-page')?.setAttribute('inert', '');
-    previousBodyStyle = { overflow: document.body.style.overflow, paddingRight: document.body.style.paddingRight };
-    const scrollbar = window.innerWidth - document.documentElement.clientWidth;
-    if (scrollbar > 0) document.body.style.paddingRight = `${parseFloat(getComputedStyle(document.body).paddingRight) + scrollbar}px`;
-    document.body.style.overflow = 'hidden';
+    // A finish confirmation can replace the range editor and back again; restore the first opener.
+    if (!previousBodyStyle) {
+        previousFocus = document.activeElement;
+        document.querySelector('.capture-page')?.setAttribute('inert', '');
+        previousBodyStyle = { overflow: document.body.style.overflow, paddingRight: document.body.style.paddingRight };
+        const scrollbar = window.innerWidth - document.documentElement.clientWidth;
+        if (scrollbar > 0) document.body.style.paddingRight = `${parseFloat(getComputedStyle(document.body).paddingRight) + scrollbar}px`;
+        document.body.style.overflow = 'hidden';
+    }
     const elements = controls();
     (elements.find(x => x.matches('input, select, textarea')) ?? elements[0])?.focus({ preventScroll: true });
     dialog.onkeydown = event => {

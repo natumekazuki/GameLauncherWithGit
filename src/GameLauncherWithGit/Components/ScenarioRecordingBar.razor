@@ -3,11 +3,11 @@
     @if (ShowControls)
     {
         <div class="scenario-recording-actions" aria-label="記録と経路">
-            <button @ref="_pauseButton" type="button" class="secondary-button" disabled="@(Disabled || !CanTogglePause)" @onclick="TogglePause">
+            <button @ref="_pauseButton" type="button" class="scenario-action" disabled="@(Disabled || !CanTogglePause)" @onclick="TogglePause">
                 <CaptureIcon Name="@(State == ScenarioRecordingDisplay.Paused ? "Play" : "Pause")" />
                 @(State == ScenarioRecordingDisplay.Paused ? "記録を再開" : "記録を一時停止")
             </button>
-            <button type="button" class="secondary-button" disabled="@(Disabled || !CanBreakPath)" @onclick="BreakPath">
+            <button type="button" class="scenario-action" disabled="@(Disabled || !CanBreakPath)" @onclick="BreakPath">
                 <CaptureIcon Name="PathBreak" />次の本文から別経路
             </button>
         </div>

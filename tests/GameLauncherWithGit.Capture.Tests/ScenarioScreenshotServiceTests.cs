@@ -412,11 +412,12 @@ public sealed class ScenarioScreenshotServiceTests : IAsyncDisposable
     // claim = "テスト受信・本文未受信・名前のみ・空本文・終了後は撮影せず、空白だけの本文は保存しても撮影対象を進めない"
     // oracle = { type = "contract", ref = "https://github.com/natumekazuki/GameLauncherWithGit/issues/22" }
     // fault = "テスト受信や名前や空本文を対象として採用する、空白本文で直前の有効本文を置き換える、または終了した取得回へ撮影する"
-    // observable = "FreezeScreenshotTargetの例外と対象、platform撮影件数、保存件数とイベント別添付、保存された空白原文"
+    // observable = "FreezeScreenshotTargetの例外と対象、platform撮影件数、保存件数とイベント別添付、保存された空白原文、成功表示に固定した記録先・イベント・画像ID"
     // observation_boundary = "public-boundary"
     // scope = "screenshot eligibility across preview, recording and finish"
     // lifecycle = "permanent"
     // @end-test-value
+    /// <summary>Only a saved image updates the result pointer; later rejected attempts leave it intact.</summary>
     [Fact]
     public async Task CaptureRequiresANonemptyBodyInTheCurrentFormalSession()
     {
@@ -433,6 +434,7 @@ public sealed class ScenarioScreenshotServiceTests : IAsyncDisposable
         await _screenshots.CaptureAsync();
         Assert.Empty(_platform.Captured);
         Assert.Equal(0, _screenshots.Snapshot.SavedCount);
+        Assert.Null(_screenshots.Snapshot.LastSuccess);
         _host.Emit(Body, "正式本文");
         var target = _capture.FreezeScreenshotTarget().Target;
         Assert.Equal(3, target.Event.Sequence);
@@ -440,7 +442,11 @@ public sealed class ScenarioScreenshotServiceTests : IAsyncDisposable
         _host.Emit(Body, whitespace);
         Assert.Equal(target, _capture.FreezeScreenshotTarget().Target);
         await _screenshots.CaptureAsync();
-        Assert.Single(await _store.GetEventScreenshotsAsync(target.CaptureGameId, target.Event));
+        var attached = Assert.Single(await _store.GetEventScreenshotsAsync(target.CaptureGameId, target.Event));
+        var success = Assert.IsType<ScreenshotSuccess>(_screenshots.Snapshot.LastSuccess);
+        Assert.Equal(target, success.Target);
+        Assert.Equal(attached.ImageId, success.ImageId);
+        Assert.Equal(_clock.GetUtcNow(), success.OccurredAt);
         Assert.Empty(await _store.GetEventScreenshotsAsync(target.CaptureGameId, new(target.Event.SessionId, 4)));
         Assert.Contains(await _store.GetCaptureItemsAsync(target.Event.SessionId), item => item.Sequence == 4 && item.RawText == whitespace);
         await _capture.FinishAsync();
@@ -448,6 +454,7 @@ public sealed class ScenarioScreenshotServiceTests : IAsyncDisposable
         await _screenshots.CaptureAsync();
         Assert.Single(_platform.Captured);
         Assert.Equal(1, _screenshots.Snapshot.SavedCount);
+        Assert.Same(success, _screenshots.Snapshot.LastSuccess);
     }
 
     // @test-value v2

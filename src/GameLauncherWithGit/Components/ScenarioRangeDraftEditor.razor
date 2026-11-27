@@ -1,9 +1,9 @@
 <CaptureRangeFields Name="@Name" NameChanged="@NameChanged" Tags="@Tags" TagsChanged="@TagsChanged"
                     AvailableTags="@AvailableTags" SuggestedTags="@SuggestedTags" Disabled="@Disabled" AutoFocus="@AutoFocus" />
 <div class="scenario-range-draft-actions">
-    <button type="button" class="secondary-button" disabled="@Disabled" @onclick="Close">閉じる</button>
-    <button type="button" class="secondary-button" disabled="@Disabled" @onclick="Discard">区間指定を破棄</button>
-    <button type="button" class="launch-button" disabled="@(Disabled || string.IsNullOrWhiteSpace(Name))" @onclick="Save">
+    <button type="button" class="scenario-action" disabled="@Disabled" @onclick="Close">閉じる</button>
+    <button type="button" class="scenario-action" disabled="@Disabled" @onclick="Discard">区間指定を破棄</button>
+    <button type="button" class="scenario-action scenario-action--primary" disabled="@(Disabled || string.IsNullOrWhiteSpace(Name))" @onclick="Save">
         <CaptureIcon Name="Save" />区間を保存
     </button>
 </div>
