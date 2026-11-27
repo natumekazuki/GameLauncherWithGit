@@ -13,7 +13,7 @@ public partial class Capture
 
     private CaptureTextItem? _detailItem;
     private CaptureOccurrenceKey? _detailKey;
-    private IReadOnlyList<ScenarioScreenshot>? _detailImages;
+    private IReadOnlyList<string>? _detailImages;
     private int _detailImageIndex;
     private string? _detailImageSource, _detailImageError, _detailOpener;
     private string? _detailMessage;
@@ -92,13 +92,12 @@ public partial class Capture
         var expected = _displayedScope;
         try
         {
-            var images = await ScreenshotStore.GetEventScreenshotsAsync(key.RecordId, key.EventKey);
-            if (!await CanPublishAsync(expected) || !IsDetailCurrent(key)) return;
+            var images = await ReadOccurrenceImageIdsAsync(expected, key, () => IsDetailCurrent(key), _stop.Token);
             _detailImages = images;
             if (preferredImageId is not null)
             {
                 // A missing saved image must not be replaced by another attachment.
-                var index = Array.FindIndex(images.ToArray(), image => image.ImageId == preferredImageId);
+                var index = Array.IndexOf(images.ToArray(), preferredImageId);
                 if (index < 0) throw new InvalidOperationException("保存した画像は見つかりません。");
                 _detailImageIndex = index;
             }
@@ -107,7 +106,7 @@ public partial class Capture
         }
         catch (Exception ex)
         {
-            if (IsDetailCurrent(key)) _detailImageError = $"画像を読み込めませんでした：{ex.Message}";
+            if (IsDisplayed(expected) && IsDetailCurrent(key)) _detailImageError = $"画像を読み込めませんでした：{ex.Message}";
         }
         finally
         {
@@ -121,16 +120,55 @@ public partial class Capture
         _detailImageSource = _detailImageError = null;
         if (!IsDetailCurrent(key) || _detailImages is not { Count: > 0 } images) return;
         var expected = _displayedScope;
+        _detailImagesLoading = true;
         try
         {
-            var bytes = await ScreenshotStore.ReadEventScreenshotPngAsync(key.RecordId, key.EventKey, images[_detailImageIndex].ImageId);
-            if (await CanPublishAsync(expected) && IsDetailCurrent(key))
-                _detailImageSource = "data:image/png;base64," + Convert.ToBase64String(bytes);
+            var imageId = images[_detailImageIndex];
+            var bytes = await ReadOccurrenceImageBytesAsync(expected, key, imageId, () => IsDetailCurrent(key), _stop.Token);
+            _detailImageSource = "data:image/png;base64," + Convert.ToBase64String(bytes);
         }
         catch (Exception ex)
         {
-            if (IsDetailCurrent(key)) _detailImageError = $"画像を読み込めませんでした：{ex.Message}";
+            if (IsDisplayed(expected) && IsDetailCurrent(key)) _detailImageError = $"画像を読み込めませんでした：{ex.Message}";
         }
+        finally
+        {
+            if (IsDetailCurrent(key)) _detailImagesLoading = false;
+        }
+    }
+
+    /// <summary>Reads metadata only from the same event-scoped store for text and flow details.</summary>
+    private Task<IReadOnlyList<string>> ReadOccurrenceImageIdsAsync(DisplayedScope? expected, CaptureOccurrenceKey key,
+        Func<bool> isSelected, CancellationToken token) => ReadSelectedImageDataAsync<IReadOnlyList<string>>(expected, key, isSelected, async () =>
+    {
+        var metadata = await ScreenshotStore.GetEventScreenshotMetadataAsync(key.RecordId, [key.EventKey], token);
+        return metadata.Single().Images.Select(image => image.ImageId).ToArray();
+    }, token);
+
+    /// <summary>Reads one PNG; the store verifies that the image belongs to the selected record and event.</summary>
+    private Task<byte[]> ReadOccurrenceImageBytesAsync(DisplayedScope? expected, CaptureOccurrenceKey key, string imageId,
+        Func<bool> isSelected, CancellationToken token) => ReadSelectedImageDataAsync(expected, key, isSelected,
+        () => ScreenshotStore.ReadEventScreenshotPngAsync(key.RecordId, key.EventKey, imageId), token);
+
+    /// <summary>Rejects stale selection and record authority on both sides of an image-store await.</summary>
+    private async Task<T> ReadSelectedImageDataAsync<T>(DisplayedScope? expected, CaptureOccurrenceKey key,
+        Func<bool> isSelected, Func<Task<T>> read, CancellationToken token)
+    {
+        await RequireImageSelectionAsync(expected, key, isSelected, token);
+        var data = await read();
+        await RequireImageSelectionAsync(expected, key, isSelected, token);
+        return data;
+    }
+
+    /// <summary>Uses the existing display boundary rather than trusting a record ID from a child.</summary>
+    private async Task RequireImageSelectionAsync(DisplayedScope? expected, CaptureOccurrenceKey key,
+        Func<bool> isSelected, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        if (expected?.RecordId != key.RecordId || !isSelected()) throw ScopeChanged();
+        await RequireCurrentScopeAsync(expected);
+        token.ThrowIfCancellationRequested();
+        if (!isSelected()) throw ScopeChanged();
     }
 
     private Task RetryDetailImagesAsync(CaptureOccurrenceKey key) => RunAsync(() => LoadDetailImagesAsync(key));
