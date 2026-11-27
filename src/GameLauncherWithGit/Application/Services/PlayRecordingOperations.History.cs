@@ -1,4 +1,5 @@
 using GameLauncherWithGit.Application.Models;
+using GameLauncherWithGit.Infrastructure.Abstractions;
 
 namespace GameLauncherWithGit.Application.Services;
 
@@ -15,14 +16,22 @@ public sealed partial class PlayRecordingOperations
     /// during live capture so newly appended text does not move the page boundary.
     /// </summary>
     public Task<PlayRecordingPage> GetItemsAsync(string gameId, PlayRecordingTarget expected, int limit = 40, int offset = 0,
-        CapturePosition? before = null, long? rangeId = null) =>
+        CapturePosition? before = null, long? rangeId = null, string? textSearch = null, string? speakerSearch = null) =>
         ForGameAsync(gameId, expected, async () =>
         {
             if (limit is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(limit));
             if (offset < 0 || (before is not null && offset != 0)) throw new ArgumentOutOfRangeException(nameof(offset));
-            var items = await Store.GetGameCaptureItemsAsync(expected.ProfileId, limit + 1, offset, latest: true, rangeId: rangeId, before: before);
+            var items = await Store.GetGameCaptureItemsAsync(expected.ProfileId, limit + 1, offset, latest: true,
+                rangeId: rangeId, textSearch: textSearch, speakerSearch: speakerSearch, before: before);
             return new PlayRecordingPage(items.TakeLast(limit).ToArray(), items.Count > limit);
         });
+
+    /// <summary>Returns only image counts for the displayed page, under the same recording target guard as its text.</summary>
+    public Task<IReadOnlyDictionary<CaptureEventKey, int>> GetScreenshotCountsAsync(string gameId,
+        PlayRecordingTarget expected, IReadOnlyCollection<CaptureEventKey> events) =>
+        ForGameAsync(gameId, expected, () => Store is IScenarioScreenshotStore screenshots
+            ? screenshots.GetScreenshotCountsAsync(expected.ProfileId, events)
+            : throw new InvalidOperationException("画像の枚数を取得できません。"));
 
     public Task<CaptureTextItem> GetItemAtAsync(string gameId, PlayRecordingTarget expected, CapturePosition position) =>
         ForGameAsync(gameId, expected, () => RequireItemAtAsync(expected.ProfileId, position));

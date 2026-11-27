@@ -1,20 +1,79 @@
 using GameLauncherWithGit.Application.Models;
 using GameLauncherWithGit.Application.Services;
+using Microsoft.JSInterop;
 
 namespace GameLauncherWithGit.Components.PlayRecording;
 
 public partial class PlayRecordingPanel
 {
-    private Task RefreshLatestTextAsync() => _textError ? Task.CompletedTask : LoadTextAsync();
-
-    private Task LoadTextAsync()
+    /// <summary>Replaces the tail only while the reader remains at its end.</summary>
+    private async Task RefreshLatestTextAsync()
     {
-        if (_state is not { } state) return Task.CompletedTask;
+        if (_textError) return;
+        try
+        {
+            if (_textScroller.Id is not null && !await Js.InvokeAsync<bool>("playRecordingText.atEnd", _textScroller))
+            {
+                StopFollowing();
+                return;
+            }
+        }
+        catch (JSDisconnectedException) { return; }
+        await LoadTextAsync(checkScrollBeforeApply: true);
+    }
+
+    private Task LoadTextAsync() => LoadTextAsync(checkScrollBeforeApply: false);
+
+    /// <summary>Loads one target-checked page and keeps its held cursor when live follow is paused.</summary>
+    private async Task LoadTextAsync(bool checkScrollBeforeApply)
+    {
+        if (_state is not { } state) return;
         var target = ForDisplay(state);
-        var before = _olderPages.Count == 0 ? null : _olderPages[^1];
+        var before = _olderPages.Count == 0 ? _pausedBefore : _olderPages[^1];
         var rangeId = _textRangeId;
-        return ReadAsync(target, "texts", gameId => Operations.GetItemsAsync(gameId, target.Recording, TextPageSize, before: before, rangeId: rangeId),
-            ApplyTextPage, () => _textError = true);
+        PlayRecordingPage? page = null;
+        await ReadAsync(target, "texts", gameId => Operations.GetItemsAsync(gameId, target.Recording, TextPageSize, before: before,
+            rangeId: rangeId, textSearch: _textSearch, speakerSearch: _speakerSearch), value => page = value, () => _textError = true);
+        if (page is null || !IsWorkspaceCurrent(target)) return;
+        // Reading can resume during the server fetch; do not overwrite a page that is no longer at the tail.
+        if (checkScrollBeforeApply)
+        {
+            try
+            {
+                if (!_latest || _textScroller.Id is not null && !await Js.InvokeAsync<bool>("playRecordingText.atEnd", _textScroller))
+                {
+                    if (IsWorkspaceCurrent(target)) StopFollowing();
+                    return;
+                }
+            }
+            catch (JSDisconnectedException) { return; }
+        }
+        if (!IsWorkspaceCurrent(target)) return;
+        ApplyTextPage(page);
+        await LoadImageCountsAsync();
+    }
+
+    /// <summary>Loads only metadata for the visible page, keeping confirmed zero separate from failure.</summary>
+    private async Task LoadImageCountsAsync()
+    {
+        if (_state is not { } state || _textItems is not { Count: > 0 } rows) return;
+        var target = ForDisplay(state);
+        var events = rows.Select(x => new CaptureEventKey(x.SessionId, x.Sequence)).Distinct().ToArray();
+        await ReadAsync(target, "image counts", gameId => Operations.GetScreenshotCountsAsync(gameId, target.Recording, events),
+            counts =>
+            {
+                if (!ReferenceEquals(rows, _textItems)) return;
+                if (_imageCounts is null || _imageCounts.Count != counts.Count ||
+                    counts.Any(x => !_imageCounts.TryGetValue(x.Key, out var count) || count != x.Value))
+                    _imageCounts = counts;
+                _imageCountsFailed = false;
+            },
+            () =>
+            {
+                if (!ReferenceEquals(rows, _textItems)) return;
+                _imageCounts = null;
+                _imageCountsFailed = true;
+            });
     }
 
     private Task EditTextAsync(DisplayTarget target, CaptureTextItem item) => ReadForDisplayedTargetAsync(target, async () =>
@@ -39,6 +98,11 @@ public partial class PlayRecordingPanel
             TextSpeakerChanged(item), EditingNarration ? null : Optional(_editSpeaker)));
         CancelTextEdit();
         await LoadTextAsync();
+        if (_state is not { } state || !IsWorkspaceCurrent(target)) return;
+        var current = ForDisplay(state);
+        await ReadAsync(current, "selected corrected text", gameId => Operations.GetItemAtAsync(gameId, current.Recording, item.StartPosition),
+            value => { _galleryItem = value; _detailSuccess = "本文を訂正しました"; },
+            () => _actionError = new("本文の再読込失敗", "訂正は保存しました。本文を開き直してください。"));
     }, "訂正失敗");
 
     private static string? Optional(string input) => string.IsNullOrWhiteSpace(input) ? null : input.Trim();
@@ -55,10 +119,27 @@ public partial class PlayRecordingPanel
         await ReadAsync(target, "text at position", gameId => Operations.GetItemAtAsync(gameId, target.Recording, position),
             value => item = value, () => _actionError = new("本文の取得失敗", "対応する本文を読み込めませんでした。記録を更新してください。"));
         if (item is null) return;
-        await OpenTextViewAsync(false, null);
-        if (IsWorkspaceCurrent(target))
-            await ShowGalleryAsync(item, imageId, showRawText: imageId is not null);
+        if (_pane == Pane.Text && _galleryItem is null) await RememberReadingPositionAsync(target);
+        if (!IsWorkspaceCurrent(target)) return;
+        _pane = Pane.Text;
+        StopFollowing();
+        await ShowGalleryAsync(item, imageId);
     }
+
+    /// <summary>Copies only the selected occurrence of the current workspace.</summary>
+    private Task CopyDetailAsync(DisplayTarget target, CaptureOccurrenceKey key) => ReadForDisplayedTargetAsync(target, async () =>
+    {
+        if (!IsDetailCurrent(target, key) || _galleryItem is not { } item) return;
+        _detailSuccess = null;
+        try { await Js.InvokeVoidAsync("playRecordingText.copy", item.Text); }
+        catch (JSException)
+        {
+            if (IsDetailCurrent(target, key))
+                _actionError = new("コピー失敗", "本文をコピーできませんでした。ブラウザーのクリップボード設定を確認してください。");
+            return;
+        }
+        if (IsDetailCurrent(target, key)) _detailSuccess = "本文をコピーしました";
+    });
 
     private async Task LoadGalleryImageAsync(bool refreshList = true)
     {
@@ -90,15 +171,52 @@ public partial class PlayRecordingPanel
             png => _galleryImage = new("data:image/png;base64," + Convert.ToBase64String(png)), () => _galleryError = true);
     }
 
-    private Task LoadPathsAsync()
+    private bool _pathsLoading;
+    private long _flowReadOrder;
+
+    /// <summary>Reads the current root's flow while keeping the existing child hidden until the new result is confirmed.</summary>
+    private async Task LoadPathsAsync()
     {
-        if (_state is not { } state) return Task.CompletedTask;
-        return ReadAsync(ForDisplay(state), "observed flow", gameId => Operations.GetObservedFlowAsync(gameId, state.Target), flow =>
+        if (_state is not { } state) return;
+        var target = ForDisplay(state);
+        var order = ++_flowReadOrder;
+        bool IsCurrentRead() => order == _flowReadOrder && IsWorkspaceCurrent(target);
+        _pathsError = false;
+        _pathsLoading = true;
+        StateHasChanged();
+        try
         {
-            _graph = flow.Graph;
-            _matchingComplete = flow.MatchingComplete;
-            _pathsError = false;
-        }, () => _pathsError = true);
+            await ReadAsync(target, "observed flow", gameId => Operations.GetObservedFlowAsync(gameId, target.Recording), flow =>
+            {
+                if (!IsCurrentRead()) return;
+                _graph = flow.Graph;
+                _matchingComplete = flow.MatchingComplete;
+            }, () =>
+            {
+                if (IsCurrentRead()) _pathsError = true;
+            });
+        }
+        catch (DisplayChangedException) when (IsCurrentRead())
+        {
+            // A stale command on the same root does not make its previous graph current.
+            _pathsError = true;
+        }
+        finally
+        {
+            if (IsCurrentRead())
+            {
+                _pathsLoading = false;
+                if (!_disposed) StateHasChanged();
+            }
+        }
+    }
+
+    /// <summary>Invalidates the graph and any pending publication when the display identity is no longer known.</summary>
+    private void ClearObservedFlow()
+    {
+        _flowReadOrder++;
+        _graph = null;
+        _matchingComplete = _pathsError = _pathsLoading = false;
     }
 
     private Task CutPathAsync(DisplayTarget target, CaptureTextItem item) =>
@@ -110,8 +228,10 @@ public partial class PlayRecordingPanel
     private Task CutPathAsync(DisplayTarget target, Func<string, Task> operation, long? rowId = null) => RunMutationAsync(target, async () =>
     {
         await UseActionAsync(target, operation);
+        _actionSuccess = "経路の区切りを保存しました";
         await RefreshStatusAsync(loadPane: _pane == Pane.Paths, refreshLatestText: false);
-        if (rowId is { } id && IsWorkspaceCurrent(target)) FocusAfterRender(FocusTarget.PathRow, id);
+        if (rowId is { } id && IsWorkspaceCurrent(target))
+            FocusAfterRender(_galleryItem is null ? FocusTarget.PathRow : FocusTarget.Gallery, id);
     }, "経路変更失敗");
 
     /// <summary>Reads existing manual scenes on demand under the current Web target and connection.</summary>

@@ -4,7 +4,7 @@
         <h3>本文の詳細</h3>
         @if (Close.HasDelegate)
         {
-            <button type="button" class="secondary-button" disabled="@Disabled" @onclick="() => Close.InvokeAsync(key)">閉じる</button>
+            <button type="button" class="scenario-action" disabled="@Disabled" @onclick="() => Close.InvokeAsync(key)">閉じる</button>
         }
     </header>
     @if (!string.IsNullOrWhiteSpace(Item.Speaker))
@@ -12,27 +12,13 @@
         <strong class="capture-occurrence-speaker">@Item.Speaker</strong>
     }
     <p class="capture-occurrence-text">@Item.Text</p>
-    @if (Edit.HasDelegate || Copy.HasDelegate)
-    {
-        <div class="capture-occurrence-actions">
-            @if (Edit.HasDelegate)
-            {
-                <button type="button" class="secondary-button" disabled="@Disabled" @onclick="() => Edit.InvokeAsync(key)">話者・分類を訂正</button>
-            }
-            @if (Copy.HasDelegate)
-            {
-                <button type="button" class="secondary-button" disabled="@Disabled" @onclick="() => Copy.InvokeAsync(key)">本文をコピー</button>
-            }
-        </div>
-    }
-    @ChildContent
     @if (ImageError is not null)
     {
         <div class="capture-occurrence-actions" role="status">
             <span>@ImageError</span>
             @if (RetryImages.HasDelegate)
             {
-                <button type="button" class="secondary-button" disabled="@Disabled" @onclick="() => RetryImages.InvokeAsync(key)">画像を再読込</button>
+                <button type="button" class="scenario-action" disabled="@Disabled" @onclick="() => RetryImages.InvokeAsync(key)">画像を再読込</button>
             }
         </div>
     }
@@ -41,12 +27,12 @@
         <div class="capture-occurrence-image-nav" aria-label="画像の操作">
             @if (MoveImage.HasDelegate)
             {
-                <button type="button" class="secondary-button" aria-label="前の画像" disabled="@(Disabled || ImageIndex <= 0)" @onclick="() => MoveImage.InvokeAsync((key, -1))"><CaptureIcon Name="Previous" /></button>
+                <button type="button" class="scenario-action" aria-label="前の画像" disabled="@(Disabled || ImageIndex <= 0)" @onclick="() => MoveImage.InvokeAsync((key, -1))"><CaptureIcon Name="Previous" /></button>
             }
             <span role="status">@(ImageIndex + 1) / @ImageCount 枚</span>
             @if (MoveImage.HasDelegate)
             {
-                <button type="button" class="secondary-button" aria-label="次の画像" disabled="@(Disabled || ImageIndex + 1 >= ImageCount)" @onclick="() => MoveImage.InvokeAsync((key, 1))"><CaptureIcon Name="Next" /></button>
+                <button type="button" class="scenario-action" aria-label="次の画像" disabled="@(Disabled || ImageIndex + 1 >= ImageCount)" @onclick="() => MoveImage.InvokeAsync((key, 1))"><CaptureIcon Name="Next" /></button>
             }
         </div>
         @if (ImageSource is { } source)
@@ -60,6 +46,20 @@
     {
         <p role="status">画像を読み込み中…</p>
     }
+    @if (Edit.HasDelegate || Copy.HasDelegate)
+    {
+        <div class="capture-occurrence-actions">
+            @if (Edit.HasDelegate)
+            {
+                <button type="button" class="scenario-action" disabled="@Disabled" @onclick="() => Edit.InvokeAsync(key)">話者・分類を訂正</button>
+            }
+            @if (Copy.HasDelegate)
+            {
+                <button type="button" class="scenario-action" disabled="@Disabled" @onclick="() => Copy.InvokeAsync(key)">本文をコピー</button>
+            }
+        </div>
+    }
+    @ChildContent
 </section>
 
 @code {

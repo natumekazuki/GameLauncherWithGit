@@ -33,6 +33,65 @@ public sealed class ScenarioBranchRuntimeTests : IAsyncDisposable
         _play = new(_capture, _store, _screenshots, _store);
     }
 
+    /// <summary>
+    /// The Web read path reports the selected branch, applies both search fields ahead of paging,
+    /// and returns image counts only for the requested events. After a branch change the old
+    /// display token cannot obtain metadata or text from the new recording root.
+    /// </summary>
+    [Fact]
+    public async Task WebSearchAndImageCountsStayWithinTheDisplayedRecordingRoot()
+    {
+        var repo = Directory.CreateDirectory(Path.Combine(_directory.FullName, "web-repo")).FullName;
+        await RunGitAsync(repo, "init", "--initial-branch=a");
+        await RunGitAsync(repo, "commit", "--allow-empty", "-m", "initial");
+        await RunGitAsync(repo, "branch", "b");
+        await AddGameAsync("game", repo);
+        var input = new SyntheticHost();
+        await using var capture = new ScenarioCaptureService(_store, input, NullLogger<ScenarioCaptureService>.Instance,
+            new ScenarioRecordTargetResolver(_store, _store, _git, _store));
+        var desktop = new SyntheticDesktopServices();
+        await using var screenshots = new ScenarioScreenshotService(capture, _store, new SyntheticScreenshotPlatform(),
+            desktop, NullLogger<ScenarioScreenshotService>.Instance, desktop);
+        var web = new PlayRecordingOperations(capture, _store, screenshots, _store);
+        await capture.PreparePlayTargetAsync("game");
+        await capture.SelectProcessAsync(Environment.ProcessId);
+        await capture.SaveRulesAsync(BodyRules);
+        await capture.ConfirmProcessAsync();
+
+        var a = Assert.IsType<PlayRecordingState>(await web.GetCurrentStateAsync());
+        Assert.Equal("refs/heads/a", a.RecordingBranchRef);
+        var emit = input.FreezeOutput();
+        emit("match first");
+        emit("match second");
+        emit("unrelated");
+        await capture.FlushPendingAsync();
+        var items = (await web.GetItemsAsync("game", a.Target)).Items;
+        await web.SetSpeakerAsync("game", a.Target, items[0], "Fixture speaker");
+        var filtered = await web.GetItemsAsync("game", a.Target, limit: 1,
+            textSearch: "MATCH", speakerSearch: "fixture");
+        var row = Assert.Single(filtered.Items);
+        Assert.Equal("match first", row.Text);
+        Assert.False(filtered.HasMore);
+
+        // The count request carries only the keys of the visible events, not the whole history or any image data.
+        var imageKey = new CaptureEventKey(row.SessionId, row.Sequence);
+        var emptyKey = new CaptureEventKey(items[1].SessionId, items[1].Sequence);
+        var frame = SyntheticScreenshotPlatform.Frame;
+        await _store.SaveScreenshotAsync(new(a.Target.ProfileId, imageKey),
+            new(frame.Width, frame.Height, frame.PixelHash, frame.PngBytes), DateTimeOffset.UtcNow);
+        var counts = await web.GetScreenshotCountsAsync("game", a.Target, [imageKey, emptyKey]);
+        Assert.Equal(2, counts.Count);
+        Assert.Equal(1, counts[imageKey]);
+        Assert.Equal(0, counts[emptyKey]);
+
+        await RunGitAsync(repo, "switch", "b");
+        var b = Assert.IsType<PlayRecordingState>(await web.GetCurrentStateAsync());
+        Assert.Equal("refs/heads/b", b.RecordingBranchRef);
+        Assert.NotEqual(a.Target.RecordId, b.Target.RecordId);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => web.GetItemsAsync("game", a.Target, textSearch: "match"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => web.GetScreenshotCountsAsync("game", a.Target, [imageKey]));
+    }
+
     // @test-value v2
     // kind = "invariant"
     // claim = "外部のGit枝切替で旧取得の受付済み本文だけを元の履歴に残し、同じ枝に戻っても旧接続と旧編集を再利用しない"
