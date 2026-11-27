@@ -1,3 +1,10 @@
+@{
+    // An empty gallery must not leave a layout item in the parent detail.
+    if (ImageCount == 0 && !ImagesLoading && ImageError is null && ImageSource is null)
+    {
+        return;
+    }
+}
 <div class="capture-occurrence-images">
     @{ var key = Occurrence; }
     @if (ImageCount is > 0)
@@ -33,10 +40,6 @@
     else if (ImagesLoading)
     {
         <ScenarioLoading Label="画像を読み込み中…" />
-    }
-    else if (ImageCount == 0)
-    {
-        <p>画像はありません。</p>
     }
 </div>
 
