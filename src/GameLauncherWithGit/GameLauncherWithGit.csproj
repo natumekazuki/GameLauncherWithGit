@@ -74,9 +74,9 @@
     <ItemGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) != 'windows'">
         <Compile Remove="Infrastructure\Mcp\**\*.cs" />
         <Compile Remove="Infrastructure\PlayRecordingWeb\**\*.cs;Components\PlayRecording\**\*.cs" />
-        <Content Remove="Components\Pages\PlayRecordingWebAccess.razor;Components\Pages\PlayRecordingWebAccess.razor.css;Components\PlayRecording\**\*.razor;Components\PlayRecording\**\*.razor.css" />
-        <RazorComponent Remove="Components\Pages\PlayRecordingWebAccess.razor;Components\PlayRecording\**\*.razor" />
-        <None Remove="Components\Pages\PlayRecordingWebAccess.razor.css;Components\PlayRecording\**\*.razor.css" />
+        <Content Remove="Components\PlayRecording\**\*.razor;Components\PlayRecording\**\*.razor.css" />
+        <RazorComponent Remove="Components\PlayRecording\**\*.razor" />
+        <None Remove="Components\PlayRecording\**\*.razor.css" />
     </ItemGroup>
 
     <!-- Ship only the generated scoped styles used by the Web UI, without exposing MAUI wwwroot. -->

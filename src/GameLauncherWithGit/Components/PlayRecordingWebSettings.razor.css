@@ -1,0 +1,33 @@
+.recording-web-settings {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .5rem .75rem;
+}
+
+.recording-web-settings h3 {
+    margin: 0;
+    font-size: 1rem;
+}
+
+.recording-web-settings code,
+.recording-web-settings [role="alert"] {
+    min-inline-size: 0;
+    overflow-wrap: anywhere;
+}
+
+.recording-web-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem;
+}
+
+.recording-web-actions button { inline-size: 8em; }
+
+.recording-web-announcement {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+}

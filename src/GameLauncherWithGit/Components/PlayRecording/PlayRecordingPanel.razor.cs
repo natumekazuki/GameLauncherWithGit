@@ -7,11 +7,10 @@ using Microsoft.JSInterop;
 
 namespace GameLauncherWithGit.Components.PlayRecording;
 
-/// <summary>Record controls for a Web circuit already authorized by the host.</summary>
+/// <summary>Record controls for a connected Web circuit following the PC target.</summary>
 public partial class PlayRecordingPanel
 {
     [Inject] private ILogger<PlayRecordingPanel> Logger { get; set; } = default!;
-    [Inject] private NavigationManager Navigation { get; set; } = default!;
 
     private enum Pane { Text, Ranges, Paths, Scenes }
     private enum FocusTarget { FinishImpact, FinishButton, Pause, Resume, Screenshot, RangeStatus, RangeStart, RangePicker, Ranges, Classification, EditButton, PathRow, Gallery, GalleryButton, Text }
@@ -28,22 +27,22 @@ public partial class PlayRecordingPanel
     private readonly record struct DisplayTarget(string GameId, PlayRecordingTarget Recording, long ConnectionVersion, object Workspace);
     private DisplayTarget ForDisplay(PlayRecordingState state) => new(state.GameId, state.Target, _displayedConnectionVersion, _workspace);
     private sealed class DisplayChangedException : Exception { }
-    private bool _busy, _disposed, _statusLoaded, _statusError, _unauthorized, _paneNeedsLoad;
+    private bool _busy, _disposed, _statusLoaded, _statusError, _paneNeedsLoad;
     private sealed record OperationFailure(string Label, string Detail);
     private OperationFailure? _actionError;
     private Pane _pane;
 
-    private bool ControlsDisabled => _busy || _statusError || _unauthorized || _state is null;
+    private bool ControlsDisabled => _busy || _statusError || _state is null;
     private static string Bool(bool value) => value ? "true" : "false";
     private string Pressed(Pane pane) => Bool(_pane == pane);
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        // Prerender must not read from or authenticate an Interactive Server circuit.
+        // Prerender has no live Interactive Server connection to read from.
         if (firstRender)
         {
             await RefreshAsync();
-            if (!_disposed && !_unauthorized) _ = PollAsync(_lifetime.Token);
+            if (!_disposed) _ = PollAsync(_lifetime.Token);
             return;
         }
         if (_nextFocus is not { } request || _busy) return;
@@ -112,18 +111,16 @@ public partial class PlayRecordingPanel
             {
                 await InvokeAsync(async () =>
                 {
-                    if (_unauthorized || _disposed) return;
+                    if (_disposed) return;
                     var connectionVersion = ObserveConnection();
                     if (!WebSession.IsConnectionCurrent(connectionVersion)) return;
-                    var before = (_state, _statusLoaded, _statusError, _textItems, _textError, _unauthorized, _workspace, _rangeDraft);
+                    var before = (_state, _statusLoaded, _statusError, _textItems, _textError, _workspace, _rangeDraft);
                     _pollRead = RefreshStatusAsync(loadPane: _statusError, statusOnly: _busy);
                     try { await _pollRead; }
                     catch (DisplayChangedException) { }
-                    catch (UnauthorizedAccessException) { HandleAccessFailure(connectionVersion); }
                     finally { _pollRead = null; }
-                    if (!_disposed && before != (_state, _statusLoaded, _statusError, _textItems, _textError, _unauthorized, _workspace, _rangeDraft)) StateHasChanged();
+                    if (!_disposed && before != (_state, _statusLoaded, _statusError, _textItems, _textError, _workspace, _rangeDraft)) StateHasChanged();
                 });
-                if (_unauthorized) break;
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
@@ -132,9 +129,8 @@ public partial class PlayRecordingPanel
     }
 
     private Task RefreshAsync() => RunForegroundAsync(() => RefreshStatusAsync(loadPane: true), allowStale: true);
-    private void ReloadPage() => Navigation.NavigateTo("/", forceLoad: true);
 
-    private bool IsWorkspaceCurrent(DisplayTarget target) => !_disposed && !_unauthorized
+    private bool IsWorkspaceCurrent(DisplayTarget target) => !_disposed
         && ReferenceEquals(target.Workspace, _workspace) && WebSession.IsConnectionCurrent(target.ConnectionVersion);
 
     private bool IsDisplayedTargetCurrent(DisplayTarget target) => IsWorkspaceCurrent(target) && target.Recording == _state?.Target;
@@ -173,7 +169,7 @@ public partial class PlayRecordingPanel
 
     private async Task RunForegroundAsync(Func<Task> operation, bool allowStale = false, string failureLabel = "操作失敗", DisplayTarget? origin = null)
     {
-        if (_busy || _unauthorized || _disposed || _statusError && !allowStale) return;
+        if (_busy || _disposed || _statusError && !allowStale) return;
         var connectionVersion = ObserveConnection();
         if (!WebSession.IsConnectionCurrent(connectionVersion) || origin is { } start && !IsWorkspaceCurrent(start)) return;
         _busy = true;
@@ -185,14 +181,13 @@ public partial class PlayRecordingPanel
                 try { await read; }
                 catch (DisplayChangedException) { }
             }
-            if (!_unauthorized && !_disposed && WebSession.IsConnectionCurrent(connectionVersion)
+            if (!_disposed && WebSession.IsConnectionCurrent(connectionVersion)
                 && (!_statusError || allowStale) && (origin is null || IsWorkspaceCurrent(origin.Value))) await operation();
         }
         catch (DisplayChangedException) { }
-        catch (UnauthorizedAccessException) { HandleAccessFailure(connectionVersion); }
         catch (Exception ex)
         {
-            if (!_unauthorized && !_disposed && WebSession.IsConnectionCurrent(connectionVersion)
+            if (!_disposed && WebSession.IsConnectionCurrent(connectionVersion)
                 && (origin is null || IsWorkspaceCurrent(origin.Value)))
             {
                 Logger.LogWarning("Play recording Web operation failed ({ExceptionType}).", ex.GetType().Name);
@@ -219,13 +214,6 @@ public partial class PlayRecordingPanel
         _statusLoaded = _statusError = false;
         if (!_disposed) StateHasChanged();
         return connectionVersion;
-    }
-
-    private void HandleAccessFailure(long connectionVersion)
-    {
-        if (_disposed || connectionVersion != ObserveConnection()) return;
-        _unauthorized = true;
-        ClearTargetData();
     }
 
     private Task SelectPaneAsync(DisplayTarget target, Pane pane) => ReadForDisplayedTargetAsync(target, async () =>

@@ -45,27 +45,17 @@ public partial class PlayRecordingPanel
         left?.GameId == right?.GameId && left?.Target.ProfileId == right?.Target.ProfileId &&
         left?.Target.SessionId == right?.Target.SessionId && left?.Target.ScopeVersion == right?.Target.ScopeVersion;
 
-    private Task<T> WithAccessAsync<T>(long connectionVersion, Func<string?, Task<T>> operation)
+    /// <summary>Reads the PC's current recording target only for a live browser connection.</summary>
+    private async Task<StatusRead> GetVisibleStateAsync(long connectionVersion)
     {
-        Task<T> WithConnection(string? permittedGameId)
-        {
-            if (_disposed || !WebSession.IsConnectionCurrent(connectionVersion)) throw new DisplayChangedException();
-            return operation(permittedGameId);
-        }
-
-        return WebSession.FollowsDesktopTarget
-            ? WebSession.UseDesktopTargetAsync(connectionVersion, () => WithConnection(null))
-            : WebSession.UseAsync(connectionVersion, permittedGameId => WithConnection(permittedGameId));
-    }
-
-    private async Task<StatusRead> GetVisibleStateAsync(long connectionVersion, string? permittedGameId)
-    {
+        if (_disposed || !WebSession.IsConnectionCurrent(connectionVersion)) throw new DisplayChangedException();
         var order = ++_nextStatusRead;
         PlayRecordingState? state;
         try { state = await Operations.GetCurrentStateAsync(); }
-        catch (Exception ex) when (ex is not UnauthorizedAccessException)
+        catch (Exception ex)
         {
-            if (!_disposed && !_unauthorized && WebSession.IsConnectionCurrent(connectionVersion) && order > _appliedStatusRead)
+            // An old or disconnected read must not overwrite the new workspace.
+            if (!_disposed && WebSession.IsConnectionCurrent(connectionVersion) && order > _appliedStatusRead)
             {
                 _appliedStatusRead = order;
                 if (!_statusError)
@@ -78,28 +68,22 @@ public partial class PlayRecordingPanel
             }
             throw new DisplayChangedException();
         }
-        var visible = state is not null && !string.IsNullOrEmpty(state.GameId)
-            && (permittedGameId is null || string.Equals(permittedGameId, state.GameId, StringComparison.Ordinal))
-            ? state : null;
+        var visible = state is not null && !string.IsNullOrEmpty(state.GameId) ? state : null;
         return new(order, visible);
     }
 
+    /// <summary>Applies a Web operation only to its displayed recording target and connection generation.</summary>
     private async Task<T> UseAsync<T>(DisplayTarget target, Func<string, Task<T>> operation)
     {
-        var (value, failure, current) = await WithAccessAsync(target.ConnectionVersion, async permittedGameId =>
-        {
-            if (!IsDisplayedTargetCurrent(target) ||
-                (permittedGameId is not null && !string.Equals(permittedGameId, target.GameId, StringComparison.Ordinal)))
-                throw new DisplayChangedException();
+        if (!IsDisplayedTargetCurrent(target)) throw new DisplayChangedException();
 
-            // Operations validate this exact token against the PC under the desktop operation gate.
-            T? result = default;
-            ExceptionDispatchInfo? failure = null;
-            try { result = await operation(target.GameId); }
-            catch (Exception ex) when (ex is not UnauthorizedAccessException) { failure = ExceptionDispatchInfo.Capture(ex); }
-            if (!IsWorkspaceCurrent(target)) throw new DisplayChangedException();
-            return (result, failure, await GetVisibleStateAsync(target.ConnectionVersion, permittedGameId));
-        });
+        // Operations validate this exact token against the PC under the desktop operation gate.
+        T? value = default;
+        ExceptionDispatchInfo? failure = null;
+        try { value = await operation(target.GameId); }
+        catch (Exception ex) { failure = ExceptionDispatchInfo.Capture(ex); }
+        if (!IsWorkspaceCurrent(target)) throw new DisplayChangedException();
+        var current = await GetVisibleStateAsync(target.ConnectionVersion);
         ApplyStatus(current, target.ConnectionVersion);
         if (!IsWorkspaceCurrent(target)) throw new DisplayChangedException();
         failure?.Throw();
@@ -119,7 +103,7 @@ public partial class PlayRecordingPanel
             var value = await UseAsync(target, read);
             if (IsWorkspaceCurrent(target)) apply(value);
         }
-        catch (Exception ex) when (ex is not (DisplayChangedException or UnauthorizedAccessException))
+        catch (Exception ex) when (ex is not DisplayChangedException)
         {
             if (!IsWorkspaceCurrent(target)) throw new DisplayChangedException();
             Logger.LogWarning("Play recording Web read failed for {Section} ({ExceptionType}).", section, ex.GetType().Name);
@@ -131,7 +115,7 @@ public partial class PlayRecordingPanel
     {
         var connectionVersion = ObserveConnection();
         if (!WebSession.IsConnectionCurrent(connectionVersion)) return;
-        var current = await WithAccessAsync(connectionVersion, permittedGameId => GetVisibleStateAsync(connectionVersion, permittedGameId));
+        var current = await GetVisibleStateAsync(connectionVersion);
         ApplyStatus(current, connectionVersion);
         if (statusOnly || _state is not { } state) return;
 
@@ -161,7 +145,7 @@ public partial class PlayRecordingPanel
 
     private void ApplyStatus(StatusRead read, long connectionVersion)
     {
-        if (_disposed || _unauthorized || !WebSession.IsConnectionCurrent(connectionVersion)) throw new DisplayChangedException();
+        if (_disposed || !WebSession.IsConnectionCurrent(connectionVersion)) throw new DisplayChangedException();
         // Status polling can finish while a foreground read is still in flight.
         if (read.Order <= _appliedStatusRead) return;
         _appliedStatusRead = read.Order;
@@ -261,7 +245,7 @@ public partial class PlayRecordingPanel
     {
         if (!TextRangeValid || _first is not { } first || _last is not { } last) return;
         var selection = await UseAsync(target, gameId => Operations.SelectRangeAsync(gameId, target.Recording, first, last));
-        if (_disposed || _unauthorized) return;
+        if (_disposed) return;
         _rangeDraft = new(selection, AutoFocus: true, First: first, Last: last);
         ClearRangePick();
         await LoadRangesAsync();
@@ -276,7 +260,7 @@ public partial class PlayRecordingPanel
             selection = await UseAsync(target, gameId => Operations.SelectRangeAsync(gameId, target.Recording, first, last));
         await UseAsync(target, gameId => Operations.SaveRangeAsync(gameId, target.Recording, selection, data.Name, data.Tags));
 
-        if (_disposed || _unauthorized) return;
+        if (_disposed) return;
         _rangeDraft = null;
         _pane = Pane.Ranges;
         await RefreshStatusAsync(loadPane: true);

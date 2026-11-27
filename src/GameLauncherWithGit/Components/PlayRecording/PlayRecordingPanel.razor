@@ -14,14 +14,7 @@
             }
         </header>
 
-        @if (_unauthorized)
-        {
-            <section class="play-panel play-stack" aria-label="接続許可">
-                <div><CaptureFailureDetails Label="接続失効" Detail="この画面では接続を確認できません。ページを再読込してください。" Web="true" /></div>
-                <div><button type="button" class="play-labeled-button" @onclick="ReloadPage"><CaptureIcon Name="Refresh" />ページを再読込</button></div>
-            </section>
-        }
-        else if (_state is not { } displayed)
+        @if (_state is not { } displayed)
         {
             @if (_statusError)
             {

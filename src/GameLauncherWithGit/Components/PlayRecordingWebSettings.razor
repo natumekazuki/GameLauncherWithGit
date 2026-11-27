@@ -1,0 +1,23 @@
+@if (OperatingSystem.IsWindows())
+{
+    <section class="recording-web-settings" aria-label="記録Web">
+        <h3>記録Web</h3>
+        <span role="status">@_hostStatus</span>
+        @if (_startupFailure is not null)
+        {
+            <span role="alert">@_startupFailure</span>
+        }
+        else if (_address is { } address)
+        {
+            <code>@address.AbsoluteUri</code>
+        }
+        @if (_address is not null)
+        {
+            <div class="recording-web-actions">
+                <button type="button" class="secondary-button" disabled="@_busy" @onclick="CopyAsync">@_copyLabel</button>
+                <button type="button" class="secondary-button" disabled="@_busy" @onclick="OpenAsync">@_openLabel</button>
+                <span class="recording-web-announcement" role="status">@_actionStatus</span>
+            </div>
+        }
+    </section>
+}

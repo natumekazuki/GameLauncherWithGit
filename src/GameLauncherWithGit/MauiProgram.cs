@@ -59,6 +59,8 @@ public static class MauiProgram
 		builder.Services.AddSingleton(serviceProvider => GameLauncherWithGit.Infrastructure.PlayRecordingWeb.PlayRecordingWebContent.WithService(
 			typeof(GameLauncherWithGit.Components.PlayRecording.PlayRecordingPanel), serviceProvider.GetRequiredService<PlayRecordingOperations>()));
 		builder.Services.AddSingleton<GameLauncherWithGit.Infrastructure.PlayRecordingWeb.PlayRecordingWebHost>();
+		builder.Services.AddSingleton(_ => Microsoft.Maui.ApplicationModel.DataTransfer.Clipboard.Default);
+		builder.Services.AddSingleton(_ => Microsoft.Maui.ApplicationModel.Launcher.Default);
 #endif
 		builder.Services.AddSingleton<ILunaCaptureHost, LunaCaptureHost>();
 		builder.Services.AddSingleton<ScenarioRecordTargetResolver>();
