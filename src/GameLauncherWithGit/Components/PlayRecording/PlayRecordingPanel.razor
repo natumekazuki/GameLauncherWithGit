@@ -4,13 +4,16 @@
 <div class="play-recording">
     <div class="play-shell" data-play-recording-workspace @key="_shellKey">
         <header class="play-header">
-            <h1>プレイ記録</h1>
             @if (!_statusError && _state is { } current)
             {
                 <div class="play-toolbar">
-                    <h2>@current.Title</h2>
+                    <h1>@current.Title</h1>
                     <span class="play-record-root">記録先：@RecordingRootLabel(current)</span>
                 </div>
+            }
+            else
+            {
+                <h1>プレイ記録</h1>
             }
         </header>
 
@@ -62,14 +65,22 @@
                 </section>
                 <div class="play-body">
                     @if (_rangeDraft is not null) { @RangeEditor }
-                    <nav class="play-nav" aria-label="記録内容" inert="@(_rangeDraft?.Open == true)">
-                        <button type="button" class="scenario-action" aria-pressed="@Pressed(Pane.Text)" disabled="@_busy" @onclick="() => SelectPaneAsync(workspaceTarget, Pane.Text)">本文</button>
-                        <button type="button" class="scenario-action play-labeled-button" aria-pressed="@Pressed(Pane.Paths)" disabled="@_busy" @onclick="() => SelectPaneAsync(workspaceTarget, Pane.Paths)"><CaptureIcon Name="Flow" />フロー</button>
-                    </nav>
-                    <div class="play-view" hidden="@(_pane != Pane.Text)" inert="@(_rangeDraft?.Open == true)">
+                    @if (_finishConfirmation is { } confirmation && displayed.CanFinish) { @FinishPrompt(workspaceTarget, displayed, confirmation) }
+                    @{ var overlay = _rangeDraft?.Open == true || _finishConfirmation is not null; }
+                    <div class="play-nav-line" inert="@overlay">
+                        <nav class="play-nav" aria-label="記録内容">
+                            <button type="button" class="scenario-action" aria-pressed="@Pressed(Pane.Text)" disabled="@_busy" @onclick="() => SelectPaneAsync(workspaceTarget, Pane.Text)">本文</button>
+                            <button type="button" class="scenario-action play-labeled-button" aria-pressed="@Pressed(Pane.Paths)" disabled="@_busy" @onclick="() => SelectPaneAsync(workspaceTarget, Pane.Paths)"><CaptureIcon Name="Flow" />フロー</button>
+                        </nav>
+                        @if (_pane == Pane.Text)
+                        {
+                            <button type="button" class="scenario-action" disabled="@(_busy || _latest && _textRangeId is null)" @onclick="() => FollowLatestAsync(workspaceTarget)">最新へ</button>
+                        }
+                    </div>
+                    <div class="play-view" hidden="@(_pane != Pane.Text)" inert="@overlay">
                         @TextPane
                     </div>
-                    <div class="play-view" hidden="@(_pane != Pane.Paths)" inert="@(_rangeDraft?.Open == true)">
+                    <div class="play-view" hidden="@(_pane != Pane.Paths)" inert="@overlay">
                         @if (_pane == Pane.Paths || _graph is not null) { @PathsPane }
                     </div>
                 </div>
@@ -111,21 +122,21 @@
                     }
                 </div>
             </ScenarioRecordingBar>
-            @if (_finishConfirmation is { } confirmation && state.CanFinish)
-            {
-                <div class="play-stack play-selection" role="group" aria-label="記録終了の確認" @onkeydown="e => HandleEscape(target, e, CloseFinishConfirmation)">
-                    <p class="play-finish-impact" @ref="_finishImpact" tabindex="-1">「@confirmation.Title」の記録を終了します。@(confirmation.HasUnsavedRange ? "未保存の区間があります。" : "")</p>
-                    <div class="play-actions">
-                        @if (confirmation.HasUnsavedRange)
-                        {
-                            <button type="button" class="scenario-action scenario-action--primary" disabled="@(ControlsDisabled || (_rangeDraft is null && state.PendingRange is null && !state.CanEndRange))" @onclick="() => OpenFinishSaveAsync(target, confirmation)">保存して終了</button>
-                        }
-                        <button type="button" class="scenario-action play-labeled-button" disabled="@ControlsDisabled" @onclick="() => FinishRecordingAsync(target, confirmation)"><CaptureIcon Name="Stop" />@(confirmation.HasUnsavedRange ? "破棄して終了" : "記録を終了")</button>
-                        <button type="button" class="scenario-action" disabled="@ControlsDisabled" @onclick="() => EditWorkspace(target, CloseFinishConfirmation)">戻る</button>
-                    </div>
-                </div>
-            }
         }
+    </div>;
+
+    private RenderFragment FinishPrompt(DisplayTarget target, PlayRecordingState state, FinishConfirmation confirmation) => @<div class="play-draft-layer">
+        <div class="play-panel play-stack" role="group" aria-label="記録終了の確認" @onkeydown="e => HandleEscape(target, e, CloseFinishConfirmation)">
+            <p class="play-finish-impact" @ref="_finishImpact" tabindex="-1">「@confirmation.Title」の記録を終了します。@(confirmation.HasUnsavedRange ? "未保存の区間があります。" : "")</p>
+            <div class="play-actions">
+                @if (confirmation.HasUnsavedRange)
+                {
+                    <button type="button" class="scenario-action scenario-action--primary" disabled="@(ControlsDisabled || (_rangeDraft is null && state.PendingRange is null && !state.CanEndRange))" @onclick="() => OpenFinishSaveAsync(target, confirmation)">保存して終了</button>
+                }
+                <button type="button" class="scenario-action play-labeled-button" disabled="@ControlsDisabled" @onclick="() => FinishRecordingAsync(target, confirmation)"><CaptureIcon Name="Stop" />@(confirmation.HasUnsavedRange ? "破棄して終了" : "記録を終了")</button>
+                <button type="button" class="scenario-action" disabled="@ControlsDisabled" @onclick="() => EditWorkspace(target, CloseFinishConfirmation)">戻る</button>
+            </div>
+        </div>
     </div>;
 
     private RenderFragment RangeControls => @<div class="play-stack" aria-label="プレイ中の区間">
@@ -155,7 +166,7 @@
         }
     </div>;
 
-    private RenderFragment RangeEditor => @<div class="play-draft-layer" hidden="@(_rangeDraft?.Open != true)">
+    private RenderFragment RangeEditor => @<div class="play-draft-layer" hidden="@(_rangeDraft?.Open != true || _finishConfirmation is not null)">
         @if (_rangeDraft is { } draft)
         {
             var target = ForDisplay(_state!);
@@ -174,16 +185,11 @@
 
     private RenderFragment TextPane => @<section class="play-panel play-stack" aria-labelledby="play-text-title">
         @{ var target = ForDisplay(_state!); }
-        <div class="play-toolbar play-text-toolbar">
-            <h2 id="play-text-title" @ref="_textHeading" tabindex="-1">本文</h2>
-            @if (_textError && _galleryItem is null)
-            {
-                <div class="play-text-failure"><CaptureFailureDetails Label="本文取得失敗" Detail="本文を更新して再試行してください。" Web="true" /></div>
-            }
-            <div class="play-actions play-text-views">
-                <button type="button" class="scenario-action" disabled="@(_busy || _latest && _textRangeId is null)" @onclick="() => FollowLatestAsync(target)">最新へ</button>
-            </div>
-        </div>
+        <h2 id="play-text-title" class="capture-failure-announcement">本文</h2>
+        @if (_textError && _galleryItem is null)
+        {
+            <div class="play-text-failure"><CaptureFailureDetails Label="本文取得失敗" Detail="本文を更新して再試行してください。" Web="true" /></div>
+        }
         @if (_textRangeId is { } rangeId)
         {
             <p>区間：@RangeName(rangeId)</p>

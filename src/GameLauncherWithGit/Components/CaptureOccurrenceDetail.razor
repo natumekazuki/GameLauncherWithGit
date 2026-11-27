@@ -12,20 +12,6 @@
         <strong class="capture-occurrence-speaker">@Item.Speaker</strong>
     }
     <p class="capture-occurrence-text">@Item.Text</p>
-    @if (Edit.HasDelegate || Copy.HasDelegate)
-    {
-        <div class="capture-occurrence-actions">
-            @if (Edit.HasDelegate)
-            {
-                <button type="button" class="scenario-action" disabled="@Disabled" @onclick="() => Edit.InvokeAsync(key)">話者・分類を訂正</button>
-            }
-            @if (Copy.HasDelegate)
-            {
-                <button type="button" class="scenario-action" disabled="@Disabled" @onclick="() => Copy.InvokeAsync(key)">本文をコピー</button>
-            }
-        </div>
-    }
-    @ChildContent
     @if (ImageError is not null)
     {
         <div class="capture-occurrence-actions" role="status">
@@ -60,6 +46,20 @@
     {
         <p role="status">画像を読み込み中…</p>
     }
+    @if (Edit.HasDelegate || Copy.HasDelegate)
+    {
+        <div class="capture-occurrence-actions">
+            @if (Edit.HasDelegate)
+            {
+                <button type="button" class="scenario-action" disabled="@Disabled" @onclick="() => Edit.InvokeAsync(key)">話者・分類を訂正</button>
+            }
+            @if (Copy.HasDelegate)
+            {
+                <button type="button" class="scenario-action" disabled="@Disabled" @onclick="() => Copy.InvokeAsync(key)">本文をコピー</button>
+            }
+        </div>
+    }
+    @ChildContent
 </section>
 
 @code {

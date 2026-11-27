@@ -17,7 +17,7 @@ public partial class PlayRecordingPanel
     private enum FocusTarget { FinishImpact, FinishButton, Pause, Resume, Screenshot, RangeStatus, RangeStart, RangePicker, RangeDraft, RangeEditor, Ranges, Classification, EditButton, PathRow, Gallery, GalleryButton, Text }
     private (FocusTarget Target, long ItemId)? _nextFocus;
     private ElementReference _finishImpact, _finishButton, _rangeStatus, _rangeDraftButton, _rangeEditorHeading,
-        _startRangeButton, _pickRangeButton, _rangesTab, _editClassification, _galleryHeading, _textHeading, _screenshotButton;
+        _startRangeButton, _pickRangeButton, _rangesTab, _editClassification, _galleryHeading, _screenshotButton;
     private ScenarioRecordingBar? _recordingBar;
     private sealed class RowButtons { public ElementReference Open; }
     private readonly Dictionary<long, RowButtons> _rowButtons = [];
@@ -97,7 +97,7 @@ public partial class PlayRecordingPanel
             FocusTarget.EditButton or FocusTarget.PathRow when rowVisible && _textRangeId is null && _editItem?.Id != request.ItemId && row is not null => row.Open,
             FocusTarget.Gallery when _pane == Pane.Text && _galleryItem is not null => _galleryHeading,
             FocusTarget.GalleryButton when rowVisible && _editItem?.Id != request.ItemId && row is not null => row.Open,
-            FocusTarget.EditButton or FocusTarget.GalleryButton or FocusTarget.Text when textVisible => _textHeading,
+            FocusTarget.EditButton or FocusTarget.GalleryButton or FocusTarget.Text when textVisible => _textScroller,
             _ => default
         };
         if (destination.Id is not null)

@@ -20,7 +20,7 @@
 .play-workspace { grid-template-rows: auto minmax(0,1fr); }
 .play-workspace[hidden] { display:none; }
 .play-body { display:flex; flex-direction:column; min-height:0; position:relative; }
-.play-draft-layer { position:absolute; inset:0; z-index:1; overflow:auto; }
+.play-draft-layer { position:absolute; inset:0; z-index:1; overflow:auto; background:var(--scenario-background); }
 .play-draft-layer[hidden] { display:none; }
 .play-view { display:flex; flex:1 1 auto; min-height:0; }
 .play-view[hidden] { display:none; }
@@ -41,10 +41,8 @@
 .play-header { margin-block-end: 1rem; }
 .play-toolbar, .play-actions, .play-nav { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 .play-toolbar { justify-content: space-between; }
-.play-text-toolbar { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:.375rem; }
-.play-text-views { grid-column:3; }
-.play-text-failure { grid-column:2; justify-self:center; }
 .play-panel, .play-shell ::deep .range-editor { padding:.875rem; background:var(--scenario-surface); border:1px solid var(--scenario-border); border-radius:.65rem; min-width:0; }
+.play-nav-line { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:stretch; gap:.5rem; }
 .play-nav { margin-block: .125rem; }
 .play-nav button { flex: 1 1 auto; }
 .play-shell ::deep input:not([type=checkbox]), .play-shell ::deep select {
@@ -57,7 +55,6 @@
     font: inherit;
     line-height: 1.25;
 }
-.play-text-views button { padding-inline:.45rem; }
 .play-shell ::deep .play-icon-button { inline-size: 2.75rem; padding: 0; flex: none; }
 .play-shell ::deep button svg { flex: none; }
 .play-shell ::deep input:not([type=checkbox]), .play-shell ::deep select { width:100%; padding:.5rem; background:var(--scenario-input); }
@@ -102,7 +99,6 @@
 .play-row-actions button { width:auto; }
 .play-selection { border-block:1px solid var(--scenario-border); padding-block:.75rem; }
 .play-selection > p { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.play-selection > .play-finish-impact { white-space:normal; overflow:visible; }
 .play-range-selection-actions { position:relative; flex-wrap:nowrap; }
 .play-range-selection-failure { position:absolute; inset-inline-end:0; }
 .play-body ::deep .saved-scene-list { margin: 0; padding-inline-start: 1.5rem; overflow-wrap: anywhere; }
