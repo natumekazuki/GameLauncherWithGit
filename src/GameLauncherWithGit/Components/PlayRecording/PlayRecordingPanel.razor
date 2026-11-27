@@ -9,6 +9,7 @@
             {
                 <div class="play-toolbar">
                     <h2>@current.Title</h2>
+                    <span class="play-record-root">記録先：@RecordingRootLabel(current)</span>
                     <span class="play-status" role="status">@RecordingStatus</span>
                 </div>
             }
@@ -60,21 +61,14 @@
                     @if (_rangeDraft is not null) { @RangeEditor }
                     <nav class="play-nav" aria-label="記録内容">
                         <button type="button" aria-pressed="@Pressed(Pane.Text)" disabled="@_busy" @onclick="() => SelectPaneAsync(workspaceTarget, Pane.Text)">本文</button>
-                        <button type="button" class="play-labeled-button" @ref="_rangesTab" aria-pressed="@Pressed(Pane.Ranges)" disabled="@_busy" @onclick="() => SelectPaneAsync(workspaceTarget, Pane.Ranges)"><CaptureIcon Name="Range" />区間</button>
-                        <button type="button" class="play-labeled-button" aria-pressed="@Pressed(Pane.Paths)" disabled="@_busy" @onclick="() => SelectPaneAsync(workspaceTarget, Pane.Paths)"><CaptureIcon Name="Flow" />経路</button>
+                        <button type="button" class="play-labeled-button" aria-pressed="@Pressed(Pane.Paths)" disabled="@_busy" @onclick="() => SelectPaneAsync(workspaceTarget, Pane.Paths)"><CaptureIcon Name="Flow" />フロー</button>
                     </nav>
-                    @switch (_pane)
-                    {
-                        case Pane.Text:
-                            @TextPane
-                            break;
-                        case Pane.Ranges:
-                            @RangesPane
-                            break;
-                        case Pane.Paths:
-                            @PathsPane
-                            break;
-                    }
+                    <div class="play-view" hidden="@(_pane != Pane.Text)">
+                        @TextPane
+                    </div>
+                    <div class="play-view" hidden="@(_pane != Pane.Paths)">
+                        @if (_pane == Pane.Paths || _graph is not null) { @PathsPane }
+                    </div>
                 </div>
             </div>
         }
@@ -175,14 +169,18 @@
                 <div class="play-text-failure"><CaptureFailureDetails Label="本文取得失敗" Detail="本文を更新して再試行してください。" Web="true" /></div>
             }
             <div class="play-actions play-text-views">
-                <button type="button" aria-pressed="@Bool(_latest && _textRangeId is null)" disabled="@_busy" @onclick="() => ChangeTextViewAsync(target, true)">直近</button>
-                <button type="button" aria-pressed="@Bool(!_latest && _textRangeId is null)" disabled="@_busy" @onclick="() => ChangeTextViewAsync(target, false)">過去</button>
+                <button type="button" disabled="@(_busy || _latest && _textRangeId is null)" @onclick="() => FollowLatestAsync(target)">最新へ</button>
             </div>
         </div>
         @if (_textRangeId is { } rangeId)
         {
             <p>区間：@RangeName(rangeId)</p>
         }
+        <form class="play-search" @onsubmit="() => SearchTextsAsync(target)" @onsubmit:preventDefault>
+            <input type="search" aria-label="本文で検索" placeholder="本文" @bind="_textSearchInput" @bind:event="oninput" disabled="@_busy" />
+            <input type="search" aria-label="話者で検索" placeholder="話者" @bind="_speakerSearchInput" @bind:event="oninput" disabled="@_busy" />
+            <button type="submit" disabled="@_busy">検索</button>
+        </form>
         @if (_galleryItem is null)
         {
             <div class="play-actions">
@@ -191,8 +189,10 @@
                     <button type="button" class="play-labeled-button" @ref="_pickRangeButton" aria-pressed="@Bool(_pickingRange)" disabled="@(_busy || _textError)" @onclick="() => EditWorkspace(target, ToggleRangePick)"><CaptureIcon Name="Pick" />本文から区間を選ぶ</button>
                 }
                 <button type="button" class="play-icon-button" title="本文を更新" aria-label="本文を更新" disabled="@_busy" @onclick="() => ReadForDisplayedTargetAsync(target, LoadTextAsync)"><CaptureIcon Name="Refresh" /></button>
+                <button type="button" class="play-labeled-button" @ref="_rangesTab" aria-expanded="@Bool(_savedRangesOpen)" disabled="@_busy" @onclick="() => ToggleSavedRangesAsync(target)"><CaptureIcon Name="Range" />保存した区間</button>
             </div>
         }
+        @if (_savedRangesOpen) { @RangesPane }
         @if (_pickingRange)
         {
             <div class="play-stack play-selection">
@@ -207,17 +207,14 @@
                 </div>
             </div>
         }
-        @if (_galleryItem is not null)
-        {
-            @Gallery(target)
-        }
-        else if (_textItems is null)
+        <div class="play-text-scroll" @ref="_textScroller" hidden="@(_galleryItem is not null)" tabindex="0" aria-label="本文一覧">
+        @if (_textItems is null)
         {
             @if (!_textError) { <p role="status">本文を読み込み中…</p> }
         }
         else if (_textItems.Count == 0)
         {
-            @if (!_textError) { <p>本文はありません。</p> }
+            @if (!_textError) { <p>@(_textSearch is not null || _speakerSearch is not null ? "一致する本文はありません。" : "本文はありません。")</p> }
         }
         else
         {
@@ -278,6 +275,8 @@
                 </div>
             }
         }
+        </div>
+        @if (_galleryItem is not null) { @Gallery(target) }
     </section>;
 
     private RenderFragment TextEditor(DisplayTarget target) => @<div class="play-stack" @onkeydown="e => HandleEscape(target, e, CancelTextEdit)">

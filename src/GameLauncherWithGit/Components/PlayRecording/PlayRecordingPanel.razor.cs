@@ -11,8 +11,9 @@ namespace GameLauncherWithGit.Components.PlayRecording;
 public partial class PlayRecordingPanel
 {
     [Inject] private ILogger<PlayRecordingPanel> Logger { get; set; } = default!;
+    [Inject] private IJSRuntime Js { get; set; } = default!;
 
-    private enum Pane { Text, Ranges, Paths }
+    private enum Pane { Text, Paths }
     private enum FocusTarget { FinishImpact, FinishButton, Pause, Resume, Screenshot, RangeStatus, RangeStart, RangePicker, Ranges, Classification, EditButton, PathRow, Gallery, GalleryButton, Text }
     private (FocusTarget Target, long ItemId)? _nextFocus;
     private ElementReference _finishImpact, _finishButton, _pauseButton, _resumeButton, _rangeStatus,
@@ -31,6 +32,9 @@ public partial class PlayRecordingPanel
     private sealed record OperationFailure(string Label, string Detail);
     private OperationFailure? _actionError;
     private Pane _pane;
+    private bool _savedRangesOpen;
+    private bool _scrollToLatest;
+    private ElementReference _textScroller;
 
     private bool ControlsDisabled => _busy || _statusError || _state is null;
     private static string Bool(bool value) => value ? "true" : "false";
@@ -44,6 +48,12 @@ public partial class PlayRecordingPanel
             await RefreshAsync();
             if (!_disposed) _ = PollAsync(_lifetime.Token);
             return;
+        }
+        if (_scrollToLatest && _pane == Pane.Text && _galleryItem is null && _textScroller.Id is not null)
+        {
+            _scrollToLatest = false;
+            try { await Js.InvokeVoidAsync("playRecordingText.toEnd", _textScroller); }
+            catch (JSDisconnectedException) { }
         }
         if (_nextFocus is not { } request || _busy) return;
         _nextFocus = null;
@@ -62,7 +72,7 @@ public partial class PlayRecordingPanel
             FocusTarget.RangeStatus when _state is { RangeStart: not null, PendingRange: null } => _rangeStatus,
             FocusTarget.RangeStart when _state is { Recording: true, Paused: false, CanStartRange: true } && _rangeDraft is null => _startRangeButton,
             FocusTarget.RangePicker when textVisible && !_textError && _textItems is { Count: > 0 } && _textRangeId is null => _pickRangeButton,
-            FocusTarget.Ranges when _pane == Pane.Ranges => _rangesTab,
+            FocusTarget.Ranges when _pane == Pane.Text => _rangesTab,
             FocusTarget.Classification when rowVisible && _editItem?.Id == request.ItemId => _editClassification,
             FocusTarget.EditButton or FocusTarget.PathRow when rowVisible && _textRangeId is null && _editItem?.Id != request.ItemId && row is not null => row.Open,
             FocusTarget.Gallery when _pane == Pane.Text && _galleryItem?.Id == request.ItemId => _galleryHeading,
@@ -114,12 +124,12 @@ public partial class PlayRecordingPanel
                     if (_disposed) return;
                     var connectionVersion = ObserveConnection();
                     if (!WebSession.IsConnectionCurrent(connectionVersion)) return;
-                    var before = (_state, _statusLoaded, _statusError, _textItems, _textError, _workspace, _rangeDraft);
+                    var before = (_state, _statusLoaded, _statusError, _textItems, _textError, _workspace, _rangeDraft, _latest);
                     _pollRead = RefreshStatusAsync(loadPane: _statusError, statusOnly: _busy);
                     try { await _pollRead; }
                     catch (DisplayChangedException) { }
                     finally { _pollRead = null; }
-                    if (!_disposed && before != (_state, _statusLoaded, _statusError, _textItems, _textError, _workspace, _rangeDraft)) StateHasChanged();
+                    if (!_disposed && before != (_state, _statusLoaded, _statusError, _textItems, _textError, _workspace, _rangeDraft, _latest)) StateHasChanged();
                 });
             }
         }
@@ -218,22 +228,27 @@ public partial class PlayRecordingPanel
 
     private Task SelectPaneAsync(DisplayTarget target, Pane pane) => ReadForDisplayedTargetAsync(target, async () =>
     {
+        if (pane == _pane) return;
+        // Keep the text surface mounted, and stop updates while the flow is in use.
+        if (_pane == Pane.Text) StopFollowing();
         _pane = pane;
-        _savedScenesOpen = false;
-        _sceneFlow = null;
-        CloseGallery();
-        CloseTextEditor();
-        if (pane != Pane.Text) ClearRangePick();
-        await LoadPaneAsync();
+        if (pane == Pane.Paths ? _graph is null || _pathsError : _textItems is null || _textError)
+            await LoadPaneAsync();
     });
 
     private Task LoadPaneAsync() => _pane switch
     {
         Pane.Text => LoadTextAsync(),
-        Pane.Ranges => LoadRangesAsync(),
         Pane.Paths => LoadPathsAsync(),
         _ => throw new InvalidOperationException()
     };
+
+    /// <summary>Keeps saved ranges and legacy scenes in a secondary section of the text surface.</summary>
+    private Task ToggleSavedRangesAsync(DisplayTarget target) => ReadForDisplayedTargetAsync(target, async () =>
+    {
+        _savedRangesOpen = !_savedRangesOpen;
+        if (_savedRangesOpen) await LoadRangesAsync();
+    });
 
     public ValueTask DisposeAsync()
     {
@@ -251,5 +266,17 @@ public partial class PlayRecordingPanel
         CaptureKind.Other => other ?? "未判定",
         _ => "未判定"
     };
+
+    /// <summary>Shows only the current record label, never another branch selection.</summary>
+    private static string RecordingRootLabel(PlayRecordingState state)
+    {
+        const string heads = "refs/heads/";
+        return state.RecordingBranchRef switch
+        {
+            { } branch when branch.StartsWith(heads, StringComparison.Ordinal) => branch[heads.Length..],
+            { } branch => branch,
+            _ => "作品の記録"
+        };
+    }
 
 }

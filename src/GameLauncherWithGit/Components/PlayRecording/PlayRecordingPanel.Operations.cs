@@ -130,7 +130,7 @@ public partial class PlayRecordingPanel
         else if (_rangeDraft?.Shared == true)
         {
             _rangeDraft = null;
-            if (_pane == Pane.Ranges) await LoadRangesAsync();
+            if (_savedRangesOpen) await LoadRangesAsync();
         }
 
         if (loadPane || _paneNeedsLoad)
@@ -175,8 +175,11 @@ public partial class PlayRecordingPanel
         _rangeDraft = null;
         _finishConfirmation = null;
         _latest = true;
+        _scrollToLatest = false;
         ResetTextPages();
         _textRangeId = null;
+        _textSearchInput = _speakerSearchInput = "";
+        _textSearch = _speakerSearch = null;
         _textItems = null;
         _rowButtons.Clear();
         _nextFocus = null;
@@ -191,6 +194,7 @@ public partial class PlayRecordingPanel
         _matchingComplete = false;
         _sceneFlow = null;
         _savedScenesOpen = false;
+        _savedRangesOpen = false;
         ClearScreenshotResult();
     }
 
@@ -261,8 +265,8 @@ public partial class PlayRecordingPanel
 
         if (_disposed) return;
         _rangeDraft = null;
-        _pane = Pane.Ranges;
-        await RefreshStatusAsync(loadPane: true);
+        if (_savedRangesOpen) await LoadRangesAsync();
+        await RefreshStatusAsync(loadPane: false, refreshLatestText: false);
         if (IsWorkspaceCurrent(target))
             FocusAfterRender(FocusTarget.Ranges);
     }, "区間保存失敗");

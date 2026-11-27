@@ -1,20 +1,54 @@
 using GameLauncherWithGit.Application.Models;
 using GameLauncherWithGit.Application.Services;
+using Microsoft.JSInterop;
 
 namespace GameLauncherWithGit.Components.PlayRecording;
 
 public partial class PlayRecordingPanel
 {
-    private Task RefreshLatestTextAsync() => _textError ? Task.CompletedTask : LoadTextAsync();
-
-    private Task LoadTextAsync()
+    /// <summary>Replaces the tail only while the reader remains at its end.</summary>
+    private async Task RefreshLatestTextAsync()
     {
-        if (_state is not { } state) return Task.CompletedTask;
+        if (_textError) return;
+        try
+        {
+            if (_textScroller.Id is not null && !await Js.InvokeAsync<bool>("playRecordingText.atEnd", _textScroller))
+            {
+                StopFollowing();
+                return;
+            }
+        }
+        catch (JSDisconnectedException) { return; }
+        await LoadTextAsync(checkScrollBeforeApply: true);
+    }
+
+    private Task LoadTextAsync() => LoadTextAsync(checkScrollBeforeApply: false);
+
+    /// <summary>Loads one target-checked page and keeps its held cursor when live follow is paused.</summary>
+    private async Task LoadTextAsync(bool checkScrollBeforeApply)
+    {
+        if (_state is not { } state) return;
         var target = ForDisplay(state);
-        var before = _olderPages.Count == 0 ? null : _olderPages[^1];
+        var before = _olderPages.Count == 0 ? _pausedBefore : _olderPages[^1];
         var rangeId = _textRangeId;
-        return ReadAsync(target, "texts", gameId => Operations.GetItemsAsync(gameId, target.Recording, TextPageSize, before: before, rangeId: rangeId),
-            ApplyTextPage, () => _textError = true);
+        PlayRecordingPage? page = null;
+        await ReadAsync(target, "texts", gameId => Operations.GetItemsAsync(gameId, target.Recording, TextPageSize, before: before,
+            rangeId: rangeId, textSearch: _textSearch, speakerSearch: _speakerSearch), value => page = value, () => _textError = true);
+        if (page is null || !IsWorkspaceCurrent(target)) return;
+        // Reading can resume during the server fetch; do not overwrite a page that is no longer at the tail.
+        if (checkScrollBeforeApply)
+        {
+            try
+            {
+                if (!_latest || _textScroller.Id is not null && !await Js.InvokeAsync<bool>("playRecordingText.atEnd", _textScroller))
+                {
+                    if (IsWorkspaceCurrent(target)) StopFollowing();
+                    return;
+                }
+            }
+            catch (JSDisconnectedException) { return; }
+        }
+        if (IsWorkspaceCurrent(target)) ApplyTextPage(page);
     }
 
     private Task EditTextAsync(DisplayTarget target, CaptureTextItem item) => ReadForDisplayedTargetAsync(target, async () =>
@@ -55,7 +89,8 @@ public partial class PlayRecordingPanel
         await ReadAsync(target, "text at position", gameId => Operations.GetItemAtAsync(gameId, target.Recording, position),
             value => item = value, () => _actionError = new("本文の取得失敗", "対応する本文を読み込めませんでした。記録を更新してください。"));
         if (item is null) return;
-        await OpenTextViewAsync(false, null);
+        _pane = Pane.Text;
+        StopFollowing();
         if (IsWorkspaceCurrent(target))
             await ShowGalleryAsync(item, imageId, showRawText: imageId is not null);
     }

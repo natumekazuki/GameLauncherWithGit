@@ -12,6 +12,9 @@ public partial class PlayRecordingPanel
     private IReadOnlyList<PlayRecordingScreenshot>? _galleryImages;
     private readonly List<CapturePosition> _olderPages = [];
     private CapturePosition? _nextBefore;
+    private CapturePosition? _pausedBefore;
+    private string _textSearchInput = "", _speakerSearchInput = "";
+    private string? _textSearch, _speakerSearch;
     private long? _textRangeId;
     private IReadOnlyList<CaptureTextItem>? _textItems;
     private IReadOnlyList<CaptureRange>? _ranges;
@@ -38,13 +41,14 @@ public partial class PlayRecordingPanel
     private void ApplyTextPage(PlayRecordingPage page)
     {
         _nextBefore = page.NextBefore;
-        var rows = page.Items.Reverse().ToArray();
+        var rows = page.Items;
         if (_textItems is null || !_textItems.SequenceEqual(rows))
         {
             _textItems = rows;
             var ids = rows.Select(row => row.Id).ToHashSet();
             foreach (var id in _rowButtons.Keys.Where(id => !ids.Contains(id)).ToArray()) _rowButtons.Remove(id);
             foreach (var id in ids) _rowButtons.TryAdd(id, new());
+            if (_latest) _scrollToLatest = true;
         }
         _textError = false;
     }
@@ -53,16 +57,44 @@ public partial class PlayRecordingPanel
     {
         _olderPages.Clear();
         _nextBefore = null;
+        _pausedBefore = null;
     }
 
     private Task OpenRangeAsync(DisplayTarget target, long rangeId) => ReadForDisplayedTargetAsync(target, async () =>
     {
         await OpenTextViewAsync(false, rangeId);
+        _savedRangesOpen = false;
+        FreezeTextPage();
         FocusAfterRender(FocusTarget.Text);
     });
 
-    private Task ChangeTextViewAsync(DisplayTarget target, bool latest) =>
-        ReadForDisplayedTargetAsync(target, () => OpenTextViewAsync(latest, null));
+    /// <summary>Explicitly resumes the live tail without clearing the current search.</summary>
+    private Task FollowLatestAsync(DisplayTarget target) => ReadForDisplayedTargetAsync(target, async () =>
+    {
+        await OpenTextViewAsync(true, null);
+        _scrollToLatest = true;
+    });
+
+    /// <summary>Stops polling updates while this page is being read.</summary>
+    private void StopFollowing()
+    {
+        if (!_latest) return;
+        _latest = false;
+        _scrollToLatest = false;
+        FreezeTextPage();
+    }
+
+    /// <summary>Anchors the first page so that retries and editing do not jump to newer rows.</summary>
+    private void FreezeTextPage() => _pausedBefore ??= _textItems?.LastOrDefault()?.EndPosition;
+
+    /// <summary>Applies a new search without replacing the recording target or creating another view.</summary>
+    private Task SearchTextsAsync(DisplayTarget target) => ReadForDisplayedTargetAsync(target, async () =>
+    {
+        _textSearch = Optional(_textSearchInput);
+        _speakerSearch = Optional(_speakerSearchInput);
+        await OpenTextViewAsync(false, _textRangeId);
+        FreezeTextPage();
+    });
 
     private async Task OpenTextViewAsync(bool latest, long? rangeId)
     {
@@ -82,7 +114,7 @@ public partial class PlayRecordingPanel
         if (direction > 0 && _nextBefore is { } older) _olderPages.Add(older);
         else if (direction < 0 && _olderPages.Count > 0) _olderPages.RemoveAt(_olderPages.Count - 1);
         else return;
-        _latest = false;
+        StopFollowing();
         _textItems = null;
         CloseTextEditor();
         await LoadTextAsync();
@@ -154,6 +186,7 @@ public partial class PlayRecordingPanel
 
     private Task ShowGalleryAsync(CaptureTextItem item, string? imageId = null, bool showRawText = false)
     {
+        StopFollowing();
         CloseTextEditor();
         CloseGallery();
         _galleryItem = item;

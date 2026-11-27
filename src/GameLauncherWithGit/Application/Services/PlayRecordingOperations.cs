@@ -42,6 +42,8 @@ public sealed record PlayRecordingState(PlayRecordingTarget Target, string Title
     bool CanStart, bool CanFinish, CapturePosition? RangeStart, PlayRecordingRangeSelection? PendingRange)
 {
     public string GameId { get; init; } = "";
+    /// <summary>The current Web recording root's branch, if it is branch-specific.</summary>
+    public string? RecordingBranchRef { get; init; }
     public bool CanStartRange { get; init; }
     public bool CanEndRange { get; init; }
     public bool CanTakeScreenshot { get; init; }
@@ -109,7 +111,17 @@ public sealed partial class PlayRecordingOperations(ScenarioCaptureService captu
         if (selected.Profile?.GameId is not { } gameId || selected.RecordId is not { } recordId) return null;
         var profile = await store.FindCaptureProfileAsync(gameId);
         if (profile is null || capture.CurrentPlayTarget.RecordId != recordId) return null;
-        return BuildState(profile, recordId);
+        // Use metadata for the same recording root; never resolve or open another branch.
+        string? branch = null;
+        if (recordId != profile.Id && store is IScenarioHistoryStore history)
+        {
+            var scopes = await history.GetScenarioHistoryScopesAsync(profile.Id);
+            branch = scopes.FirstOrDefault(scope => scope.RecordId == recordId)?.BranchRef;
+        }
+        var after = capture.CurrentPlayTarget;
+        if (after.RecordId != recordId || after.ScopeVersion != selected.ScopeVersion)
+            return null;
+        return BuildState(profile, recordId) with { RecordingBranchRef = branch };
     });
 
     /// <summary>Reads state for a known game. In the app, a non-current or unresolved game cannot be operated.</summary>
