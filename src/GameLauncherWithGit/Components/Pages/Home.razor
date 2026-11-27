@@ -78,7 +78,7 @@
         @notificationContent
     }
     <nav class="home-navigation" aria-label="ランチャー">
-        <button type="button" class="secondary-button utility-icon-button" title="設定" aria-label="設定" @onclick="OpenSettingsAsync" disabled="@(_isStartupChecking || _isCardSizeSaving)"><CaptureIcon Name="Settings" /></button>
+        <button type="button" id="home-settings-button" class="secondary-button utility-icon-button" title="設定" aria-label="設定" @onclick="OpenSettingsAsync" disabled="@(_isStartupChecking || _isCardSizeSaving)"><CaptureIcon Name="Settings" /></button>
         <button type="button" class="secondary-button utility-icon-button" title="ヘルプ" aria-label="ヘルプ" @onclick="OpenHelp"><span aria-hidden="true" class="home-help-icon">?</span></button>
     </nav>
 </header>
@@ -135,7 +135,7 @@
                                         <img @key="thumbnail" class="game-thumbnail-image" src="@thumbnail.DataUri" alt=""
                                              @onerror="() => MarkThumbnailDecodeFailed(game.Id, thumbnail)" />
                                     }
-                                    else if (hasThumbnail && !_showCardTitle)
+                                    else if (hasThumbnail && !_appliedSettings.ShowCardTitle)
                                     {
                                         <span class="home-thumbnail-title">@game.Title</span>
                                     }
@@ -144,7 +144,7 @@
                                         <span class="home-thumbnail-placeholder"><CaptureIcon Name="Image" /></span>
                                     }
                                 </span>
-                                @if (_showCardTitle || !hasThumbnail)
+                                @if (_appliedSettings.ShowCardTitle || !hasThumbnail)
                                 {
                                     <span class="home-card-title">@game.Title</span>
                                 }
@@ -201,12 +201,12 @@
     var repositoryRoot = GetRegisteredGitIdentity(selected)?.Root;
     var syncStatus = GetEffectiveStatus(selected);
     var paused = CanResumeRepositorySync(selected);
-    var showSyncProgressInGitRow = _usesSavedSyncCadence && _showCardSyncStatus && repositoryPath is not null;
+    var showSyncProgressInGitRow = _usesSavedSyncCadence && _appliedSettings.ShowCardSyncStatus && repositoryPath is not null;
     <div class="editor-overlay home-selected-overlay" @onclick="CloseGameDetails">
         <section class="editor-modal" role="dialog" aria-modal="true" aria-labelledby="home-game-title" tabindex="-1" @onclick:stopPropagation="true">
             <div class="dialog-heading home-dialog-heading">
                 <h2 id="home-game-title" tabindex="-1" data-dialog-initial>@selected.Title</h2>
-                @if (HasFeedback && !_isEditorOpen && !_isDeleteConfirmOpen && !_isSettingsOpen)
+                @if (HasFeedback && !_isEditorOpen && !_isDeleteConfirmOpen && !_isSettingsOpen && _branchGame is null)
                 {
                     @notificationContent
                 }
@@ -229,7 +229,7 @@
                     {
                         <dt>状態</dt><dd>要確認</dd>
                     }
-                    else if (gitStatus != GitRepositoryVisualState.NotConfigured && _showCardSyncStatus && !_usesSavedSyncCadence)
+                    else if (gitStatus != GitRepositoryVisualState.NotConfigured && _appliedSettings.ShowCardSyncStatus && !_usesSavedSyncCadence)
                     {
                         <dt>同期状態</dt><dd>@GetStatusLabel(syncStatus)</dd>
                     }
@@ -257,6 +257,8 @@
                 }
                 @if (repositoryPath is not null)
                 {
+                    <button type="button" class="secondary-button home-labeled-action" aria-haspopup="dialog"
+                            @onclick="() => OpenBranchOperationsAsync(selected)">ブランチ操作</button>
                     <button type="button" class="secondary-button home-labeled-action"
                             @onclick="() => RefreshSelectedGitStatusAsync(selected.Id, repositoryPath)"
                             aria-disabled="@(repositoryRoot is not null && IsTargetedGitStatusReadPending(repositoryRoot) ? "true" : null)">Git状態を更新</button>
@@ -280,9 +282,75 @@
                         title="@GetLaunchButtonTitle(selected)" disabled="@IsLaunchDisabled(selected)"
                         aria-disabled="@(_isLaunching ? "true" : null)"><CaptureIcon Name="Play" /> 起動する</button>
                 <a class="secondary-button home-labeled-action" href="@GetScenarioUrl(selected.Id)"><CaptureIcon Name="History" /> シナリオを見る</a>
-                <button type="button" class="secondary-button" @onclick="() => OpenEditEditorAsync(selected)"
+                <button type="button" class="secondary-button" @onclick="() => OpenEditEditor(selected)"
                         disabled="@(!HasLoadedSaveLinks(selected.Id))">ゲーム設定</button>
                 <button type="button" class="secondary-button" data-dialog-dismiss @onclick="CloseGameDetails">閉じる</button>
+            </div>
+        </section>
+    </div>
+}
+
+@if (_branchGame is { } branchGame)
+{
+    <div class="editor-overlay home-branch-overlay" @onclick="CloseBranchOperations">
+        <section class="editor-modal" role="dialog" aria-modal="true" aria-labelledby="home-branch-title" tabindex="-1" @onclick:stopPropagation="true">
+            <div class="dialog-heading home-dialog-heading">
+                <h2 id="home-branch-title" tabindex="-1" data-dialog-initial>ブランチ操作（即時反映）：@branchGame.Title</h2>
+                @if (HasFeedback && !_isSettingsOpen)
+                {
+                    @notificationContent
+                }
+            </div>
+            <div class="dialog-body">
+                <div class="branch-picker editor-field">
+                    <p class="branch-current-value" aria-live="polite">現在: @GetCurrentBranchLabel()</p>
+                    <div class="branch-switch-row">
+                        <select aria-label="切り替え先のブランチ" @bind="_branchSelection"
+                                @bind:event="oninput"
+                                disabled="@IsBranchSelectionDisabled()">
+                            @if (_branches.Count == 0)
+                            {
+                                <option value="">ブランチなし</option>
+                            }
+                            else
+                            {
+                                @foreach (var branch in _branches)
+                                {
+                                    <option value="@branch">@GetBranchOptionLabel(branch)</option>
+                                }
+                            }
+                        </select>
+                        <button type="button"
+                                class="secondary-button picker-button"
+                                @onclick="ReloadBranchesAsync"
+                                disabled="@IsBranchReloadDisabled()">
+                            @(_isBranchLoading ? "取得中..." : "リモート更新")
+                        </button>
+                        <button type="button"
+                                class="secondary-button picker-button"
+                                @onclick="SwitchBranchAsync"
+                                disabled="@IsBranchSwitchDisabled()">
+                            切り替え
+                        </button>
+                    </div>
+                    <div class="branch-create-row">
+                        <input aria-label="新規ブランチ名" placeholder="新規ブランチ名"
+                               @bind="_branchNewName"
+                               @bind:event="oninput"
+                               disabled="@IsBranchCreateInputDisabled()" />
+                        <button type="button"
+                                class="secondary-button picker-button"
+                                @onclick="CreateBranchAsync"
+                                disabled="@IsBranchCreateDisabled()">
+                            作成して切り替え
+                        </button>
+                    </div>
+                    <p class="settings-note">リモートの一覧は前回取得した情報です。</p>
+                </div>
+            </div>
+            <div class="editor-actions dialog-footer">
+                <button type="button" class="secondary-button" @onclick="CloseBranchOperations"
+                        data-dialog-dismiss disabled="@IsBranchWriting">閉じる</button>
             </div>
         </section>
     </div>
@@ -397,7 +465,8 @@
 @if (_isSettingsOpen)
 {
     <div class="editor-overlay settings-overlay" @onclick="RequestCloseSettings">
-        <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabindex="-1" @onclick:stopPropagation="true">
+        <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title"
+                 data-dialog-return="home-settings-button" tabindex="-1" @onclick:stopPropagation="true">
             <div class="dialog-heading home-dialog-heading">
                 <h2 id="settings-title" tabindex="-1" data-dialog-initial>設定</h2>
                 @if (HasFeedback && !_isEditorOpen && !_isDeleteConfirmOpen)
@@ -405,10 +474,6 @@
                     @notificationContent
                 }
             </div>
-            <nav class="settings-quick-links" aria-label="設定内の移動">
-                <button type="button" class="secondary-button" @onclick="FocusNotificationHeadingAsync">通知</button>
-                <button type="button" class="secondary-button" @onclick="FocusLogHeadingAsync">ログ</button>
-            </nav>
             <div class="dialog-body">
 
                 <div class="settings-section">
@@ -433,7 +498,7 @@
                 }
 
                 <div class="settings-section settings-sync-section">
-                    <h3>同期・通知</h3>
+                    <h3>同期</h3>
                     <div class="settings-sync-grid">
                         <label class="settings-value-row">
                             <span class="settings-value-label">自動コミット間隔（分、0＝追加待ちなし）</span>
@@ -449,54 +514,6 @@
                                    min="0"
                                    max="@AppSettings.AutoSyncIntervalMinutesMax"
                                    @bind="_autoPushIntervalMinutes"
-                                   disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
-                        </label>
-                        <label class="settings-value-row">
-                            <span class="settings-value-label">変更検知の待機（秒）</span>
-                            <input type="number"
-                                   min="1"
-                                   max="300"
-                                   @bind="_syncDebounceSeconds"
-                                   disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
-                        </label>
-                        <label class="settings-value-row">
-                            <span class="settings-value-label">再試行の初期待機（秒）</span>
-                            <input type="number"
-                                   min="1"
-                                   max="600"
-                                   @bind="_syncRetryInitialSeconds"
-                                   disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
-                        </label>
-                        <label class="settings-value-row">
-                            <span class="settings-value-label">再試行の最大待機（秒）</span>
-                            <input type="number"
-                                   min="1"
-                                   max="3600"
-                                   @bind="_syncRetryMaxSeconds"
-                                   disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
-                        </label>
-                        <label class="settings-value-row">
-                            <span class="settings-value-label">通知抑制秒（0で無効）</span>
-                            <input type="number"
-                                   min="0"
-                                   max="600"
-                                   @bind="_notificationSuppressSeconds"
-                                   disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
-                        </label>
-                        <label class="settings-value-row">
-                            <span class="settings-value-label">ログ保持（日）</span>
-                            <input type="number"
-                                   min="1"
-                                   max="365"
-                                   @bind="_logRetentionDays"
-                                   disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
-                        </label>
-                        <label class="settings-value-row">
-                            <span class="settings-value-label">ログ上限（MB）</span>
-                            <input type="number"
-                                   min="1"
-                                   max="1024"
-                                   @bind="_logMaxFileSizeMb"
                                    disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
                         </label>
                     </div>
@@ -518,200 +535,266 @@
                     </label>
                 </div>
 
-                <section class="settings-section" id="notification-center">
-                    <h3 tabindex="-1" @ref="_notificationHeading">通知</h3>
-                    <div class="editor-actions">
-                        <button type="button"
-                                class="launch-button"
-                                @onclick="CopyNotificationHistoryAsync"
-                                disabled="@(_isSettingsLoading || _notificationHistoryEntries.Count == 0)">
-                            全件コピー
-                        </button>
-                        <button type="button"
-                                class="secondary-button"
-                                @onclick="ClearNotificationHistory"
-                                disabled="@(_isSettingsLoading || _notificationHistoryEntries.Count == 0)">
-                            履歴を消去
-                        </button>
-                    </div>
-                    <div class="notification-center-filters">
-                        <label>
-                            <input type="checkbox"
-                                   @bind="_showSuccessNotifications"
-                                   disabled="@_isSettingsLoading" />
-                            成功を表示
-                        </label>
-                        <label>
-                            <input type="checkbox"
-                                   @bind="_showFailedNotifications"
-                                   disabled="@_isSettingsLoading" />
-                            失敗を表示
-                        </label>
-                    </div>
-                    <div class="notification-center-list" role="log">
-                        @{
-                            var filteredNotificationEntries = GetFilteredNotificationHistoryEntries();
-                        }
-                        @if (_notificationHistoryEntries.Count == 0)
-                        {
-                            <p class="notification-center-empty">通知履歴はありません。</p>
-                        }
-                        else if (filteredNotificationEntries.Count == 0)
-                        {
-                            <p class="notification-center-empty">フィルタ条件に一致する通知はありません。</p>
-                        }
-                        else
-                        {
-                            @foreach (var entry in filteredNotificationEntries)
-                            {
-                                <article class="notification-center-item">
-                                    <div class="notification-center-item-header">
-                                        <span class="notification-center-time">@FormatNotificationHistoryTimestamp(entry.Timestamp)</span>
-                                        <span class="notification-center-type @GetNotificationHistoryTypeClass(entry.IsSuccess)">
-                                            @GetNotificationHistoryTypeLabel(entry.IsSuccess)
-                                        </span>
-                                    </div>
-                                    <button type="button" class="home-history-result" aria-haspopup="dialog"
-                                            @onclick="() => OpenResultDetails(entry.Summary, entry.Message)">@entry.Summary</button>
-                                </article>
-                            }
-                        }
-                    </div>
-                </section>
-
-                <section class="settings-section" id="log-viewer">
-                    <div class="home-section-heading">
-                        <h3 tabindex="-1" @ref="_logHeading">ログ</h3>
-                        <div class="settings-actions-row">
-                            <button type="button" class="secondary-button" aria-label="最新エラーログを開く" @onclick="OpenLatestErrorLogAsync" disabled="@_isSettingsLoading">最新エラー</button>
-                            <button type="button" class="secondary-button" aria-label="ログフォルダを開く" @onclick="OpenLogDirectoryAsync" disabled="@_isSettingsLoading">フォルダ</button>
+                <div class="settings-section">
+                    <button type="button" class="secondary-button home-settings-disclosure"
+                            aria-expanded="@(_settingsDetailsOpen ? "true" : "false")" aria-controls="home-settings-details"
+                            @onclick="ToggleSettingsDetailsAsync">
+                        <CaptureIcon Name="Next" /> 詳細
+                    </button>
+                </div>
+                <div id="home-settings-details" hidden="@(!_settingsDetailsOpen)">
+                    <nav class="settings-quick-links" aria-label="設定詳細内の移動">
+                        <button type="button" class="secondary-button" @onclick="FocusNotificationHeadingAsync">通知</button>
+                        <button type="button" class="secondary-button" @onclick="FocusLogHeadingAsync">ログ</button>
+                    </nav>
+                    <section class="settings-section settings-sync-section">
+                        <h3>同期・ログの調整</h3>
+                        <div class="settings-sync-grid">
+                            <label class="settings-value-row">
+                                <span class="settings-value-label">変更検知の待機（秒）</span>
+                                <input type="number"
+                                       min="1"
+                                       max="300"
+                                       @bind="_syncDebounceSeconds"
+                                       disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                            </label>
+                            <label class="settings-value-row">
+                                <span class="settings-value-label">再試行の初期待機（秒）</span>
+                                <input type="number"
+                                       min="1"
+                                       max="600"
+                                       @bind="_syncRetryInitialSeconds"
+                                       disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                            </label>
+                            <label class="settings-value-row">
+                                <span class="settings-value-label">再試行の最大待機（秒）</span>
+                                <input type="number"
+                                       min="1"
+                                       max="3600"
+                                       @bind="_syncRetryMaxSeconds"
+                                       disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                            </label>
+                            <label class="settings-value-row">
+                                <span class="settings-value-label">通知抑制秒（0で無効）</span>
+                                <input type="number"
+                                       min="0"
+                                       max="600"
+                                       @bind="_notificationSuppressSeconds"
+                                       disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                            </label>
+                            <label class="settings-value-row">
+                                <span class="settings-value-label">ログ保持（日）</span>
+                                <input type="number"
+                                       min="1"
+                                       max="365"
+                                       @bind="_logRetentionDays"
+                                       disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                            </label>
+                            <label class="settings-value-row">
+                                <span class="settings-value-label">ログ上限（MB）</span>
+                                <input type="number"
+                                       min="1"
+                                       max="1024"
+                                       @bind="_logMaxFileSizeMb"
+                                       disabled="@(_isSettingsLoading || _isAppSettingsSaving)" />
+                            </label>
                         </div>
-                    </div>
-                    <div class="settings-log-controls">
-                        <label class="settings-log-control">
-                            <span>表示件数</span>
-                            <input type="number"
-                                   min="10"
-                                   max="500"
-                                   @bind="_logViewerLimit"
+                    </section>
+                    <section class="settings-section" id="notification-center">
+                        <h3 tabindex="-1" @ref="_notificationHeading">通知</h3>
+                        <div class="editor-actions">
+                            <button type="button"
+                                    class="launch-button"
+                                    @onclick="CopyNotificationHistoryAsync"
+                                    disabled="@(_isSettingsLoading || _notificationHistoryEntries.Count == 0)">
+                                全件コピー
+                            </button>
+                            <button type="button"
+                                    class="secondary-button"
+                                    @onclick="ClearNotificationHistory"
+                                    disabled="@(_isSettingsLoading || _notificationHistoryEntries.Count == 0)">
+                                履歴を消去
+                            </button>
+                        </div>
+                        <div class="notification-center-filters">
+                            <label>
+                                <input type="checkbox"
+                                       @bind="_showSuccessNotifications"
+                                       disabled="@_isSettingsLoading" />
+                                成功を表示
+                            </label>
+                            <label>
+                                <input type="checkbox"
+                                       @bind="_showFailedNotifications"
+                                       disabled="@_isSettingsLoading" />
+                                失敗を表示
+                            </label>
+                        </div>
+                        <div class="notification-center-list" role="log">
+                            @{
+                                var filteredNotificationEntries = GetFilteredNotificationHistoryEntries();
+                            }
+                            @if (_notificationHistoryEntries.Count == 0)
+                            {
+                                <p class="notification-center-empty">通知履歴はありません。</p>
+                            }
+                            else if (filteredNotificationEntries.Count == 0)
+                            {
+                                <p class="notification-center-empty">フィルタ条件に一致する通知はありません。</p>
+                            }
+                            else
+                            {
+                                @foreach (var entry in filteredNotificationEntries)
+                                {
+                                    <article class="notification-center-item">
+                                        <div class="notification-center-item-header">
+                                            <span class="notification-center-time">@FormatNotificationHistoryTimestamp(entry.Timestamp)</span>
+                                            <span class="notification-center-type @GetNotificationHistoryTypeClass(entry.IsSuccess)">
+                                                @GetNotificationHistoryTypeLabel(entry.IsSuccess)
+                                            </span>
+                                        </div>
+                                        <button type="button" class="home-history-result" aria-haspopup="dialog"
+                                                @onclick="() => OpenResultDetails(entry.Summary, entry.Message)">@entry.Summary</button>
+                                    </article>
+                                }
+                            }
+                        </div>
+                    </section>
+
+                    <section class="settings-section" id="log-viewer">
+                        <div class="home-section-heading">
+                            <h3 tabindex="-1" @ref="_logHeading">ログ</h3>
+                            <div class="settings-actions-row">
+                                <button type="button" class="secondary-button" aria-label="最新エラーログを開く" @onclick="OpenLatestErrorLogAsync" disabled="@_isSettingsLoading">最新エラー</button>
+                                <button type="button" class="secondary-button" aria-label="ログフォルダを開く" @onclick="OpenLogDirectoryAsync" disabled="@_isSettingsLoading">フォルダ</button>
+                            </div>
+                        </div>
+                        <div class="settings-log-controls">
+                            <label class="settings-log-control">
+                                <span>表示件数</span>
+                                <input type="number"
+                                       min="10"
+                                       max="500"
+                                       @bind="_logViewerLimit"
+                                       disabled="@(_isSettingsLoading || _isLogLoading)" />
+                            </label>
+                            <label class="settings-log-control">
+                                <span>レベル</span>
+                                <select @bind="_logViewerSeverityFilter"
+                                        disabled="@(_isSettingsLoading || _isLogLoading)">
+                                    <option value="all">すべて</option>
+                                    <option value="Critical">Critical</option>
+                                    <option value="Error">Error</option>
+                                    <option value="Warning">Warning</option>
+                                    <option value="Information">Information</option>
+                                    <option value="Debug">Debug</option>
+                                    <option value="Trace">Trace</option>
+                                </select>
+                            </label>
+                        </div>
+                        <label class="settings-log-keyword">
+                            <span>キーワード</span>
+                            <input type="text"
+                                   @bind="_logViewerKeyword"
+                                   @bind:event="oninput"
+                                   placeholder="メッセージ / TraceId / repo / command"
                                    disabled="@(_isSettingsLoading || _isLogLoading)" />
                         </label>
-                        <label class="settings-log-control">
-                            <span>レベル</span>
-                            <select @bind="_logViewerSeverityFilter"
+                        <div class="editor-actions">
+                            <button type="button"
+                                    class="launch-button"
+                                    @onclick="LoadLogEntriesAsync"
                                     disabled="@(_isSettingsLoading || _isLogLoading)">
-                                <option value="all">すべて</option>
-                                <option value="Critical">Critical</option>
-                                <option value="Error">Error</option>
-                                <option value="Warning">Warning</option>
-                                <option value="Information">Information</option>
-                                <option value="Debug">Debug</option>
-                                <option value="Trace">Trace</option>
-                            </select>
-                        </label>
-                    </div>
-                    <label class="settings-log-keyword">
-                        <span>キーワード</span>
-                        <input type="text"
-                               @bind="_logViewerKeyword"
-                               @bind:event="oninput"
-                               placeholder="メッセージ / TraceId / repo / command"
-                               disabled="@(_isSettingsLoading || _isLogLoading)" />
-                    </label>
-                    <div class="editor-actions">
-                        <button type="button"
-                                class="launch-button"
-                                @onclick="LoadLogEntriesAsync"
-                                disabled="@(_isSettingsLoading || _isLogLoading)">
-                            @(_logViewerError is null ? "更新" : "再試行")
-                        </button>
-                        <button type="button"
-                                class="secondary-button"
-                                @onclick="CopyLogEntriesAsync"
-                                disabled="@(_isSettingsLoading || _isLogLoading || _logViewerEntries.Count == 0)">
-                            コピー
-                        </button>
-                    </div>
-                    <div class="settings-log-list" role="log">
-                        @if (_isLogLoading)
-                        {
-                            <p class="settings-log-empty">ログを読込中…</p>
-                        }
-                        else if (_logViewerError is null && _logViewerEntries.Count == 0)
-                        {
-                            <p class="settings-log-empty">表示できるログがありません。</p>
-                        }
-                        else
-                        {
-                            @foreach (var entry in _logViewerEntries)
+                                @(_logViewerError is null ? "更新" : "再試行")
+                            </button>
+                            <button type="button"
+                                    class="secondary-button"
+                                    @onclick="CopyLogEntriesAsync"
+                                    disabled="@(_isSettingsLoading || _isLogLoading || _logViewerEntries.Count == 0)">
+                                コピー
+                            </button>
+                        </div>
+                        <div class="settings-log-list" role="log">
+                            @if (_isLogLoading)
                             {
-                                <article class="settings-log-item">
-                                    <div class="settings-log-item-header">
-                                        <span class="settings-log-time">@FormatLogTimestamp(entry.Timestamp)</span>
-                                        <span class="settings-log-level @GetLogLevelClass(entry.Severity)">
-                                            @entry.Severity
-                                        </span>
-                                    </div>
-                                    <p class="settings-log-message">@entry.Message</p>
-                                    <p class="settings-log-meta">
-                                        <span class="settings-log-meta-item">name: @entry.Name</span>
-                                        @if (!string.IsNullOrWhiteSpace(entry.TraceId))
-                                        {
-                                            <span class="settings-log-meta-item">traceId: @entry.TraceId</span>
-                                        }
-                                        @if (!string.IsNullOrWhiteSpace(entry.RepositoryId))
-                                        {
-                                            <span class="settings-log-meta-item">repo: @entry.RepositoryId</span>
-                                        }
-                                        @if (!string.IsNullOrWhiteSpace(entry.Command))
-                                        {
-                                            <span class="settings-log-meta-item">command: @entry.Command</span>
-                                        }
-                                        @if (entry.ExitCode.HasValue)
-                                        {
-                                            <span class="settings-log-meta-item">exitCode: @entry.ExitCode.Value</span>
-                                        }
-                                    </p>
-                                    @if (!string.IsNullOrWhiteSpace(entry.Detail)
-                                         || !string.IsNullOrWhiteSpace(entry.StandardOutput)
-                                         || !string.IsNullOrWhiteSpace(entry.StandardError))
-                                    {
-                                        <div class="settings-log-details">
-                                            @if (!string.IsNullOrWhiteSpace(entry.Detail))
-                                            {
-                                                <details class="settings-log-detail-block">
-                                                    <summary>detail</summary>
-                                                    <pre class="settings-log-detail">@entry.Detail</pre>
-                                                </details>
-                                            }
-                                            @if (!string.IsNullOrWhiteSpace(entry.StandardOutput))
-                                            {
-                                                <details class="settings-log-detail-block">
-                                                    <summary>stdout</summary>
-                                                    <pre class="settings-log-detail">@entry.StandardOutput</pre>
-                                                </details>
-                                            }
-                                            @if (!string.IsNullOrWhiteSpace(entry.StandardError))
-                                            {
-                                                <details class="settings-log-detail-block">
-                                                    <summary>stderr</summary>
-                                                    <pre class="settings-log-detail">@entry.StandardError</pre>
-                                                </details>
-                                            }
-                                        </div>
-                                    }
-                                </article>
+                                <p class="settings-log-empty">ログを読込中…</p>
                             }
-                        }
-                    </div>
-                </section>
+                            else if (_logViewerError is null && _logViewerEntries.Count == 0)
+                            {
+                                <p class="settings-log-empty">表示できるログがありません。</p>
+                            }
+                            else
+                            {
+                                @foreach (var entry in _logViewerEntries)
+                                {
+                                    <article class="settings-log-item">
+                                        <div class="settings-log-item-header">
+                                            <span class="settings-log-time">@FormatLogTimestamp(entry.Timestamp)</span>
+                                            <span class="settings-log-level @GetLogLevelClass(entry.Severity)">
+                                                @entry.Severity
+                                            </span>
+                                        </div>
+                                        <p class="settings-log-message">@entry.Message</p>
+                                        <p class="settings-log-meta">
+                                            <span class="settings-log-meta-item">name: @entry.Name</span>
+                                            @if (!string.IsNullOrWhiteSpace(entry.TraceId))
+                                            {
+                                                <span class="settings-log-meta-item">traceId: @entry.TraceId</span>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(entry.RepositoryId))
+                                            {
+                                                <span class="settings-log-meta-item">repo: @entry.RepositoryId</span>
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(entry.Command))
+                                            {
+                                                <span class="settings-log-meta-item">command: @entry.Command</span>
+                                            }
+                                            @if (entry.ExitCode.HasValue)
+                                            {
+                                                <span class="settings-log-meta-item">exitCode: @entry.ExitCode.Value</span>
+                                            }
+                                        </p>
+                                        @if (!string.IsNullOrWhiteSpace(entry.Detail)
+                                             || !string.IsNullOrWhiteSpace(entry.StandardOutput)
+                                             || !string.IsNullOrWhiteSpace(entry.StandardError))
+                                        {
+                                            <div class="settings-log-details">
+                                                @if (!string.IsNullOrWhiteSpace(entry.Detail))
+                                                {
+                                                    <details class="settings-log-detail-block">
+                                                        <summary>detail</summary>
+                                                        <pre class="settings-log-detail">@entry.Detail</pre>
+                                                    </details>
+                                                }
+                                                @if (!string.IsNullOrWhiteSpace(entry.StandardOutput))
+                                                {
+                                                    <details class="settings-log-detail-block">
+                                                        <summary>stdout</summary>
+                                                        <pre class="settings-log-detail">@entry.StandardOutput</pre>
+                                                    </details>
+                                                }
+                                                @if (!string.IsNullOrWhiteSpace(entry.StandardError))
+                                                {
+                                                    <details class="settings-log-detail-block">
+                                                        <summary>stderr</summary>
+                                                        <pre class="settings-log-detail">@entry.StandardError</pre>
+                                                    </details>
+                                                }
+                                            </div>
+                                        }
+                                    </article>
+                                }
+                            }
+                        </div>
+                    </section>
 
+                </div>
             </div>
             <div class="editor-actions dialog-footer">
                 <button type="button"
                         class="launch-button"
                         @onclick="SaveAppSettingsAsync"
-                        disabled="@(_isSettingsLoading || _isAppSettingsSaving)">
+                        disabled="@_isSettingsLoading" aria-disabled="@(_isAppSettingsSaving ? "true" : null)">
                     保存
                 </button>
                 <button type="button"
@@ -862,56 +945,6 @@
                 </div>
 
                 <div class="editor-field">
-                    <h3>ブランチ</h3>
-                    <div class="branch-picker">
-                        <p class="settings-note">操作はこのリポジトリに即時反映され、編集をキャンセルしても戻りません。</p>
-                        <p class="branch-current-value">現在: @GetEditorCurrentBranchLabel()</p>
-                        <div class="branch-switch-row">
-                            <select aria-label="切り替え先のブランチ" @bind="_editorSelectedBranch"
-                                    @bind:event="oninput"
-                                    disabled="@IsBranchSelectionDisabled()">
-                                @if (_editorBranches.Count == 0)
-                                {
-                                    <option value="">ブランチなし</option>
-                                }
-                                else
-                                {
-                                    @foreach (var branch in _editorBranches)
-                                    {
-                                        <option value="@branch">@GetEditorBranchOptionLabel(branch)</option>
-                                    }
-                                }
-                            </select>
-                            <button type="button"
-                                    class="secondary-button picker-button"
-                                    @onclick="ReloadEditorBranchesAsync"
-                                    disabled="@IsBranchReloadDisabled()">
-                                @(_isBranchLoading ? "取得中..." : "リモート更新")
-                            </button>
-                            <button type="button"
-                                    class="secondary-button picker-button"
-                                    @onclick="SwitchEditorBranchAsync"
-                                    disabled="@IsBranchSwitchDisabled()">
-                                切り替え
-                            </button>
-                        </div>
-                        <div class="branch-create-row">
-                            <input aria-label="新規ブランチ名" placeholder="新規ブランチ名"
-                                   @bind="_editorNewBranchName"
-                                   @bind:event="oninput"
-                                   disabled="@IsBranchCreateInputDisabled()" />
-                            <button type="button"
-                                    class="secondary-button picker-button"
-                                    @onclick="CreateEditorBranchAsync"
-                                    disabled="@IsBranchCreateDisabled()">
-                                作成して切り替え
-                            </button>
-                        </div>
-                        <p class="settings-note">リモートの一覧は前回取得した情報です。関連リポジトリ未設定時は操作できません。</p>
-                    </div>
-                </div>
-
-                <div class="editor-field">
                     <h3>セーブリンク</h3>
                     <p class="settings-note">リンクを削除して保存すると、同期先データをローカル通常フォルダへ復元してリンク解除します。</p>
                     <div class="save-link-editor">
@@ -1036,13 +1069,14 @@
     private string _editorSavedTitle = string.Empty;
     private string _editorExecutablePath = string.Empty;
     private string? _editorRepositoryPath;
-    private string? _editorCurrentBranch;
-    private string? _editorSelectedBranch;
-    private string _editorNewBranchName = string.Empty;
-    private readonly List<string> _editorBranches = [];
-    private readonly HashSet<string> _editorLocalBranches = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<string> _editorRemoteBranches = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, string> _editorRemoteBranchLocalNames = new(StringComparer.OrdinalIgnoreCase);
+    private GameCardItem? _branchGame;
+    private string? _branchCurrent;
+    private string? _branchSelection;
+    private string _branchNewName = string.Empty;
+    private readonly List<string> _branches = [];
+    private readonly HashSet<string> _localBranches = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _remoteBranches = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _remoteBranchLocalNames = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<EditorSaveLinkEntry> _editorSaveLinks = [];
     private string? _editorThumbnailSourcePath;
     private bool _editorHasThumbnail;
@@ -1050,11 +1084,13 @@
     private string _editorSnapshot = string.Empty;
     private CapturePreference? _capturePreference;
     private bool _isBranchLoading;
-    private int _editorBranchLoadVersion;
+    private int _branchLoadVersion;
     private bool _isBranchSwitching;
     private bool _isBranchCreating;
     private bool _isHelpOpen;
     private bool _isSettingsOpen;
+    private bool _settingsDetailsOpen;
+    private bool _settingsLogRequested;
     private bool _isSettingsLoading;
     private bool _isAutoStartSaving;
     private bool _isAppSettingsSaving;
@@ -1072,6 +1108,7 @@
     private int _gameCardSizePercent = AppSettings.Default.GameCardSizePercent;
     private bool _showCardTitle = AppSettings.Default.ShowCardTitle;
     private bool _showCardSyncStatus = AppSettings.Default.ShowCardSyncStatus;
+    private AppSettings _appliedSettings = AppSettings.Default;
     private AppSettings? _settingsSnapshot;
     private int _logViewerLimit = 100;
     private string _logViewerSeverityFilter = "all";
@@ -1248,7 +1285,10 @@
         }
     }
 
-    private async Task OpenSettingsAsync()
+    private Task OpenSettingsAsync() => OpenSettingsCoreAsync(showLog: false);
+
+    /// <summary>Opens settings at the normal controls, or at the log when requested by a work's shortcut.</summary>
+    private async Task OpenSettingsCoreAsync(bool showLog)
     {
         if (_isCardSizeSaving || _isSettingsOpen)
         {
@@ -1257,20 +1297,41 @@
 
         DismissNotification();
         _settingsSnapshot = GetSettingsDraft();
+        _settingsDetailsOpen = showLog;
+        _settingsLogRequested = false;
+        _focusLogHeading = showLog;
         _isSettingsOpen = true;
         await RunWithUserOperationLoadingAsync("設定を読み込んでいます...", LoadSettingsAsync);
+        if (showLog)
+        {
+            // The explicit log entry opens the fold and loads its content on first use.
+            await LoadSettingsLogOnceAsync();
+        }
+    }
+
+    /// <summary>Toggles the low-frequency section without discarding settings draft values.</summary>
+    private async Task ToggleSettingsDetailsAsync()
+    {
+        _settingsDetailsOpen = !_settingsDetailsOpen;
+        if (_settingsDetailsOpen)
+        {
+            await LoadSettingsLogOnceAsync();
+        }
+    }
+
+    /// <summary>Loads logs only when details are requested; later retries use the existing refresh action.</summary>
+    private Task LoadSettingsLogOnceAsync()
+    {
+        if (_settingsLogRequested) return Task.CompletedTask;
+        _settingsLogRequested = true;
+        return LoadLogEntriesCoreAsync();
     }
 
     private Task FocusNotificationHeadingAsync() => JS.InvokeVoidAsync("gameLauncherDialogFocusSection", _notificationHeading).AsTask();
 
     private Task FocusLogHeadingAsync() => JS.InvokeVoidAsync("gameLauncherDialogFocusSection", _logHeading).AsTask();
 
-    private Task OpenSettingsLogAsync()
-    {
-        if (_isCardSizeSaving || _isSettingsOpen) return Task.CompletedTask;
-        _focusLogHeading = true;
-        return OpenSettingsAsync();
-    }
+    private Task OpenSettingsLogAsync() => OpenSettingsCoreAsync(showLog: true);
 
     private void OpenHelp()
     {
@@ -1367,7 +1428,6 @@
             ApplyAppSettings(AppSettingsService.Get());
             _settingsSnapshot = GetSettingsDraft();
             ClearRecoveredNotification(nameof(LoadSettingsAsync));
-            await LoadLogEntriesCoreAsync();
         }
         catch (Exception ex)
         {
@@ -1441,6 +1501,7 @@
     private void ApplyAppSettings(AppSettings settings)
     {
         var normalized = (settings ?? AppSettings.Default).Normalize();
+        _appliedSettings = normalized;
         _autoCommitIntervalMinutes = normalized.AutoCommitIntervalMinutes;
         _autoPushIntervalMinutes = normalized.AutoPushIntervalMinutes;
         _usesSavedSyncCadence = _autoCommitIntervalMinutes > 0 || _autoPushIntervalMinutes > 0;
@@ -1760,7 +1821,6 @@
         _editorSavedTitle = string.Empty;
         _editorExecutablePath = string.Empty;
         _editorRepositoryPath = null;
-        ResetEditorBranchState(clearNewBranchName: true);
         _editorSaveLinks.Clear();
         _editorThumbnailSourcePath = null;
         _editorHasThumbnail = false;
@@ -1801,7 +1861,8 @@
         _deleteTargetGameTitle = string.Empty;
     }
 
-    private async Task OpenEditEditorAsync(GameCardItem game)
+    /// <summary>Opens the saved game registration as a draft without performing Git operations.</summary>
+    private void OpenEditEditor(GameCardItem game)
     {
         if (_isEditorOpen) return;
         if (!_saveLinksByGame.TryGetValue(game.Id, out var saveLinks)) return;
@@ -1813,7 +1874,6 @@
         _editorSavedTitle = game.Title;
         _editorExecutablePath = game.ExecutablePath;
         _editorRepositoryPath = game.RelatedRepositoryPath;
-        ResetEditorBranchState(clearNewBranchName: true);
         _editorSaveLinks.Clear();
         _editorSaveLinks.AddRange(
             saveLinks
@@ -1830,7 +1890,6 @@
         _editorClearThumbnail = false;
         _editorSnapshot = GetEditorDraft();
         _isEditorOpen = true;
-        await LoadEditorBranchesAsync(showNotificationOnFailure: true, preserveSelection: false);
     }
 
     private async Task DeleteGameAsync()
@@ -1952,13 +2011,12 @@
         }
 
         _isEditorOpen = false;
-        ResetEditorBranchState(clearNewBranchName: true);
     }
 
     private enum DraftKind { Game, Settings }
 
     private bool IsEditorOperationBusy =>
-        _isSaving || _isEditorPickingPath || _isBranchSwitching || _isBranchCreating;
+        _isSaving || _isEditorPickingPath;
 
     private async Task SaveEditorAsync()
     {
@@ -2174,8 +2232,6 @@
                     if (!string.IsNullOrWhiteSpace(selectedPath))
                     {
                         _editorRepositoryPath = selectedPath;
-                        ResetEditorBranchState(clearNewBranchName: true);
-                        await LoadEditorBranchesAsync(showNotificationOnFailure: true, preserveSelection: false);
                         return;
                     }
 
@@ -2192,31 +2248,50 @@
     {
         if (IsEditorOperationBusy) return;
         _editorRepositoryPath = null;
-        ResetEditorBranchState(clearNewBranchName: true);
     }
 
-    private async Task ReloadEditorBranchesAsync()
+    /// <summary>Opens immediate branch controls for the selected work's saved repository.</summary>
+    private async Task OpenBranchOperationsAsync(GameCardItem game)
     {
-        if (IsBranchReloadDisabled() || NormalizeRepositoryPath(_editorRepositoryPath) is not { } repositoryPath) return;
-        var gameTitle = _editorTitle;
+        if (_branchGame is not null || GetSelectedGame()?.Id != game.Id || GetConfiguredGitPath(game) is null) return;
+        DismissNotification();
+        ResetBranchOperations(clearNewBranchName: true);
+        _branchGame = game;
+        await LoadBranchesAsync(showNotificationOnFailure: true, preserveSelection: false);
+    }
+
+    /// <summary>Closes branch controls without treating completed Git operations as draft changes.</summary>
+    private void CloseBranchOperations()
+    {
+        if (IsBranchWriting) return;
+        _branchGame = null;
+        ResetBranchOperations(clearNewBranchName: true);
+    }
+
+    private bool IsBranchWriting => _isBranchSwitching || _isBranchCreating;
+    private string? GetBranchRepositoryPath() => NormalizeRepositoryPath(_branchGame?.RelatedRepositoryPath);
+
+    private async Task ReloadBranchesAsync()
+    {
+        if (_branchGame is not { } game || IsBranchReloadDisabled() || GetBranchRepositoryPath() is not { } repositoryPath) return;
         await RunWithUserOperationLoadingAsync(
             "ブランチ一覧を取得しています...",
             async () =>
             {
-                if (await LoadEditorBranchesAsync(showNotificationOnFailure: true, preserveSelection: true, fetchRemote: true))
+                if (await LoadBranchesAsync(showNotificationOnFailure: true, preserveSelection: true, fetchRemote: true))
                 {
-                    await RefreshEditorGitStatusAsync(repositoryPath, gameTitle);
+                    await RefreshBranchGitStatusAsync(repositoryPath, game.Title);
                 }
             });
     }
 
-    private async Task SwitchEditorBranchAsync()
+    private async Task SwitchBranchAsync()
     {
-        if (!_isEditorOpen || IsEditorOperationBusy || _isBranchLoading || _isDeleteConfirmOpen || _discardChanges is not null) return;
-        var gameId = _editingGameId;
-        var repositoryPath = NormalizeRepositoryPath(_editorRepositoryPath);
+        if (_branchGame is not { } game || IsBranchWriting || _isBranchLoading) return;
+        var gameId = game.Id;
+        var repositoryPath = GetBranchRepositoryPath();
         void ReportResult(string message, bool isSuccess) => SetNotification(message, isSuccess, summary: "ブランチ切替",
-            targetId: gameId, repositoryPath: repositoryPath, operation: nameof(SwitchEditorBranchAsync));
+            targetId: gameId, repositoryPath: repositoryPath, operation: nameof(SwitchBranchAsync));
 
         if (repositoryPath is null)
         {
@@ -2224,7 +2299,7 @@
             return;
         }
 
-        var selectedBranch = NormalizeBranchName(_editorSelectedBranch);
+        var selectedBranch = NormalizeBranchName(_branchSelection);
         if (string.IsNullOrWhiteSpace(selectedBranch))
         {
             ReportResult("切り替え先ブランチを選択してください。", false);
@@ -2234,9 +2309,9 @@
         IReadOnlyList<string> switchCommand;
         string switchTargetLabel;
         var switchedFromRemote = false;
-        if (_editorLocalBranches.Contains(selectedBranch))
+        if (_localBranches.Contains(selectedBranch))
         {
-            if (string.Equals(selectedBranch, _editorCurrentBranch, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(selectedBranch, _branchCurrent, StringComparison.OrdinalIgnoreCase))
             {
                 ReportResult($"既に選択ブランチです: {selectedBranch}", true);
                 return;
@@ -2245,16 +2320,16 @@
             switchCommand = ["checkout", selectedBranch];
             switchTargetLabel = selectedBranch;
         }
-        else if (_editorRemoteBranches.Contains(selectedBranch))
+        else if (_remoteBranches.Contains(selectedBranch))
         {
-            if (!_editorRemoteBranchLocalNames.TryGetValue(selectedBranch, out var localBranchName)
+            if (!_remoteBranchLocalNames.TryGetValue(selectedBranch, out var localBranchName)
                 || string.IsNullOrWhiteSpace(localBranchName))
             {
                 ReportResult($"リモートブランチ名の形式が不正です: {selectedBranch}", false);
                 return;
             }
 
-            if (string.Equals(localBranchName, _editorCurrentBranch, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(localBranchName, _branchCurrent, StringComparison.OrdinalIgnoreCase))
             {
                 ReportResult($"既に選択ブランチです: {localBranchName}", true);
                 return;
@@ -2288,19 +2363,19 @@
                     }
 
                     await NotifyBranchChangedForSyncAsync(repositoryPath, syncRoot);
-                    await LoadEditorBranchesAsync(showNotificationOnFailure: false, preserveSelection: false);
+                    await LoadBranchesAsync(showNotificationOnFailure: false, preserveSelection: false);
                     var currentBranchResult = await GitService.RunAsync(repositoryPath, ["branch", "--show-current"]);
                     if (currentBranchResult.IsSuccess)
                     {
                         var actualBranch = NormalizeBranchName(FirstNonEmptyLine(currentBranchResult.StandardOutput));
                         if (!string.IsNullOrWhiteSpace(actualBranch))
                         {
-                            _editorCurrentBranch = actualBranch;
-                            _editorSelectedBranch = actualBranch;
+                            _branchCurrent = actualBranch;
+                            _branchSelection = actualBranch;
                         }
                     }
 
-                    await RefreshEditorGitStatusAsync(repositoryPath);
+                    await RefreshBranchGitStatusAsync(repositoryPath);
                     ReportResult(
                         switchedFromRemote
                             ? $"リモート追跡ブランチを作成して切り替えました: {switchTargetLabel}"
@@ -2318,13 +2393,13 @@
             });
     }
 
-    private async Task CreateEditorBranchAsync()
+    private async Task CreateBranchAsync()
     {
-        if (!_isEditorOpen || IsEditorOperationBusy || _isBranchLoading || _isDeleteConfirmOpen || _discardChanges is not null) return;
-        var gameId = _editingGameId;
-        var repositoryPath = NormalizeRepositoryPath(_editorRepositoryPath);
+        if (_branchGame is not { } game || IsBranchWriting || _isBranchLoading) return;
+        var gameId = game.Id;
+        var repositoryPath = GetBranchRepositoryPath();
         void ReportResult(string message, bool isSuccess) => SetNotification(message, isSuccess, summary: "ブランチ作成",
-            targetId: gameId, repositoryPath: repositoryPath, operation: nameof(CreateEditorBranchAsync));
+            targetId: gameId, repositoryPath: repositoryPath, operation: nameof(CreateBranchAsync));
 
         if (repositoryPath is null)
         {
@@ -2332,14 +2407,14 @@
             return;
         }
 
-        var newBranchName = NormalizeBranchName(_editorNewBranchName);
+        var newBranchName = NormalizeBranchName(_branchNewName);
         if (string.IsNullOrWhiteSpace(newBranchName))
         {
             ReportResult("新規ブランチ名を入力してください。", false);
             return;
         }
 
-        if (_editorLocalBranches.Contains(newBranchName))
+        if (_localBranches.Contains(newBranchName))
         {
             ReportResult($"既に存在するブランチ名です: {newBranchName}", false);
             return;
@@ -2372,9 +2447,9 @@
                     }
 
                     await NotifyBranchChangedForSyncAsync(repositoryPath, syncRoot);
-                    _editorNewBranchName = string.Empty;
-                    await LoadEditorBranchesAsync(showNotificationOnFailure: false, preserveSelection: false);
-                    await RefreshEditorGitStatusAsync(repositoryPath);
+                    _branchNewName = string.Empty;
+                    await LoadBranchesAsync(showNotificationOnFailure: false, preserveSelection: false);
+                    await RefreshBranchGitStatusAsync(repositoryPath);
                     ReportResult($"ブランチを作成して切り替えました: {newBranchName}", true);
                 }
                 catch (Exception ex)
@@ -2411,19 +2486,19 @@
         }
     }
 
-    private async Task<bool> LoadEditorBranchesAsync(bool showNotificationOnFailure, bool preserveSelection, bool fetchRemote = false)
+    private async Task<bool> LoadBranchesAsync(bool showNotificationOnFailure, bool preserveSelection, bool fetchRemote = false)
     {
-        var repositoryPath = NormalizeRepositoryPath(_editorRepositoryPath);
+        var repositoryPath = GetBranchRepositoryPath();
         if (repositoryPath is null)
         {
-            ResetEditorBranchState(clearNewBranchName: false);
+            ResetBranchOperations(clearNewBranchName: false);
             return false;
         }
 
         _isBranchLoading = true;
-        var loadVersion = ++_editorBranchLoadVersion;
-        bool IsCurrentLoad() => loadVersion == _editorBranchLoadVersion;
-        var operation = fetchRemote ? nameof(ReloadEditorBranchesAsync) : nameof(LoadEditorBranchesAsync);
+        var loadVersion = ++_branchLoadVersion;
+        bool IsCurrentLoad() => loadVersion == _branchLoadVersion;
+        var operation = fetchRemote ? nameof(ReloadBranchesAsync) : nameof(LoadBranchesAsync);
         void ReportFailure(string message)
         {
             if (showNotificationOnFailure)
@@ -2439,7 +2514,7 @@
             if (!gitCheck.IsSuccess)
             {
                 ReportFailure($"ブランチ一覧取得に失敗しました: {BuildGitFailureReason(gitCheck)}");
-                ResetEditorBranchState(clearNewBranchName: false);
+                ResetBranchOperations(clearNewBranchName: false);
                 return false;
             }
 
@@ -2460,7 +2535,7 @@
             if (!currentBranchResult.IsSuccess)
             {
                 ReportFailure($"現在ブランチ取得に失敗しました: {BuildGitFailureReason(currentBranchResult)}");
-                ResetEditorBranchState(clearNewBranchName: false);
+                ResetBranchOperations(clearNewBranchName: false);
                 return false;
             }
 
@@ -2471,7 +2546,7 @@
             if (!localBranchesResult.IsSuccess)
             {
                 ReportFailure($"ブランチ一覧取得に失敗しました: {BuildGitFailureReason(localBranchesResult)}");
-                ResetEditorBranchState(clearNewBranchName: false);
+                ResetBranchOperations(clearNewBranchName: false);
                 return false;
             }
 
@@ -2482,7 +2557,7 @@
             if (!remoteBranchesResult.IsSuccess)
             {
                 ReportFailure($"リモートブランチ一覧取得に失敗しました: {BuildGitFailureReason(remoteBranchesResult)}");
-                ResetEditorBranchState(clearNewBranchName: false);
+                ResetBranchOperations(clearNewBranchName: false);
                 return false;
             }
 
@@ -2491,17 +2566,17 @@
             if (!remoteNamesResult.IsSuccess)
             {
                 ReportFailure($"リモート名一覧取得に失敗しました: {BuildGitFailureReason(remoteNamesResult)}");
-                ResetEditorBranchState(clearNewBranchName: false);
+                ResetBranchOperations(clearNewBranchName: false);
                 return false;
             }
 
-            if (!string.Equals(repositoryPath, NormalizeRepositoryPath(_editorRepositoryPath), StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(repositoryPath, GetBranchRepositoryPath(), StringComparison.OrdinalIgnoreCase))
             {
                 return false;
             }
 
             var currentBranch = NormalizeBranchName(FirstNonEmptyLine(currentBranchResult.StandardOutput));
-            var previousSelectedBranch = NormalizeBranchName(_editorSelectedBranch);
+            var previousSelectedBranch = NormalizeBranchName(_branchSelection);
             var localBranchNames = localBranchesResult.StandardOutput
                 .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Where(static name => !string.IsNullOrWhiteSpace(name))
@@ -2557,43 +2632,43 @@
                 })
                 .ToList();
 
-            _editorBranches.Clear();
-            _editorBranches.AddRange(branchNames);
-            _editorBranches.AddRange(remoteOnlyBranchNames);
-            _editorLocalBranches.Clear();
+            _branches.Clear();
+            _branches.AddRange(branchNames);
+            _branches.AddRange(remoteOnlyBranchNames);
+            _localBranches.Clear();
             foreach (var branchName in localBranchNames)
             {
-                _editorLocalBranches.Add(branchName);
+                _localBranches.Add(branchName);
             }
 
             if (!string.IsNullOrWhiteSpace(currentBranch))
             {
-                _editorLocalBranches.Add(currentBranch);
+                _localBranches.Add(currentBranch);
             }
 
-            _editorRemoteBranches.Clear();
-            _editorRemoteBranchLocalNames.Clear();
+            _remoteBranches.Clear();
+            _remoteBranchLocalNames.Clear();
             foreach (var remoteBranchName in remoteOnlyBranchNames)
             {
-                _editorRemoteBranches.Add(remoteBranchName);
-                _editorRemoteBranchLocalNames[remoteBranchName] = remoteBranchLocalNames[remoteBranchName];
+                _remoteBranches.Add(remoteBranchName);
+                _remoteBranchLocalNames[remoteBranchName] = remoteBranchLocalNames[remoteBranchName];
             }
 
-            _editorCurrentBranch = currentBranch;
+            _branchCurrent = currentBranch;
 
             if (preserveSelection
                 && !string.IsNullOrWhiteSpace(previousSelectedBranch)
-                && _editorBranches.Any(name => string.Equals(name, previousSelectedBranch, StringComparison.OrdinalIgnoreCase)))
+                && _branches.Any(name => string.Equals(name, previousSelectedBranch, StringComparison.OrdinalIgnoreCase)))
             {
-                _editorSelectedBranch = previousSelectedBranch;
+                _branchSelection = previousSelectedBranch;
             }
             else if (!string.IsNullOrWhiteSpace(currentBranch))
             {
-                _editorSelectedBranch = currentBranch;
+                _branchSelection = currentBranch;
             }
             else
             {
-                _editorSelectedBranch = _editorBranches.FirstOrDefault();
+                _branchSelection = _branches.FirstOrDefault();
             }
 
             if (remoteUpdateSucceeded)
@@ -2601,7 +2676,7 @@
                 ClearRecoveredNotification(operation, repositoryPath);
                 if (fetchRemote)
                 {
-                    ClearRecoveredNotification(nameof(LoadEditorBranchesAsync), repositoryPath);
+                    ClearRecoveredNotification(nameof(LoadBranchesAsync), repositoryPath);
                 }
             }
 
@@ -2611,7 +2686,7 @@
         {
             if (!IsCurrentLoad()) return false;
             ReportFailure($"ブランチ一覧取得に失敗しました: {ex.Message}");
-            ResetEditorBranchState(clearNewBranchName: false);
+            ResetBranchOperations(clearNewBranchName: false);
             return false;
         }
         finally
@@ -2627,9 +2702,9 @@
             : branchName.Trim();
     }
 
-    private string GetEditorBranchOptionLabel(string branchName)
+    private string GetBranchOptionLabel(string branchName)
     {
-        return _editorRemoteBranches.Contains(branchName)
+        return _remoteBranches.Contains(branchName)
             ? $"{branchName} (remote)"
             : branchName;
     }
@@ -2701,26 +2776,26 @@
         return result.GetFailureReason();
     }
 
-    private void ResetEditorBranchState(bool clearNewBranchName)
+    private void ResetBranchOperations(bool clearNewBranchName)
     {
-        ++_editorBranchLoadVersion;
+        ++_branchLoadVersion;
         _isBranchLoading = false;
-        _editorCurrentBranch = null;
-        _editorSelectedBranch = null;
-        _editorBranches.Clear();
-        _editorLocalBranches.Clear();
-        _editorRemoteBranches.Clear();
-        _editorRemoteBranchLocalNames.Clear();
+        _branchCurrent = null;
+        _branchSelection = null;
+        _branches.Clear();
+        _localBranches.Clear();
+        _remoteBranches.Clear();
+        _remoteBranchLocalNames.Clear();
 
         if (clearNewBranchName)
         {
-            _editorNewBranchName = string.Empty;
+            _branchNewName = string.Empty;
         }
     }
 
-    private string GetEditorCurrentBranchLabel()
+    private string GetCurrentBranchLabel()
     {
-        if (NormalizeRepositoryPath(_editorRepositoryPath) is null)
+        if (GetBranchRepositoryPath() is null)
         {
             return "関連リポジトリ未設定";
         }
@@ -2730,23 +2805,23 @@
             return "取得中...";
         }
 
-        return string.IsNullOrWhiteSpace(_editorCurrentBranch)
+        return string.IsNullOrWhiteSpace(_branchCurrent)
             ? "detached HEAD / 不明"
-            : _editorCurrentBranch;
+            : _branchCurrent;
     }
 
     private bool IsBranchSelectionDisabled()
     {
-        return NormalizeRepositoryPath(_editorRepositoryPath) is null
-            || IsEditorOperationBusy
+        return GetBranchRepositoryPath() is null
+            || IsBranchWriting
             || _isBranchLoading
-            || _editorBranches.Count == 0;
+            || _branches.Count == 0;
     }
 
     private bool IsBranchReloadDisabled()
     {
-        return NormalizeRepositoryPath(_editorRepositoryPath) is null
-            || IsEditorOperationBusy
+        return GetBranchRepositoryPath() is null
+            || IsBranchWriting
             || _isBranchLoading;
     }
 
@@ -2757,26 +2832,26 @@
             return true;
         }
 
-        var selectedBranch = NormalizeBranchName(_editorSelectedBranch);
+        var selectedBranch = NormalizeBranchName(_branchSelection);
         if (string.IsNullOrWhiteSpace(selectedBranch))
         {
             return true;
         }
 
-        if (_editorLocalBranches.Contains(selectedBranch))
+        if (_localBranches.Contains(selectedBranch))
         {
-            return string.Equals(selectedBranch, _editorCurrentBranch, StringComparison.OrdinalIgnoreCase);
+            return string.Equals(selectedBranch, _branchCurrent, StringComparison.OrdinalIgnoreCase);
         }
 
-        if (_editorRemoteBranches.Contains(selectedBranch))
+        if (_remoteBranches.Contains(selectedBranch))
         {
-            if (!_editorRemoteBranchLocalNames.TryGetValue(selectedBranch, out var localBranchName)
+            if (!_remoteBranchLocalNames.TryGetValue(selectedBranch, out var localBranchName)
                 || string.IsNullOrWhiteSpace(localBranchName))
             {
                 return true;
             }
 
-            return string.Equals(localBranchName, _editorCurrentBranch, StringComparison.OrdinalIgnoreCase);
+            return string.Equals(localBranchName, _branchCurrent, StringComparison.OrdinalIgnoreCase);
         }
 
         return true;
@@ -2790,7 +2865,7 @@
     private bool IsBranchCreateDisabled()
     {
         return IsBranchCreateInputDisabled()
-            || string.IsNullOrWhiteSpace(NormalizeBranchName(_editorNewBranchName));
+            || string.IsNullOrWhiteSpace(NormalizeBranchName(_branchNewName));
     }
 
     private void AddEditorSaveLink()
@@ -3283,7 +3358,7 @@
                     await Task.Delay(TimeSpan.FromSeconds(1), _stateRefreshCts.Token);
                     gitStatusElapsedSeconds++;
 
-                    var gitStatusRefreshIntervalSeconds = Math.Max(1, _syncDebounceSeconds);
+                    var gitStatusRefreshIntervalSeconds = Math.Max(1, _appliedSettings.SyncDebounceSeconds);
                     if (gitStatusElapsedSeconds >= gitStatusRefreshIntervalSeconds)
                     {
                         gitStatusElapsedSeconds = 0;
@@ -3491,7 +3566,7 @@
         }
     }
 
-    private async Task RefreshEditorGitStatusAsync(string repositoryPath, string? reportFailureForGame = null)
+    private async Task RefreshBranchGitStatusAsync(string repositoryPath, string? reportFailureForGame = null)
     {
         var identity = ResolveGitRepositoryIdentity(repositoryPath);
         SetRegisteredGitIdentity(repositoryPath, identity);
