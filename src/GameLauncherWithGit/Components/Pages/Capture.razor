@@ -493,7 +493,7 @@
         <header class="capture-dialog-header"><h2 id="capture-finish-title">記録を終了</h2>@DialogFailure("記録終了失敗")</header>
         <p>「@SelectedGameTitle」の記録を終了します。保存していない区間は終了すると残りません。</p>
         @if (!CanSaveBeforeFinish) { <p>末尾を固定できる本文がまだありません。</p> }
-        <div class="capture-dialog-actions">
+        <div class="capture-dialog-actions capture-finish-actions">
             <button type="button" class="scenario-action" @onclick="BackFromFinish" disabled="@_busy">戻る</button>
             <button type="button" class="scenario-action capture-danger" @onclick="() => AtScopeAsync(displayedScope, () => FinishDiscardingRangeAsync(finishTarget))" disabled="@_busy">区間を破棄して終了</button>
             <button type="button" class="scenario-action scenario-action--primary" @onclick="() => AtScopeAsync(displayedScope, () => OpenRangeForFinishAsync(finishTarget))" disabled="@(_busy || !CanSaveBeforeFinish)">区間を保存して終了</button>
