@@ -81,6 +81,8 @@ public partial class PlayRecordingPanel
                     Logger.LogWarning("Play recording Web status unavailable ({ExceptionType}).", ex.GetType().Name);
                     // An unavailable status is not a confirmed target change. Hide and disable the view,
                     // but preserve its position and inputs until a successful read resolves the scope.
+                    // An unknown target cannot retain an observed-flow graph.
+                    ClearObservedFlow();
                     _statusError = true;
                     StateHasChanged();
                 }
@@ -173,7 +175,14 @@ public partial class PlayRecordingPanel
         var state = read.State;
         var previous = _state;
         var changed = !SameWorkspace(previous, state);
-        if (changed) ClearTargetData();
+        if (changed)
+        {
+            // A new capture session invalidates the workspace commands but not the same record's flow view.
+            var keepFlow = previous is not null && state is not null && !_statusError
+                && previous.GameId == state.GameId && previous.Target.HistoryRoot == state.Target.HistoryRoot
+                && previous.Target.ScopeVersion == state.Target.ScopeVersion;
+            ClearTargetData(keepFlow);
+        }
         // A pause/resume can be observed from the PC, not only from a Web click.
         if (state is not { Recording: true, CanTakeScreenshot: false }) _waitingAfterResume = false;
         else if (!changed && previous is { Paused: true } or { Recording: true, CanTakeScreenshot: true })
@@ -190,11 +199,23 @@ public partial class PlayRecordingPanel
         }
     }
 
-    private void ClearTargetData()
+    private void ClearTargetData(bool keepFlow = false)
     {
         _workspace = new();
         _state = null;
-        _pane = Pane.Text;
+        if (!keepFlow)
+        {
+            _shellKey = new();
+            _pane = Pane.Text;
+            ClearObservedFlow();
+        }
+        else
+        {
+            // Cancel publication of a superseded read without unmounting the flow child.
+            _flowReadOrder++;
+            _pathsLoading = true;
+            _pathsError = false;
+        }
         _paneNeedsLoad = false;
         _focusNextSharedRange = false;
         _actionError = null;
@@ -220,12 +241,10 @@ public partial class PlayRecordingPanel
         _rangeStartLabels.Clear();
         _labels = [];
         _rangeTags = _speakers = [];
-        _textError = _rangesError = _pathsError = _scenesError = false;
+        _textError = _rangesError = _scenesError = false;
         ClearRangePick();
         CloseTextEditor();
         CloseGallery();
-        _graph = null;
-        _matchingComplete = false;
         _sceneFlow = null;
         _savedScenesOpen = false;
         _savedRangesOpen = false;

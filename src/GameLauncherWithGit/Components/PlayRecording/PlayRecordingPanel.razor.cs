@@ -26,6 +26,7 @@ public partial class PlayRecordingPanel
     private Task? _pollRead;
     private long _displayedConnectionVersion;
     private object _workspace = new();
+    private object _shellKey = new();
     private readonly record struct DisplayTarget(string GameId, PlayRecordingTarget Recording, long ConnectionVersion, object Workspace);
     private DisplayTarget ForDisplay(PlayRecordingState state) => new(state.GameId, state.Target, _displayedConnectionVersion, _workspace);
     private sealed class DisplayChangedException : Exception { }
@@ -258,7 +259,7 @@ public partial class PlayRecordingPanel
         if (!IsWorkspaceCurrent(target)) return;
         _pane = pane;
         if (pane == Pane.Text && _galleryItem is null) _restoreReadingPosition = _readingPosition;
-        if (pane == Pane.Paths ? _graph is null || _pathsError : _textItems is null || _textError)
+        if (pane == Pane.Paths ? _graph is null || _pathsError || _pathsLoading : _textItems is null || _textError)
             await LoadPaneAsync();
     });
 

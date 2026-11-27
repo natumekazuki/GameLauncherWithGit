@@ -171,15 +171,52 @@ public partial class PlayRecordingPanel
             png => _galleryImage = new("data:image/png;base64," + Convert.ToBase64String(png)), () => _galleryError = true);
     }
 
-    private Task LoadPathsAsync()
+    private bool _pathsLoading;
+    private long _flowReadOrder;
+
+    /// <summary>Reads the current root's flow while keeping the existing child hidden until the new result is confirmed.</summary>
+    private async Task LoadPathsAsync()
     {
-        if (_state is not { } state) return Task.CompletedTask;
-        return ReadAsync(ForDisplay(state), "observed flow", gameId => Operations.GetObservedFlowAsync(gameId, state.Target), flow =>
+        if (_state is not { } state) return;
+        var target = ForDisplay(state);
+        var order = ++_flowReadOrder;
+        bool IsCurrentRead() => order == _flowReadOrder && IsWorkspaceCurrent(target);
+        _pathsError = false;
+        _pathsLoading = true;
+        StateHasChanged();
+        try
         {
-            _graph = flow.Graph;
-            _matchingComplete = flow.MatchingComplete;
-            _pathsError = false;
-        }, () => _pathsError = true);
+            await ReadAsync(target, "observed flow", gameId => Operations.GetObservedFlowAsync(gameId, target.Recording), flow =>
+            {
+                if (!IsCurrentRead()) return;
+                _graph = flow.Graph;
+                _matchingComplete = flow.MatchingComplete;
+            }, () =>
+            {
+                if (IsCurrentRead()) _pathsError = true;
+            });
+        }
+        catch (DisplayChangedException) when (IsCurrentRead())
+        {
+            // A stale command on the same root does not make its previous graph current.
+            _pathsError = true;
+        }
+        finally
+        {
+            if (IsCurrentRead())
+            {
+                _pathsLoading = false;
+                if (!_disposed) StateHasChanged();
+            }
+        }
+    }
+
+    /// <summary>Invalidates the graph and any pending publication when the display identity is no longer known.</summary>
+    private void ClearObservedFlow()
+    {
+        _flowReadOrder++;
+        _graph = null;
+        _matchingComplete = _pathsError = _pathsLoading = false;
     }
 
     private Task CutPathAsync(DisplayTarget target, CaptureTextItem item) =>

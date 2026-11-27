@@ -2,7 +2,7 @@
 @implements IAsyncDisposable
 
 <div class="play-recording">
-    <div class="play-shell" data-play-recording-workspace @key="_workspace">
+    <div class="play-shell" data-play-recording-workspace @key="_shellKey">
         <header class="play-header">
             <h1>プレイ記録</h1>
             @if (!_statusError && _state is { } current)
@@ -381,11 +381,17 @@
         @{ var target = ForDisplay(_state!); }
         <div class="scenario-action play-toolbar"><h2 id="play-paths-title">観測した経路</h2><button type="button" class="play-icon-button" title="経路を更新" aria-label="経路を更新" disabled="@_busy" @onclick="() => ReadForDisplayedTargetAsync(target, LoadPathsAsync)"><CaptureIcon Name="Refresh" /></button></div>
         @if (_pathsError) { <div><CaptureFailureDetails Label="経路の取得失敗" Detail="経路を読み込めませんでした。経路を更新してください。" Web="true" /></div> }
-        else if (_graph is null) { <p role="status">経路を読み込み中…</p> }
+        else if (_pathsLoading || _graph is null) { <p role="status">経路を読み込み中…</p> }
         else if (_graph.Occurrences.Count == 0) { <p>観測した経路はありません。</p> }
-        else
+        @if (_graph is { } graph)
         {
-            <div inert="@_busy"><ScenarioFlowView Graph="_graph" MatchingComplete="_matchingComplete" OpenOccurrence="occurrence => OpenOccurrenceAsync(target, occurrence)" CutOccurrence="occurrence => CutOccurrenceAsync(target, occurrence)" /></div>
+            var hidden = _pathsLoading || _pathsError || graph.Occurrences.Count == 0;
+            <div hidden="@hidden" inert="@(_busy || hidden)">
+                <ScenarioFlowView @key="(target.GameId, target.Recording.HistoryRoot, target.ConnectionVersion)"
+                                  Graph="graph" MatchingComplete="_matchingComplete"
+                                  OpenOccurrence="occurrence => OpenOccurrenceAsync(target, occurrence)"
+                                  CutOccurrence="occurrence => CutOccurrenceAsync(target, occurrence)" />
+            </div>
         }
     </section>;
 }
