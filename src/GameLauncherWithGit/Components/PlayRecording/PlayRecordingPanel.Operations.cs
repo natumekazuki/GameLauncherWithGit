@@ -190,8 +190,7 @@ public partial class PlayRecordingPanel
         _graph = null;
         _matchingComplete = false;
         _sceneFlow = null;
-        _sceneDraft = null;
-        _connectionTarget = 0;
+        _savedScenesOpen = false;
         ClearScreenshotResult();
     }
 

@@ -1,0 +1,50 @@
+@if (Snapshot.Scenes.Count == 0)
+{
+    <p>保存済みの手動場面はありません。</p>
+}
+else
+{
+    var names = Snapshot.Scenes.ToDictionary(scene => scene.Id, SceneName);
+    var duplicateNames = names.Values.GroupBy(name => name).Where(group => group.Count() > 1).Select(group => group.Key).ToHashSet();
+    var tags = Snapshot.Tags.ToDictionary(tag => tag.Id, tag => tag.Name);
+    var connections = Snapshot.Connections.ToLookup(edge => edge.FromSceneId, edge => edge.ToSceneId);
+    string DisplayName(long id) => names.TryGetValue(id, out var name) && !duplicateNames.Contains(name) ? name : $"{names.GetValueOrDefault(id, "場面")} #{id}";
+
+    <ul class="saved-scene-list">
+        @* List saved relationships without treating them as observed transitions. *@
+        @foreach (var scene in Snapshot.Scenes)
+        {
+            var definition = scene.Definition;
+            var destinations = connections[scene.Id].Select(DisplayName).ToArray();
+            <li @key="scene.Id">
+                <h3>@DisplayName(scene.Id)</h3>
+                @if (!string.IsNullOrWhiteSpace(definition.Chapter))
+                {
+                    <p>@definition.Chapter</p>
+                }
+                @if (definition.RangeIds.Count > 0)
+                {
+                    <p>区間：@string.Join(" · ", definition.RangeIds.Select(RangeName))</p>
+                }
+                @if (definition.TagIds.Count > 0)
+                {
+                    <p>タグ：@string.Join(" · ", definition.TagIds.Select(id => tags.GetValueOrDefault(id)).OfType<string>())</p>
+                }
+                @if (destinations.Length > 0)
+                {
+                    <p>接続先：@string.Join(" · ", destinations)</p>
+                }
+            </li>
+        }
+    </ul>
+}
+
+@code {
+    [Parameter, EditorRequired] public ScenarioSceneFlowSnapshot Snapshot { get; set; } = default!;
+    [Parameter, EditorRequired] public Func<long, string> RangeName { get; set; } = default!;
+
+    /// <summary>Uses the saved display number when present, without treating it as an identifier.</summary>
+    private static string SceneName(ScenarioScene scene) => string.IsNullOrWhiteSpace(scene.Definition.DisplayNumber)
+        ? scene.Definition.Title
+        : $"{scene.Definition.DisplayNumber} {scene.Definition.Title}";
+}

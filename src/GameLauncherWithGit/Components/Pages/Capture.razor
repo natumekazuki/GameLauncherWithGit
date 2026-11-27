@@ -165,9 +165,9 @@
                 }
                 <div class="capture-tool-group capture-utilities">
                     <button class="secondary-button capture-icon-button" title="観測した経路" aria-label="観測した経路を表示" aria-pressed="@(_flowOpen ? "true" : "false")" @onclick="() => AtScopeAsync(displayedScope, ToggleFlowAsync)" disabled="@(_busy || _recordId == 0)"><CaptureIcon Name="Flow" /></button>
-                    <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" aria-haspopup="dialog" disabled="@_busy"><CaptureIcon Name="Settings" />操作</button>
-                    <section id="capture-tools-menu" class="capture-action-popover" popover="auto" role="dialog" aria-label="シナリオの操作">
-                        <h3>シナリオの操作</h3>
+                    <button @ref="_toolsButton" type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" aria-haspopup="dialog" disabled="@_busy"><CaptureIcon Name="Settings" />その他</button>
+                    <section id="capture-tools-menu" class="capture-action-popover" popover="auto" role="dialog" aria-label="その他の操作">
+                        <h3>その他の操作</h3>
                         <div class="capture-action-list">
                             @if (_live && displayedPlay is { CanStart: true, GameId: not null } && displayedPlay.Target.RecordId == _recordId)
                             {
@@ -192,11 +192,10 @@
                                     <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="() => AtScopeAsync(displayedScope, OpenSelectedDeletionAsync)" disabled="@(_busy || !CanOperateOnSelection)"><CaptureIcon Name="Trash" />選択した本文の原文を削除</button>
                                 }
                             }
-                            <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="() => AtScope(displayedScope, () => OpenSceneEditor())" disabled="@(_busy || _recordId == 0)"><CaptureIcon Name="Edit" />場面フローを編集</button>
                             <button type="button" class="secondary-button capture-text-button" aria-label="スクリーンショット設定" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="OpenScreenshotSettings" disabled="@_busy"><CaptureIcon Name="Camera" />撮影設定</button>
                             <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="OpenExtractionSettings" disabled="@_busy"><CaptureIcon Name="Settings" />抽出設定</button>
-                            <button type="button" class="secondary-button capture-text-button" aria-label="条件の全本文をTXT出力" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="() => AtScopeAsync(displayedScope, () => OpenExportAsync(false))" disabled="@(_busy || _recordId == 0)"><CaptureIcon Name="Export" />本文TXT出力</button>
-                            <button type="button" class="secondary-button capture-text-button" aria-label="条件の全件をZIP出力" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="() => AtScopeAsync(displayedScope, () => OpenExportAsync(true))" disabled="@(_busy || _recordId == 0)"><CaptureIcon Name="Archive" />ZIP出力</button>
+                            <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="() => AtScopeAsync(displayedScope, OpenExportAsync)" disabled="@(_busy || _recordId == 0)"><CaptureIcon Name="Export" />書き出し</button>
+                            <button type="button" class="secondary-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="() => AtScopeAsync(displayedScope, () => OpenSavedScenesAsync(displayedScope!))" disabled="@(_busy || _recordId == 0)">保存済みの手動場面</button>
                             @if (_screenshotCountsError is not null)
                             {
                                 <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="() => AtScopeAsync(displayedScope, RetryScreenshotCountsAsync)" disabled="@_busy"><CaptureIcon Name="Refresh" />画像件数を再読込</button>
@@ -289,14 +288,12 @@
     }
 </section>
 
-@if (_sceneEditorOpen)
+@if (_savedScenes is { } savedScenes)
 {
-    <SceneFlowEditor @key="displayedScope" @ref="_sceneEditor" ProfileId="_profileId" RecordId="_recordId" Title="@ScopeTitle"
-        ValidateScope="() => RequireCurrentScopeAsync(displayedScope)"
-        WriteScope="write => WithHistoryWriteAsync(displayedScope, displayedProfile, _ => write())"
-        Closed="() => IsDisplayed(displayedScope) ? CloseSceneEditorAsync() : Task.CompletedTask"
-        Changed="() => IsDisplayed(displayedScope) ? SceneFlowChangedAsync() : Task.CompletedTask"
-        OpenRange="range => AtScopeAsync(displayedScope, () => OpenSceneRangeAsync(range))" />
+    <div class="modal-backdrop"><section id="capture-editor" class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-scenes-title">
+        <header class="capture-dialog-header"><h2 id="capture-scenes-title">保存済みの手動場面</h2><button class="secondary-button capture-icon-button" aria-label="閉じる" title="閉じる" @onclick="CloseEditors"><CaptureIcon Name="Close" /></button></header>
+        <SavedSceneList Snapshot="savedScenes" RangeName="SavedSceneRangeName" />
+    </section></div>
 }
 
 @if (_independentFlowConfirm)
@@ -618,31 +615,31 @@
 @if (_exportOpen)
 {
     <div class="modal-backdrop"><section id="capture-editor" class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-export-title">
-        <header class="capture-dialog-header"><h2 id="capture-export-title">@(_exportArchive ? "ZIP出力" : "本文TXT出力")</h2><div class="capture-dialog-feedback">@if ((_exportError ?? _error) is { } exportError) { <CaptureFailureDetails Label="出力失敗" Detail="@exportError" /> }</div><button class="secondary-button capture-icon-button" title="キャンセル" aria-label="キャンセル" @onclick="CloseEditors" disabled="@_busy"><CaptureIcon Name="Close" /></button></header>
+        <header class="capture-dialog-header"><h2 id="capture-export-title">書き出し</h2><div class="capture-dialog-feedback">@if (_error is { } exportError) { <CaptureFailureDetails Label="出力失敗" Detail="@exportError" /> }</div><button class="secondary-button capture-icon-button" title="キャンセル" aria-label="キャンセル" @onclick="CloseEditors" disabled="@_busy"><CaptureIcon Name="Close" /></button></header>
         <p class="capture-export-scope">@ExportScope</p>
-        @if (_exportArchive)
-        {
-            <fieldset class="capture-export-mode" disabled="@_busy">
-                <legend>出力内容</legend>
-                <label><input type="radio" name="capture-export-content" checked="@(_exportAccessLevel == ScenarioMaterialAccessLevel.Structure)" @onchange="() => _exportAccessLevel = ScenarioMaterialAccessLevel.Structure" /><span>構造情報のみ（本文・画像本体なし）</span></label>
-                <label><input type="radio" name="capture-export-content" checked="@(_exportAccessLevel == ScenarioMaterialAccessLevel.Full)" @onchange="() => _exportAccessLevel = ScenarioMaterialAccessLevel.Full" /><span>本文・画像を含む完全版</span></label>
-            </fieldset>
-        }
+        <fieldset class="capture-export-mode" disabled="@_busy">
+            <legend>書き出し形式</legend>
+            <label><input type="radio" name="capture-export-content" value="txt" checked="@(_exportFormat == ExportFormat.Text)" @onchange="() => _exportFormat = ExportFormat.Text" /><span>本文TXT</span></label>
+            <label><input type="radio" name="capture-export-content" value="structure" checked="@(_exportFormat == ExportFormat.Structure)" @onchange="() => _exportFormat = ExportFormat.Structure" /><span>構造情報ZIP（本文・画像本体なし）</span></label>
+            <label><input type="radio" name="capture-export-content" value="full" checked="@(_exportFormat == ExportFormat.Full)" @onchange="() => _exportFormat = ExportFormat.Full" /><span>完全版ZIP（本文・画像を含む）</span></label>
+        </fieldset>
         @if (AvailableRangeTags.Length > 0)
         {
             <CaptureTagsEditor Label="このタグの区間だけ含める" @bind-Tags="_exportIncludeTags" AvailableTags="AvailableRangeTags" AllowCreate="false" Disabled="_busy" />
             <CaptureTagsEditor Label="このタグの区間を除外" @bind-Tags="_exportExcludeTags" AvailableTags="AvailableRangeTags" AllowCreate="false" Disabled="_busy" />
             <p class="capture-muted">各欄はいずれかのタグに一致する区間が対象。重なる部分は除外を優先します。</p>
         }
-        <div class="capture-dialog-actions" aria-busy="@(_busy ? "true" : "false")"><button @ref="_exportSaveButton" class="launch-button capture-text-button" @onclick="() => AtScopeAsync(displayedScope, SaveExportAsync)" disabled="@_busy"><CaptureIcon Name="@(_exportArchive ? "Archive" : "Export")" />@(_exportArchive ? "ZIPを保存" : "TXTを保存")</button></div>
+        <div class="capture-dialog-actions" aria-busy="@(_busy ? "true" : "false")"><button @ref="_exportSaveButton" class="launch-button capture-text-button" @onclick="() => AtScopeAsync(displayedScope, SaveExportAsync)" disabled="@_busy"><CaptureIcon Name="@(_exportFormat == ExportFormat.Text ? "Export" : "Archive")" />@(_exportFormat == ExportFormat.Text ? "TXTを保存" : "ZIPを保存")</button></div>
     </section></div>
 }
 
 @code {
     private CaptureSnapshot _snapshot = new();
     private PlayRecordingState? _playState;
-    private bool _flowOpen, _flowMatchingComplete, _independentFlowConfirm, _sceneEditorOpen;
-    private SceneFlowEditor? _sceneEditor;
+    private bool _flowOpen, _flowMatchingComplete, _independentFlowConfirm;
+    private ScenarioSceneFlowSnapshot? _savedScenes;
+    private ElementReference _toolsButton;
+    private bool _restoreToolsFocus;
     private IReadOnlyList<ScenarioGameTag> _gameTags = [];
     private IReadOnlyList<string> _gameSpeakers = [];
     private ScenarioFlowGraph? _flowGraph;
@@ -680,11 +677,11 @@
     private long _managedRangeId;
     private string _managedRangeName = "";
     private string[] _managedRangeTags = [], _rangeTags = [], _exportIncludeTags = [], _exportExcludeTags = [];
-    private bool _exportOpen, _exportArchive;
-    private string? _exportError;
+    private enum ExportFormat { Text, Structure, Full }
+    private bool _exportOpen;
+    private ExportFormat _exportFormat;
     private bool _focusExportSave;
     private ElementReference _exportSaveButton;
-    private ScenarioMaterialAccessLevel _exportAccessLevel = ScenarioMaterialAccessLevel.Structure;
     private string[] AvailableRangeTags => _gameTags.Select(x => x.Name).Concat(_ranges.SelectMany(x => x.Tags)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
     private string ExportScope => string.Join(" · ", new[] { ScopeTitle, _ranges.FirstOrDefault(x => x.Id == _rangeId) is { } range ? RangeName(range) : "全本文", _filter switch { "dialogue" => "セリフ", "narration" => "地の文", "none" => "未判定", _ => "分類すべて" } }
         .Concat(_speakerSearch.Length > 0 ? [$"名前：{_speakerSearch}"] : Array.Empty<string>())
@@ -749,7 +746,7 @@
     private PlayRecordingTarget? _screenshotSettingsTarget;
     private long _rangeListsVersion = -1;
     private string _rangeName = "";
-    private bool EditorOpen => _sceneEditorOpen || _independentFlowConfirm || _exportOpen || _screenshotSettingsOpen || _screenshotItem is not null || _settingsOpen || _bulkOpen || _edit is not null || _partition is not null || _rangeSelection is not null || _historyDialog != HistoryDialog.None;
+    private bool EditorOpen => _savedScenes is not null || _independentFlowConfirm || _exportOpen || _screenshotSettingsOpen || _screenshotItem is not null || _settingsOpen || _bulkOpen || _edit is not null || _partition is not null || _rangeSelection is not null || _historyDialog != HistoryDialog.None;
     private bool FollowingView => _live && _rangeId == 0 && !_pickingRange;
     private bool LatestOrder => _live && _rangeId == 0;
     private bool CanEdit => _rangeId == 0 && !_pickingRange;
@@ -839,6 +836,11 @@
         if (_focusSettingsTab) { _focusSettingsTab = false; if (_settingsOpen) await _module.InvokeVoidAsync("focusSettingsTab"); }
         if (_focusHistoryContent) { _focusHistoryContent = false; await _module.InvokeVoidAsync("focusEditorContent"); }
         if (_restoreFocus) { _restoreFocus = false; await _module.InvokeVoidAsync("restoreFocus"); }
+        if (_restoreToolsFocus && !_busy)
+        {
+            _restoreToolsFocus = false;
+            if (!EditorOpen && _toolsButton.Id is not null) await _toolsButton.FocusAsync(preventScroll: true);
+        }
         if (_focusExportSave && !_busy)
         {
             _focusExportSave = false;
@@ -1126,16 +1128,20 @@
         _focusFeed = _itemsError is null;
     });
     private Task RetryScreenshotCountsAsync() => RunAsync(LoadScreenshotCountsAsync);
-    private void OpenSceneEditor() { _sceneEditorOpen = true; _following = false; _focusEditor = true; }
-    private Task SceneFlowChangedAsync() => LoadScopeListsAsync();
-    private async Task CloseSceneEditorAsync() { _sceneEditorOpen = false; _restoreFocus = true; await SceneFlowChangedAsync(); }
-    private Task OpenSceneRangeAsync(long rangeId) => RunAsync(async () =>
+    /// <summary>Loads the saved manual scenes only for the current history scope.</summary>
+    private Task OpenSavedScenesAsync(DisplayedScope expected) => RunAsync(async () =>
     {
-        _sceneEditorOpen = false; _restoreFocus = true; _live = false; _flowOpen = false; _following = false;
-        _rangeId = rangeId; _filter = "all"; _offset = 0; _selected.Clear(); ClearTextRange();
-        _textSearchInput = _textSearch = _speakerSearchInput = _speakerSearch = "";
-        await SceneFlowChangedAsync(); await LoadItemsAsync(); _scrollToEnd = false;
-    });
+        var snapshot = await SceneStore.GetScenarioSceneFlowAsync(expected.RecordId);
+        // A branch or recording-target switch must not publish the previous scope's scenes.
+        await RequireCurrentScopeAsync(expected);
+        _savedScenes = snapshot;
+        _focusEditor = true;
+    }, failureLabel: "場面の取得失敗");
+
+    /// <summary>Resolves saved scene range references against the displayed history.</summary>
+    private string SavedSceneRangeName(long id) => _ranges.FirstOrDefault(range => range.Id == id) is { } range
+        ? RangeName(range)
+        : $"区間 {id}";
     private Task ToggleRecordingPauseAsync(PlayRecordingTarget expected, bool pause) => RunAsync(async () =>
     {
         await RecordingOperations.PauseDesktopAsync(expected, pause);
@@ -1477,12 +1483,18 @@
         await WriteHistoryAsync(target, _ => Store.SplitCaptureEventAsync(partition.SessionId, partition.Sequence, boundaries, parts));
         CloseEditors(); _selected.Clear(); await LoadItemsAsync();
     }, "分割を保存しました。");
-    private void CloseEditors() { CancelWindowPick(); _error = null; _independentFlowConfirm = false; _exportOpen = false; _screenshotSettingsOpen = false; _screenshotItem = null; _eventScreenshots = null; _galleryImage = null; _galleryError = null; _pausedCandidates = null; _edit = null; _partition = null; _settingsOpen = false; _bulkOpen = false; _rangeSelection = null; _historyDialog = HistoryDialog.None; _deletionTargets = []; _restoreFocus = true; }
+    /// <summary>Closes the active dialog and restores focus to its entry point.</summary>
+    private void CloseEditors()
+    {
+        // The popover item is hidden by the time its dialog receives focus.
+        _restoreToolsFocus |= _exportOpen || _savedScenes is not null;
+        _savedScenes = null;
+        CancelWindowPick(); _error = null; _independentFlowConfirm = false; _exportOpen = false; _screenshotSettingsOpen = false; _screenshotItem = null; _eventScreenshots = null; _galleryImage = null; _galleryError = null; _pausedCandidates = null; _edit = null; _partition = null; _settingsOpen = false; _bulkOpen = false; _rangeSelection = null; _historyDialog = HistoryDialog.None; _deletionTargets = []; _restoreFocus = true;
+    }
     [JSInvokable] public async Task CloseEditorFromKeyboard(string? viewKey)
     {
         if (_displayedScope?.ViewKey != viewKey || _stop.IsCancellationRequested) return;
-        if (_sceneEditorOpen && _sceneEditor is not null) { await _sceneEditor.RequestCloseAsync(); StateHasChanged(); }
-        else if (!_busy) { if (_rangeSelection is { } draft && _rangeDraftTarget is { } target) await CancelRangeDraftAsync(target, draft); else CloseEditors(); StateHasChanged(); }
+        if (!_busy) { if (_rangeSelection is { } draft && _rangeDraftTarget is { } target) await CancelRangeDraftAsync(target, draft); else CloseEditors(); StateHasChanged(); }
     }
     private void OpenScreenshotSettings()
     {
@@ -1549,32 +1561,35 @@
         _galleryImage = null;
         _galleryError = "画像を表示できませんでした。画像ファイルが破損している可能性があります。";
     }
-    private Task OpenExportAsync(bool archive) => RunAsync(async () =>
+    /// <summary>Opens the common export form with the structure-only format selected.</summary>
+    private Task OpenExportAsync() => RunAsync(async () =>
     {
         if (_profile is null) return;
         _ranges = await Store.GetCaptureRangesAsync(_recordId);
         _exportIncludeTags = _exportIncludeTags.Intersect(AvailableRangeTags, StringComparer.Ordinal).ToArray();
         _exportExcludeTags = _exportExcludeTags.Intersect(AvailableRangeTags, StringComparer.Ordinal).ToArray();
-        _exportArchive = archive; _exportAccessLevel = ScenarioMaterialAccessLevel.Structure;
-        _exportError = null;
+        _exportFormat = ExportFormat.Structure;
         _exportOpen = true; _focusEditor = true;
     }, failureLabel: "出力準備失敗");
+
+    /// <summary>Sends the selected format through the existing scoped TXT or archive writer.</summary>
     private Task SaveExportAsync() => RunAsync(async () =>
     {
         if (_profile is not { } profile || !_exportOpen) return;
-        var archive = _exportArchive;
-        _exportError = null;
-        try { await WriteExportAsync(archive, profile.Title); }
-        catch (Exception ex) when (archive) { _exportError = ex.Message; }
-        finally { _focusExportSave = archive && _exportOpen; }
-    });
-    private async Task WriteExportAsync(bool archive, string profileTitle)
+        try { await WriteExportAsync(_exportFormat, profile.Title); }
+        finally { _focusExportSave = _exportOpen; }
+    }, failureLabel: "出力失敗");
+
+    /// <summary>Writes the applied history selection to a new file after revalidating its scope.</summary>
+    private async Task WriteExportAsync(ExportFormat exportFormat, string profileTitle)
     {
         var expected = _displayedScope;
         var recordId = _recordId;
         var scopeTitle = _scopeLabel;
         var rangeName = _ranges.FirstOrDefault(x => x.Id == _rangeId)?.Name;
-        var accessLevel = _exportAccessLevel;
+        // Both ZIP modes keep the existing access-level mapping and selection.
+        var archive = exportFormat != ExportFormat.Text;
+        var accessLevel = exportFormat == ExportFormat.Full ? ScenarioMaterialAccessLevel.Full : ScenarioMaterialAccessLevel.Structure;
         var selection = new ScenarioArchiveSelection(RangeId: _rangeId == 0 ? null : _rangeId,
             UnclassifiedOnly: _filter == "none", Kind: FilterKind, TextSearch: _textSearch, SpeakerSearch: _speakerSearch,
             IncludeTags: _exportIncludeTags.ToArray(), ExcludeTags: _exportExcludeTags.ToArray());
@@ -1586,9 +1601,11 @@
             .Select(x => Path.GetInvalidFileNameChars().Contains(x) ? '_' : x));
         var modeSuffix = archive ? accessLevel == ScenarioMaterialAccessLevel.Structure ? "-structure" : "-full" : "";
         var path = Path.Combine(folder, $"{title}{modeSuffix}-{DateTime.Now:yyyyMMdd-HHmmss-fff}.{(archive ? "zip" : "txt")}");
+        // ZIP uses the shared projection and archive writer.
         if (archive) await Task.Run(() => ScreenshotStore.ExportScenarioArchiveAsync(recordId, selection, path, accessLevel));
         else
         {
+            // TXT exports the effective text in history order without archive metadata.
             var items = await Task.Run(() => Store.GetCaptureExportItemsAsync(recordId, selection));
             await using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write);
             await using var writer = new StreamWriter(file, new UTF8Encoding(false));

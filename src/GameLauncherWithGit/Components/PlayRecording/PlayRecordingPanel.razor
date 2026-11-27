@@ -62,7 +62,6 @@
                         <button type="button" aria-pressed="@Pressed(Pane.Text)" disabled="@_busy" @onclick="() => SelectPaneAsync(workspaceTarget, Pane.Text)">本文</button>
                         <button type="button" class="play-labeled-button" @ref="_rangesTab" aria-pressed="@Pressed(Pane.Ranges)" disabled="@_busy" @onclick="() => SelectPaneAsync(workspaceTarget, Pane.Ranges)"><CaptureIcon Name="Range" />区間</button>
                         <button type="button" class="play-labeled-button" aria-pressed="@Pressed(Pane.Paths)" disabled="@_busy" @onclick="() => SelectPaneAsync(workspaceTarget, Pane.Paths)"><CaptureIcon Name="Flow" />経路</button>
-                        <button type="button" aria-pressed="@Pressed(Pane.Scenes)" disabled="@_busy" @onclick="() => SelectPaneAsync(workspaceTarget, Pane.Scenes)">場面</button>
                     </nav>
                     @switch (_pane)
                     {
@@ -74,9 +73,6 @@
                             break;
                         case Pane.Paths:
                             @PathsPane
-                            break;
-                        case Pane.Scenes:
-                            @ScenesPane
                             break;
                     }
                 </div>
@@ -361,6 +357,24 @@
                 }
             </ul>
         }
+        <div>
+            <button type="button" aria-expanded="@Bool(_savedScenesOpen)" aria-disabled="@Bool(_busy)" @onclick="() => ReadForDisplayedTargetAsync(target, ToggleSavedScenesAsync)">保存済みの手動場面</button>
+        </div>
+        @if (_savedScenesOpen)
+        {
+            @if (_scenesError)
+            {
+                <div><CaptureFailureDetails Label="場面の取得失敗" Detail="保存済みの手動場面を開き直してください。" Web="true" /></div>
+            }
+            else if (_sceneFlow is { } savedScenes)
+            {
+                <SavedSceneList Snapshot="savedScenes" RangeName="SavedSceneRangeName" />
+            }
+            else
+            {
+                <p role="status">場面を読み込み中…</p>
+            }
+        }
     </section>;
 
     private RenderFragment PathsPane => @<section class="play-panel play-stack" aria-labelledby="play-paths-title">
@@ -372,89 +386,6 @@
         else
         {
             <div inert="@_busy"><ScenarioFlowView Graph="_graph" MatchingComplete="_matchingComplete" OpenOccurrence="occurrence => OpenOccurrenceAsync(target, occurrence)" CutOccurrence="occurrence => CutOccurrenceAsync(target, occurrence)" /></div>
-        }
-    </section>;
-
-    private RenderFragment ScenesPane => @<section class="play-panel play-stack" aria-labelledby="play-scenes-title">
-        @{ var target = ForDisplay(_state!); }
-        <div class="play-toolbar"><h2 id="play-scenes-title">手動場面</h2><button type="button" class="play-icon-button" title="場面を更新" aria-label="場面を更新" disabled="@_busy" @onclick="() => ReadForDisplayedTargetAsync(target, LoadScenesAsync)"><CaptureIcon Name="Refresh" /></button></div>
-        @if (_scenesError)
-        {
-            <div><CaptureFailureDetails Label="場面の取得失敗" Detail="場面を読み込めませんでした。場面を更新してください。" Web="true" /></div>
-        }
-        else if (_sceneFlow is null)
-        {
-            <p role="status">場面を読み込み中…</p>
-        }
-        else
-        {
-            <div class="play-actions">
-                <button type="button" class="play-labeled-button" disabled="@_busy" @onclick="() => EditWorkspace(target, NewScene)"><CaptureIcon Name="Plus" />場面を追加</button>
-            </div>
-            @if (_sceneFlow.Scenes.Count > 0)
-            {
-                <label>場面
-                    <select value="@(_sceneDraft?.Id ?? 0)" @onchange="e => EditWorkspace(target, () => SelectScene(e))" disabled="@_busy">
-                        <option value="0">場面を選択</option>
-                        @foreach (var scene in _sceneFlow.Scenes) { <option value="@scene.Id">@SceneName(scene.Definition)</option> }
-                    </select>
-                </label>
-            }
-            else if (_sceneDraft is null)
-            {
-                <p>手動場面はありません。</p>
-            }
-            @if (_sceneDraft is { } draft)
-            {
-                <section class="play-stack play-selection" @key="draft" aria-label="場面の編集">
-                    <h3>@(draft.Id == 0 ? "新しい場面" : "選んだ場面")</h3>
-                    <label>主ラベル <input @bind="draft.Title" @bind:event="oninput" disabled="@_busy" /></label>
-                    <label>表示番号 <input @bind="draft.Number" @bind:event="oninput" disabled="@_busy" /></label>
-                    <label>章見出し <input @bind="draft.Chapter" @bind:event="oninput" disabled="@_busy" /></label>
-                    <CaptureTagsEditor Label="場面タグ" @bind-Tags="draft.Tags" AvailableTags="@SceneTags" AllowCreate="false" Disabled="_busy" />
-                    <fieldset class="play-related" disabled="@_busy">
-                        <legend>対応する区間</legend>
-                        @if (_rangesError) { <CaptureFailureDetails Label="区間の取得失敗" Detail="対応する区間を読み込めませんでした。場面の更新から再試行してください。" Web="true" /> }
-                        else if (_ranges is null) { <p role="status">区間を読み込み中…</p> }
-                        else if (_ranges.Count > 0)
-                        {
-                            @foreach (var range in _ranges)
-                            {
-                                <label @key="range.Id"><input type="checkbox" checked="@draft.RangeIds.Contains(range.Id)" @onchange="e => SetSceneRange(draft, range.Id, e.Value is true)" /> @RangeName(range.Id)</label>
-                            }
-                        }
-                        else { <p>保存した区間はありません。</p> }
-                    </fieldset>
-                    <div class="play-actions">
-                        <button type="button" disabled="@_busy" @onclick="() => EditWorkspace(target, CancelScene)">取消</button>
-                        <button type="button" class="primary play-labeled-button" disabled="@(_busy || _rangesError || string.IsNullOrWhiteSpace(draft.Title))" @onclick="() => SaveSceneAsync(target, draft)"><CaptureIcon Name="Save" />場面を保存</button>
-                    </div>
-                </section>
-                @if (draft.Id != 0)
-                {
-                    <section class="play-stack play-selection" aria-label="場面の有向接続">
-                        <h3>場面の接続</h3>
-                        @foreach (var edge in _sceneFlow.Connections.Where(x => x.ToSceneId == draft.Id))
-                        {
-                            <p>前：@SceneName(edge.FromSceneId) → @SceneName(draft.Id)</p>
-                        }
-                        @foreach (var edge in _sceneFlow.Connections.Where(x => x.FromSceneId == draft.Id))
-                        {
-                            <div class="play-toolbar">
-                                <p>次：@SceneName(draft.Id) → @SceneName(edge.ToSceneId)</p>
-                                <button type="button" class="play-icon-button" title="接続を削除" aria-label="@($"{SceneName(edge.ToSceneId)}への接続を削除")" disabled="@_busy" @onclick="() => SetSceneConnectionAsync(target, edge.FromSceneId, edge.ToSceneId, false)"><CaptureIcon Name="Close" /></button>
-                            </div>
-                        }
-                        <label>次の場面
-                            <select @bind:get="_connectionTarget" @bind:set="value => EditWorkspace(target, () => { if (ReferenceEquals(draft, _sceneDraft)) _connectionTarget = value; })" disabled="@_busy">
-                                <option value="0">接続先を選択</option>
-                                @foreach (var scene in _sceneFlow.Scenes) { <option value="@scene.Id">@SceneName(scene.Definition)</option> }
-                            </select>
-                        </label>
-                        <div><button type="button" class="play-labeled-button" disabled="@(_busy || _connectionTarget == 0)" @onclick="() => SetSceneConnectionAsync(target, draft.Id, _connectionTarget, true)"><CaptureIcon Name="Plus" />接続を追加</button></div>
-                    </section>
-                }
-            }
         }
     </section>;
 }
