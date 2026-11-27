@@ -20,7 +20,7 @@ button:not(.scenario-action):not(.scenario-focus):focus-visible,input:not(.scena
 .capture-operation-result { min-block-size:1.5em; color:var(--scenario-muted); overflow-wrap:anywhere; }
 .capture-shot-result { display:flex; flex:1 0 100%; align-items:center; flex-wrap:wrap; gap:.5rem; min-block-size:2.75rem; color:var(--scenario-muted); }
 .capture-dialog ::deep .scenario-range-draft-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:.5rem; }
-.capture-dialog ::deep .scenario-range-name input { background:var(--scenario-input); color:var(--scenario-text); border:1px solid var(--scenario-border); border-radius:5px; padding:.5rem; min-width:0; width:100%; }
+.capture-dialog ::deep .scenario-range-name input,.capture-detail-pane ::deep .scenario-range-name input { background:var(--scenario-input); color:var(--scenario-text); border:1px solid var(--scenario-border); border-radius:5px; padding:.5rem; min-width:0; width:100%; }
 .capture-text-workspace[hidden],.capture-flow-workspace[hidden],.capture-flow-graph[hidden] { display:none; }
 .capture-filters[hidden] { display:none; }
 .capture-flow-title { font-size:1rem; margin:.5rem 0; }
@@ -84,11 +84,14 @@ input[type=checkbox] { width:1rem; height:1rem; margin:0; accent-color:#85b4ff; 
 .capture-detail-pane ::deep .capture-occurrence-heading { display:flex; justify-content:space-between; gap:.75rem; align-items:center; }
 .capture-detail-pane ::deep .capture-occurrence-heading h3 { font-size:1.1rem; margin:0; }
 .capture-detail-pane ::deep .capture-occurrence-text { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.65; margin:0; }
-.capture-detail-actions,.capture-detail-pane ::deep .capture-occurrence-actions,.capture-detail-pane ::deep .capture-occurrence-image-nav { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; margin-block:.5rem; }
+.capture-detail-actions,.capture-content ::deep .capture-occurrence-actions,.capture-content ::deep .capture-occurrence-image-nav { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; margin-block:.5rem; }
 .capture-detail-pane ::deep .capture-occurrence-detail button { width:auto; }
-.capture-detail-pane ::deep .capture-occurrence-image { margin:0; }
+.capture-content ::deep .capture-occurrence-image { margin:0; }
 .capture-detail-pane ::deep .capture-occurrence-image img { display:block; max-width:100%; max-height:60vh; object-fit:contain; }
 .capture-inline-edit { display:grid; gap:.5rem; margin-block:.6rem; }
+@media (min-width:1500px) {
+    .capture-detail-editing-range { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); align-items:start; gap:1rem; }
+}
 @media (max-width:900px) {
     .capture-text-with-detail { grid-template-columns:minmax(0,1fr); }
     .capture-detail-pane { position:fixed; inset:.65rem; z-index:4; box-shadow:0 0 0 100vmax #0009; }

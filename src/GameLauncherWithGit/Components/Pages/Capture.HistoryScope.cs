@@ -27,15 +27,15 @@ public partial class Capture
     private long _historyChoice;
     private long? _currentRecordId;
     private IReadOnlyList<ScenarioHistoryScope> _historyScopes = [];
-    private string? _scopeLabel, _scopeError;
+    private string? _exportFileScopeLabel, _scopeError;
     private bool ShowHistoryScopes => _profile is not null &&
         (_historyScopes.Any(scope => scope.BranchRef is not null) || _profile.GameId is not null && _currentRecordId != _profileId);
-    private string ScopeTitle => string.Join(" · ", new[] { _profile?.Title, _scopeLabel }.OfType<string>());
-    private string CurrentScopeLabel => _historyScopes.FirstOrDefault(scope => scope.RecordId == _currentRecordId) is { BranchRef: not null } scope
-        ? $"現在のブランチ（{HistoryScopeLabel(scope)}）"
-        : _currentRecordId == _profileId ? "通常の記録" : "現在のブランチ";
+    private string ViewedRecordLabel => ScenarioRecordLabels.ForRecord(_profileId, _displayedScope?.RecordId, _historyScopes);
+    private string ScopeTitle => $"{_profile?.Title} · {ViewedRecordLabel}";
+    private string CurrentScopeLabel => $"現在の記録範囲（{ScenarioRecordLabels.ForRecord(_profileId, _currentRecordId, _historyScopes)}）";
 
-    private string HistoryScopeLabel(ScenarioHistoryScope scope)
+    /// <summary>Preserves existing export file naming independently of the shared display labels.</summary>
+    private string ExportBranchFileLabel(ScenarioHistoryScope scope)
     {
         const string localRef = "refs/heads/";
         if (scope.BranchRef is not { } branch) return "従来の記録";
@@ -72,7 +72,7 @@ public partial class Capture
         if (current) return true;
         ResetScopeContent();
         _displayedScope = null;
-        _scopeLabel = null;
+        _exportFileScopeLabel = null;
         return false;
     }
 
@@ -181,7 +181,7 @@ public partial class Capture
         var scope = _historyScopes.FirstOrDefault(item => item.RecordId == chosen);
         _scopeError = _profile is null || scope is not null ? null
             : error ?? "現在のブランチを特定できません。ブランチを確認して再試行してください。";
-        _scopeLabel = scope?.BranchRef is not null ? HistoryScopeLabel(scope)
+        _exportFileScopeLabel = scope?.BranchRef is not null ? ExportBranchFileLabel(scope)
             : scope is not null && ShowHistoryScopes && _currentRecordId != _profileId ? "従来の記録" : null;
         var boundary = TracksCurrentScope ? currentScope : default;
         if (!reload && (scope?.RecordId ?? 0) == _recordId && (scope is null || _displayedScope?.Boundary == boundary)) return;
