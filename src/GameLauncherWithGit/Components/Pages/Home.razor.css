@@ -104,18 +104,8 @@
 .card-size-control { max-width: 100%; }
 .card-size-label { font-variant-numeric: tabular-nums; }
 .library-page { flex: 1; display: flex; flex-direction: column; padding-block: 1rem 0; }
-.library-loading { flex: 1; display: grid; place-items: center; }
-.library-spinner {
-    width: 2rem;
-    aspect-ratio: 1;
-    border: .2rem solid #354760;
-    border-top-color: #9bcaff;
-    border-radius: 50%;
-    animation: library-spin .85s linear infinite;
-}
-
-@keyframes library-spin { to { transform: rotate(1turn); } }
-@media (prefers-reduced-motion: reduce) { .library-spinner { animation: none; } }
+.library-loading { flex: 1; display: grid; place-items: center; font-size: 2rem; }
+.settings-loading { font-size: .85rem; }
 
 .startup-error-panel h2 { font-size: 1.35rem; }
 

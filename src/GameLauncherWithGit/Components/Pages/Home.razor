@@ -86,8 +86,8 @@
 <section class="library-page" aria-label="ゲーム一覧" tabindex="-1" @ref="_libraryRegion">
     @if (_isStartupChecking || (_isGitReady && _games is null && _libraryLoadError is null))
     {
-        <div class="library-loading" role="status" aria-label="ゲーム一覧を読み込み中">
-            <span class="library-spinner" aria-hidden="true"></span>
+        <div class="library-loading">
+            <ScenarioLoading Label="ゲーム一覧を読み込み中" ShowLabel="false" />
         </div>
     }
     else if (!_isGitReady)
@@ -469,7 +469,13 @@
                  data-dialog-return="home-settings-button" tabindex="-1" @onclick:stopPropagation="true">
             <div class="dialog-heading home-dialog-heading">
                 <h2 id="settings-title" tabindex="-1" data-dialog-initial>設定</h2>
-                @if (HasFeedback && !_isEditorOpen && !_isDeleteConfirmOpen)
+                @if (_isSettingsLoading)
+                {
+                    <div class="home-feedback settings-loading">
+                        <ScenarioLoading Label="設定を読込中…" />
+                    </div>
+                }
+                else if (HasFeedback && !_isEditorOpen && !_isDeleteConfirmOpen && (!_isLogLoading || _notification is not null))
                 {
                     @notificationContent
                 }
@@ -484,10 +490,6 @@
                                @onchange="OnAutoStartChangedAsync"
                                disabled="@(_isSettingsLoading || _isAutoStartSaving)" />
                     </label>
-                    @if (_isSettingsLoading)
-                    {
-                        <p class="settings-note">設定を読み込み中...</p>
-                    }
                 </div>
 
                 @if (OperatingSystem.IsWindows())
@@ -717,7 +719,7 @@
                         <div class="settings-log-list" role="log">
                             @if (_isLogLoading)
                             {
-                                <p class="settings-log-empty">ログを読込中…</p>
+                                <ScenarioLoading Label="ログを読込中…" />
                             }
                             else if (_logViewerError is null && _logViewerEntries.Count == 0)
                             {
