@@ -8,6 +8,7 @@ public partial class PlayRecordingPanel
     private const int TextPageSize = 24;
     private bool _latest = true, _pickingRange;
     private bool _textError, _rangesError, _galleryError, _pathsError, _scenesError;
+    private bool _textLoading, _rangesLoading, _galleryLoading, _scenesLoading;
     private int _galleryIndex;
     private IReadOnlyList<PlayRecordingScreenshot>? _galleryImages;
     private readonly List<CapturePosition> _olderPages = [];
@@ -181,6 +182,7 @@ public partial class PlayRecordingPanel
         _preferredGalleryImageId = null;
         _detailSuccess = null;
         _galleryError = false;
+        _galleryLoading = false;
         _galleryIndex = 0;
         _galleryImages = null;
     }

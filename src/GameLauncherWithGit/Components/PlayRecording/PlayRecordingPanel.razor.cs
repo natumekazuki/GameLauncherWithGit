@@ -30,7 +30,7 @@ public partial class PlayRecordingPanel
     private readonly record struct DisplayTarget(string GameId, PlayRecordingTarget Recording, long ConnectionVersion, object Workspace);
     private DisplayTarget ForDisplay(PlayRecordingState state) => new(state.GameId, state.Target, _displayedConnectionVersion, _workspace);
     private sealed class DisplayChangedException : Exception { }
-    private bool _busy, _disposed, _statusLoaded, _statusError, _paneNeedsLoad;
+    private bool _busy, _disposed, _statusLoaded, _statusLoading, _statusError, _paneNeedsLoad;
     private sealed record OperationFailure(string Label, string Detail);
     private OperationFailure? _actionError;
     private string? _actionSuccess;
@@ -242,7 +242,7 @@ public partial class PlayRecordingPanel
         if (_displayedConnectionVersion == connectionVersion) return connectionVersion;
         _displayedConnectionVersion = connectionVersion;
         ClearTargetData();
-        _statusLoaded = _statusError = false;
+        _statusLoaded = _statusLoading = _statusError = false;
         if (!_disposed) StateHasChanged();
         return connectionVersion;
     }
@@ -259,7 +259,7 @@ public partial class PlayRecordingPanel
         if (!IsWorkspaceCurrent(target)) return;
         _pane = pane;
         if (pane == Pane.Text && _galleryItem is null) _restoreReadingPosition = _readingPosition;
-        if (pane == Pane.Paths ? _graph is null || _pathsError || _pathsLoading : _textItems is null || _textError)
+        if (pane == Pane.Paths ? _graph is null || _pathsError || _pathsNeedReload : _textItems is null || _textError)
             await LoadPaneAsync();
     });
 

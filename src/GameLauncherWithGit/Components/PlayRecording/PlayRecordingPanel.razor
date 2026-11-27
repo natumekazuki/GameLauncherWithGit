@@ -26,11 +26,11 @@
         }
         @if (_state is not { } displayed)
         {
-            if (!_statusError && !_statusLoaded)
+            if (!_statusError && _statusLoading)
             {
-                <p role="status">記録対象を読み込み中…</p>
+                <ScenarioLoading Label="記録対象を読み込み中…" />
             }
-            else if (!_statusError)
+            else if (!_statusError && _statusLoaded)
             {
                 <p role="status">PCのプレイ対象を待っています。</p>
             }
@@ -229,7 +229,7 @@
         <div class="play-text-scroll scenario-focus" @ref="_textScroller" tabindex="0" aria-label="本文一覧">
         @if (_textItems is null)
         {
-            @if (!_textError) { <p role="status">本文を読み込み中…</p> }
+            @if (_textLoading && !_textError) { <ScenarioLoading Label="本文を読み込み中…" /> }
         }
         else if (_textItems.Count == 0)
         {
@@ -305,7 +305,7 @@
             var shownImage = _galleryImage;
             <CaptureOccurrenceDetail @key="key" RecordId="key.RecordId" Item="item"
                 ImageCount="@_galleryImages?.Count" ImageIndex="_galleryIndex" ImageSource="@shownImage?.Source"
-                ImagesLoading="@(!_galleryError && (_galleryImages is null || _galleryImages.Count > 0 && shownImage is null))"
+                ImagesLoading="_galleryLoading"
                 ImageError="@(_galleryError ? "選んだ本文の画像を読み込めませんでした。" : null)" Disabled="ControlsDisabled"
                 Close="selected => { if (IsDetailCurrent(target, selected)) ReturnFromGallery(); }"
                 Edit="selected => IsDetailCurrent(target, selected) ? EditTextAsync(target, item) : Task.CompletedTask"
@@ -340,15 +340,15 @@
         {
             <div><CaptureFailureDetails Label="区間の取得失敗" Detail="区間を読み込めませんでした。区間を更新してください。" Web="true" /></div>
         }
-        else if (_ranges is null)
+        else if (_rangesLoading && _ranges is null)
         {
-            <p role="status">区間を読み込み中…</p>
+            <ScenarioLoading Label="区間を読み込み中…" />
         }
-        else if (_ranges.Count == 0)
+        else if (_ranges is { Count: 0 })
         {
             <p>保存した区間はありません。</p>
         }
-        else
+        else if (_ranges is not null)
         {
             <ul class="play-list">
                 @foreach (var range in _ranges)
@@ -376,9 +376,9 @@
             {
                 <SavedSceneList Snapshot="savedScenes" RangeName="SavedSceneRangeName" />
             }
-            else
+            else if (_scenesLoading)
             {
-                <p role="status">場面を読み込み中…</p>
+                <ScenarioLoading Label="場面を読み込み中…" />
             }
         }
     </section>;
@@ -387,11 +387,11 @@
         @{ var target = ForDisplay(_state!); }
         <div class="play-toolbar"><h2 id="play-paths-title">観測した経路</h2><button type="button" class="scenario-action play-icon-button" title="経路を更新" aria-label="経路を更新" disabled="@_busy" @onclick="() => ReadForDisplayedTargetAsync(target, LoadPathsAsync)"><CaptureIcon Name="Refresh" /></button></div>
         @if (_pathsError) { <div><CaptureFailureDetails Label="経路の取得失敗" Detail="経路を読み込めませんでした。経路を更新してください。" Web="true" /></div> }
-        else if (_pathsLoading || _graph is null) { <p role="status">経路を読み込み中…</p> }
-        else if (_graph.Occurrences.Count == 0) { <p>観測した経路はありません。</p> }
+        else if (_pathsLoading) { <ScenarioLoading Label="経路を読み込み中…" /> }
+        else if (_graph is { Occurrences.Count: 0 }) { <p>観測した経路はありません。</p> }
         @if (_graph is { } graph)
         {
-            var hidden = _pathsLoading || _pathsError || graph.Occurrences.Count == 0;
+            var hidden = _pathsLoading || _pathsNeedReload || _pathsError || graph.Occurrences.Count == 0;
             <div hidden="@hidden" inert="@(_busy || hidden)">
                 <ScenarioFlowView @key="(target.GameId, target.Recording.HistoryRoot, target.ConnectionVersion)"
                                   Graph="graph" MatchingComplete="_matchingComplete"

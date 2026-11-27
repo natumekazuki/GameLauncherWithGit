@@ -69,6 +69,12 @@ public partial class PlayRecordingPanel
         if (_disposed || !WebSession.IsConnectionCurrent(connectionVersion)) throw new DisplayChangedException();
         var order = ++_nextStatusRead;
         PlayRecordingState? state;
+        // The initial query is distinct from a completed query with no current PC target.
+        if (!_statusLoaded && !_statusError)
+        {
+            _statusLoading = true;
+            StateHasChanged();
+        }
         try { state = await Operations.GetCurrentStateAsync(); }
         catch (Exception ex)
         {
@@ -88,6 +94,11 @@ public partial class PlayRecordingPanel
                 }
             }
             throw new DisplayChangedException();
+        }
+        finally
+        {
+            if (!_disposed && WebSession.IsConnectionCurrent(connectionVersion) && order == _nextStatusRead)
+                _statusLoading = false;
         }
         var visible = state is not null && !string.IsNullOrEmpty(state.GameId) ? state : null;
         return new(order, visible);
@@ -117,8 +128,15 @@ public partial class PlayRecordingPanel
         return true;
     });
 
-    private async Task ReadAsync<T>(DisplayTarget target, string section, Func<string, Task<T>> read, Action<T> apply, Action failed)
+    private async Task ReadAsync<T>(DisplayTarget target, string section, Func<string, Task<T>> read, Action<T> apply, Action failed,
+        Action<bool>? setLoading = null)
     {
+        if (!IsDisplayedTargetCurrent(target)) throw new DisplayChangedException();
+        if (setLoading is not null)
+        {
+            setLoading(true);
+            StateHasChanged();
+        }
         try
         {
             var value = await UseAsync(target, read);
@@ -129,6 +147,14 @@ public partial class PlayRecordingPanel
             if (!IsWorkspaceCurrent(target)) throw new DisplayChangedException();
             Logger.LogWarning("Play recording Web read failed for {Section} ({ExceptionType}).", section, ex.GetType().Name);
             failed();
+        }
+        finally
+        {
+            if (setLoading is not null && IsWorkspaceCurrent(target))
+            {
+                setLoading(false);
+                StateHasChanged();
+            }
         }
     }
 
@@ -213,7 +239,8 @@ public partial class PlayRecordingPanel
         {
             // Cancel publication of a superseded read without unmounting the flow child.
             _flowReadOrder++;
-            _pathsLoading = true;
+            _pathsLoading = false;
+            _pathsNeedReload = true;
             _pathsError = false;
         }
         _paneNeedsLoad = false;
@@ -242,6 +269,7 @@ public partial class PlayRecordingPanel
         _labels = [];
         _rangeTags = _speakers = [];
         _textError = _rangesError = _scenesError = false;
+        _textLoading = _rangesLoading = _scenesLoading = false;
         ClearRangePick();
         CloseTextEditor();
         CloseGallery();
@@ -260,7 +288,7 @@ public partial class PlayRecordingPanel
                 _ranges = ranges;
                 _rangeTags = ranges.SelectMany(x => x.Tags).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
                 _rangesError = false;
-            }, () => _rangesError = true);
+            }, () => _rangesError = true, loading => _rangesLoading = loading);
         // Only duplicate names need a distinguishing date; resolve their original start in this record.
         if (!_rangesError && _ranges is { } saved)
         {
