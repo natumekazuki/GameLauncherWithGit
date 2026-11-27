@@ -257,8 +257,8 @@
 :is(.home-header, .utility-bar, .library-page, .startup-error-panel, .editor-overlay)
     :is(a, button, summary, input, select):focus-visible,
 .library-page:focus-visible {
-    outline: 2px solid #9bcaff;
-    outline-offset: 2px;
+    outline: var(--scenario-focus);
+    outline-offset: var(--scenario-focus-offset);
 }
 
 .home-card-selection:focus-visible {

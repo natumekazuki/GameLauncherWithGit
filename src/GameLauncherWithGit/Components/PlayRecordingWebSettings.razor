@@ -14,8 +14,8 @@
         @if (_address is not null)
         {
             <div class="recording-web-actions">
-                <button type="button" class="secondary-button" disabled="@_busy" @onclick="CopyAsync">@_copyLabel</button>
-                <button type="button" class="secondary-button" disabled="@_busy" @onclick="OpenAsync">@_openLabel</button>
+                <button type="button" class="scenario-action" disabled="@_busy" @onclick="CopyAsync">@_copyLabel</button>
+                <button type="button" class="scenario-action" disabled="@_busy" @onclick="OpenAsync">@_openLabel</button>
                 <span class="recording-web-announcement" role="status">@_actionStatus</span>
             </div>
         }
