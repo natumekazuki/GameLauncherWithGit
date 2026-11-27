@@ -25,6 +25,8 @@
     var displayedPlay = _playState;
     var liveSnapshot = _snapshot.Profile?.Id == _profileId ? _snapshot : new CaptureSnapshot { Status = _profileId == 0 ? "未接続" : "記録開始前" };
     var displayedGameId = SelectedGameId;
+    var sameRecordingDestination = displayedScope is not null && displayedPlay is not null &&
+        displayedPlay.GameId == displayedGameId && displayedPlay.Target.RecordId == displayedScope.RecordId;
     var displayedWorkId = _profileId;
     var displayedPaused = _snapshot.Paused;
     var displayedProcessId = _processId;
@@ -75,11 +77,19 @@
             @if (SelectedGameTitle is { } title)
             {
                 <strong>@title</strong>
-                <span>@(ViewingLiveRecord ? "記録先" : "閲覧中")：@(_scopeLabel ?? "通常の記録")</span>
+                @if (sameRecordingDestination)
+                {
+                    <span>記録先：@displayedPlay!.RecordingDestinationLabel</span>
+                }
+                else
+                {
+                    <span>閲覧中：@ViewedRecordLabel</span>
+                }
             }
-            @if (displayedPlay is { GameId: not null } current && !ViewingLiveRecord)
+            @if (displayedPlay is { GameId: not null } current && !sameRecordingDestination)
             {
-                <button class="secondary-button capture-text-button" @onclick="() => ReturnToRecordingAsync(current.GameId)" disabled="@_busy">記録先：@current.Title</button>
+                var recordTitle = current.GameId == displayedGameId ? current.RecordingDestinationLabel : $"{current.Title} · {current.RecordingDestinationLabel}";
+                <button class="secondary-button capture-text-button" @onclick="() => ReturnToRecordingAsync(current.GameId)" disabled="@_busy">記録先：@recordTitle</button>
             }
         </div>
         @if (ViewingLiveRecord || ViewingSetup)
@@ -142,7 +152,7 @@
                             @if (_profile?.GameId is not null) { <option value="0">@CurrentScopeLabel</option> }
                             @foreach (var scope in _historyScopes)
                             {
-                                <option value="@scope.RecordId">@HistoryScopeLabel(scope)</option>
+                                <option value="@scope.RecordId">@ScenarioRecordLabels.ForRecord(_profileId, scope.RecordId, _historyScopes)</option>
                             }
                         </select></label>
                     }
@@ -1012,7 +1022,7 @@
         _displayedScope = null;
         _historyScopes = [];
         _currentRecordId = null;
-        _scopeLabel = _scopeError = null;
+        _exportFileScopeLabel = _scopeError = null;
         _profile = _profiles.FirstOrDefault(x => x.Id == _profileId);
         _historyChoice = _profile?.GameId is null ? _profileId : 0;
         _labels = _profile is null ? [] : await Store.GetCaptureLabelsAsync(_profile.Id);
@@ -1696,7 +1706,7 @@
     {
         var expected = _displayedScope;
         var recordId = _recordId;
-        var scopeTitle = _scopeLabel;
+        var scopeTitle = _exportFileScopeLabel;
         var rangeName = _ranges.FirstOrDefault(x => x.Id == _rangeId)?.Name;
         // Both ZIP modes keep the existing access-level mapping and selection.
         var archive = exportFormat != ExportFormat.Text;
