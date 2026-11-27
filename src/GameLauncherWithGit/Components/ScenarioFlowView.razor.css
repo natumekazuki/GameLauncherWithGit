@@ -114,6 +114,9 @@
 .flow-occurrence { margin-block-start: .75rem; }
 .flow-occurrence p { max-inline-size: 76ch; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
 .flow-connections { margin-block-end: 0; }
+.flow-occurrence-images { min-inline-size: 0; }
+.flow-occurrence-images:not(:empty) { margin-block-start: .75rem; }
+.flow-occurrence-images ::deep img { max-inline-size: 100%; block-size: auto; }
 
 @container (min-width: 52rem) {
     .flow-workarea { --flow-height: max(13rem, calc(100dvh - 15rem)); }
