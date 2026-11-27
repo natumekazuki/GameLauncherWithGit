@@ -16,6 +16,8 @@
     overflow-wrap: anywhere;
 }
 
+.recording-web-settings code { color: inherit; }
+
 .recording-web-actions {
     display: flex;
     flex-wrap: wrap;
