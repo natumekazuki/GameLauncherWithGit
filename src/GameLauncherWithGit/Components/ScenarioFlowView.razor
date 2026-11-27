@@ -75,6 +75,10 @@
                         <button type="button" class="scenario-action" @onclick="() => CutOccurrence.InvokeAsync(selected)" disabled="@selected.CutBefore"><CaptureIcon Name="PathBreak" />ここから別経路</button>
                     </div>
                     <p class="flow-connections">@ConnectionSummary(selected)</p>
+                    @if (OccurrenceImages is { } renderImages)
+                    {
+                        <div class="flow-occurrence-images">@renderImages(selected)</div>
+                    }
                 </div>
             </div>
         }
@@ -95,6 +99,7 @@
     [Parameter] public bool MatchingComplete { get; set; }
     [Parameter] public EventCallback<ScenarioFlowOccurrence> OpenOccurrence { get; set; }
     [Parameter] public EventCallback<ScenarioFlowOccurrence> CutOccurrence { get; set; }
+    [Parameter] public RenderFragment<ScenarioFlowOccurrence>? OccurrenceImages { get; set; }
 
     private readonly string _arrowId = $"flow-arrow-{Guid.NewGuid():N}";
     private ScenarioFlowGraph? _laidOutGraph;
