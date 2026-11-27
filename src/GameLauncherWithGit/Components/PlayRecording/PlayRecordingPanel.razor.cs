@@ -306,16 +306,4 @@ public partial class PlayRecordingPanel
         _ => "未判定"
     };
 
-    /// <summary>Shows only the current record label, never another branch selection.</summary>
-    private static string RecordingRootLabel(PlayRecordingState state)
-    {
-        const string heads = "refs/heads/";
-        return state.RecordingBranchRef switch
-        {
-            { } branch when branch.StartsWith(heads, StringComparison.Ordinal) => branch[heads.Length..],
-            { } branch => branch,
-            _ => "作品の記録"
-        };
-    }
-
 }
