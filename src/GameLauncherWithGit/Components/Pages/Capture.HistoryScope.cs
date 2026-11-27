@@ -208,6 +208,7 @@ public partial class Capture
         var hadView = _displayedScope is not null;
         var editorWasOpen = EditorOpen;
         CloseEditors();
+        ClearRangeDraft();
         _restoreFocus |= editorWasOpen;
         _focusFeed |= hadView && !editorWasOpen;
         _focusEditor = _focusExportSave = _focusRangeFilter = _focusHistoryContent = false;

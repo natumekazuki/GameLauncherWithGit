@@ -23,16 +23,19 @@ export function focusEditorContent() {
 let previousFocus;
 let previousBodyStyle;
 export function focusEditor(owner, scope) {
-    previousFocus = document.activeElement;
     const dialog = document.getElementById('capture-editor');
     if (!dialog) return;
     const controls = () => [...dialog.querySelectorAll('button, input, select, textarea, [tabindex="0"]')]
         .filter(x => !x.disabled && x.getClientRects().length > 0 && getComputedStyle(x).visibility !== 'hidden');
-    document.querySelector('.capture-page')?.setAttribute('inert', '');
-    previousBodyStyle = { overflow: document.body.style.overflow, paddingRight: document.body.style.paddingRight };
-    const scrollbar = window.innerWidth - document.documentElement.clientWidth;
-    if (scrollbar > 0) document.body.style.paddingRight = `${parseFloat(getComputedStyle(document.body).paddingRight) + scrollbar}px`;
-    document.body.style.overflow = 'hidden';
+    // A finish confirmation can replace the range editor and back again; restore the first opener.
+    if (!previousBodyStyle) {
+        previousFocus = document.activeElement;
+        document.querySelector('.capture-page')?.setAttribute('inert', '');
+        previousBodyStyle = { overflow: document.body.style.overflow, paddingRight: document.body.style.paddingRight };
+        const scrollbar = window.innerWidth - document.documentElement.clientWidth;
+        if (scrollbar > 0) document.body.style.paddingRight = `${parseFloat(getComputedStyle(document.body).paddingRight) + scrollbar}px`;
+        document.body.style.overflow = 'hidden';
+    }
     const elements = controls();
     (elements.find(x => x.matches('input, select, textarea')) ?? elements[0])?.focus({ preventScroll: true });
     dialog.onkeydown = event => {

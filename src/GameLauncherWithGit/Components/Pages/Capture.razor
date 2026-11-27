@@ -80,36 +80,37 @@
                 <button class="secondary-button capture-text-button" @onclick="() => ReturnToRecordingAsync(current.GameId)" disabled="@_busy">記録先：@current.Title</button>
             }
         </div>
-        @if (ViewingLiveRecord)
+        @if (ViewingLiveRecord || ViewingSetup)
         {
-            <div class="capture-livebar">
-                <strong class="capture-game-title">@SelectedGameTitle</strong>
-                <div class="capture-recording-actions" aria-label="記録と経路">
-                    <button class="secondary-button capture-icon-button" title="@(liveSnapshot.Paused ? "記録を再開（次の本文から別経路）" : "記録を一時停止")" aria-label="@(liveSnapshot.Paused ? "記録を再開" : "記録を一時停止")" aria-pressed="@(liveSnapshot.Paused ? "true" : "false")" @onclick="() => AtScopeAsync(displayedScope, () => ToggleRecordingPauseAsync(displayedLive, !displayedPaused))" disabled="@(_busy || !liveSnapshot.Connected || liveSnapshot.Preview)"><CaptureIcon Name="@(liveSnapshot.Paused ? "Play" : "Pause")" /></button>
-                    <button class="secondary-button capture-icon-button" title="次の本文から別経路" aria-label="次の本文から別経路" @onclick="() => AtScopeAsync(displayedScope, () => BreakLivePathAsync(displayedLive))" disabled="@(_busy || !liveSnapshot.Recording)"><CaptureIcon Name="PathBreak" /></button>
-                </div>
-                <div class="capture-play-range" aria-label="プレイ中の区間指定">
-                    <span class="capture-range-caption">区間</span>
-                    <button class="launch-button capture-icon-button" title="区間を開始" aria-label="区間を開始" @onclick="() => AtScopeAsync(displayedScope, () => StartLiveRangeAsync(displayedLive))" disabled="@(_busy || !liveSnapshot.RangeCanStart || displayedPending is not null)"><CaptureIcon Name="Start" /></button>
-                    @if (displayedPending is null)
+            <section class="capture-livebar" aria-label="記録操作">
+                <ScenarioRecordingBar State="RecordingDisplay" Disabled="_busy"
+                    ShowControls="@(ViewingLiveRecord && (liveSnapshot.Recording || liveSnapshot.Paused))"
+                    CanTogglePause="@(liveSnapshot.Connected && !liveSnapshot.Preview)" CanBreakPath="liveSnapshot.Recording"
+                    TogglePause="() => AtScopeAsync(displayedScope, () => ToggleRecordingPauseAsync(displayedLive, !displayedPaused))"
+                    BreakPath="() => AtScopeAsync(displayedScope, () => BreakLivePathAsync(displayedLive))">
+                    @if (ViewingLiveRecord && displayedPlay is { CanStart: true })
                     {
-                        <button class="launch-button capture-icon-button" title="末尾を固定" aria-label="末尾を固定" @onclick="() => AtScopeAsync(displayedScope, () => EndLiveRangeAsync(displayedLive))" disabled="@(_busy || !liveSnapshot.RangeCanEnd)"><CaptureIcon Name="End" /></button>
+                        <button class="secondary-button scenario-action scenario-action--primary" @onclick="() => AtScopeAsync(displayedScope, () => StartRecordingAsync(displayedPlay))" disabled="@_busy">記録を開始</button>
                     }
-                    else
+                    else if (CanPrepareRecording && displayedGameId is not null)
                     {
-                        <button class="launch-button capture-icon-button" title="区間を保存" aria-label="固定した区間を保存" @onclick="() => AtScope(displayedScope, () => OpenRangeDraft(displayedPending, displayedLive))" disabled="@_busy"><CaptureIcon Name="Save" /></button>
+                        <button class="secondary-button scenario-action scenario-action--primary" @onclick="() => PrepareRecordingAsync(displayedGameId, displayedWorkId)" disabled="@_busy">記録の準備</button>
                     }
-                    <button class="secondary-button capture-icon-button" title="区間指定を取消" aria-label="区間指定を取消" @onclick="() => AtScopeAsync(displayedScope, () => CancelLiveRangeAsync(displayedLive, displayedPending))" disabled="@(_busy || (liveSnapshot.RangeStart is null && displayedPending is null))"><CaptureIcon Name="Close" /></button>
-                </div>
-                <div class="capture-live-details">
-                    <span class="capture-connection" role="status">@ShortCaptureStatus(liveSnapshot.Status)</span>
-                    <span class="capture-count" title="今回の受信" aria-label="@($"今回の受信 {liveSnapshot.Received}件")"><CaptureIcon Name="Receive" />@liveSnapshot.Received</span>
-                    <span class="capture-count" title="今回の保存" aria-label="@($"今回の保存 {liveSnapshot.Saved}件")"><CaptureIcon Name="Save" />@liveSnapshot.Saved</span>
-                    <span class="capture-loss @(liveSnapshot.Lost == 0 ? "capture-hidden" : "")" title="未保存・破棄（未選択候補を含む）" aria-label="@($"未保存・破棄 {liveSnapshot.Lost}件、未選択候補を含む")"><CaptureIcon Name="Warning" />@liveSnapshot.Lost</span>
-                    <span class="capture-range-active @(liveSnapshot.RangeStart is null ? "capture-hidden" : "")" role="status">区間指定中</span>
-                </div>
-            </div>
+                    @if (ViewingLiveRecord && displayedPlay?.CanFinish == true)
+                    {
+                        <details class="capture-live-range-menu">
+                            <summary class="scenario-focus">@(liveSnapshot.RangeStart is not null || displayedPending is not null ? "区間指定中" : "区間")</summary>
+                            <div class="capture-play-range">
+                                <button class="secondary-button scenario-action" @onclick="() => AtScopeAsync(displayedScope, () => StartLiveRangeAsync(displayedLive))" disabled="@(_busy || !liveSnapshot.RangeCanStart || displayedDraft is not null || displayedPending is not null)">区間を開始</button>
+                                <button class="secondary-button scenario-action" @onclick="() => AtScopeAsync(displayedScope, () => EndLiveRangeAsync(displayedLive))" disabled="@(_busy || !liveSnapshot.RangeCanEnd || displayedDraft is not null || displayedPending is not null)">末尾を固定</button>
+                                <button class="secondary-button scenario-action" @onclick="() => AtScopeAsync(displayedScope, () => CancelLiveRangeAsync(displayedLive, displayedPending))" disabled="@(_busy || (liveSnapshot.RangeStart is null && displayedPending is null))">区間指定を破棄</button>
+                            </div>
+                        </details>
+                    }
+                </ScenarioRecordingBar>
+            </section>
         }
+        <div class="capture-operation-result" role="status">@_message</div>
         <section class="capture-content" aria-busy="@(_busy ? "true" : "false")">
             <div class="capture-filters @(ShowHistoryScopes ? "capture-filters-scoped" : "")" hidden="@_flowOpen">
                 @if (_profiles.Count > 0)
@@ -166,11 +167,15 @@
                 </div>
                 @if (!_flowOpen)
                 {
+                    @if (!_rangeEditorOpen && (displayedDraft ?? displayedPending) is { } draftToOpen)
+                    {
+                        <button class="secondary-button scenario-action" @onclick="() => AtScope(displayedScope, () => OpenRangeDraft(draftToOpen, displayedDraftTarget ?? displayedLive))" disabled="@_busy">区間草稿を開く</button>
+                    }
                     <div class="capture-tool-group" aria-label="本文で区間指定">
                         <button class="secondary-button capture-icon-button" title="本文から区間を選ぶ" aria-label="本文から区間を選ぶ" aria-pressed="@(_pickingRange ? "true" : "false")" @onclick="() => AtScopeAsync(displayedScope, ToggleTextRange)" disabled="@(_busy || _recordId == 0)"><CaptureIcon Name="Pick" /></button>
                         @if (_pickingRange)
                         {
-                            <button class="secondary-button capture-icon-button" title="区間名を入力" aria-label="区間名を入力" @onclick="() => AtScopeAsync(displayedScope, () => OpenTextRangeAsync(displayedProfile, displayedFirst, displayedLast))" disabled="@(_busy || !TextRangeValid)"><CaptureIcon Name="Save" /></button>
+                            <button class="secondary-button capture-icon-button" title="区間名を入力" aria-label="区間名を入力" @onclick="() => AtScopeAsync(displayedScope, () => OpenTextRangeAsync(displayedProfile, displayedFirst, displayedLast))" disabled="@(_busy || !TextRangeValid || displayedDraft is not null || displayedPending is not null || (ViewingLiveRecord && liveSnapshot.RangeStart is not null))"><CaptureIcon Name="Save" /></button>
                             <button class="secondary-button capture-icon-button" title="本文の区間指定を解除" aria-label="本文の区間指定を解除" @onclick="() => AtScopeAsync(displayedScope, ClearTextRangeAsync)" disabled="@_busy"><CaptureIcon Name="Close" /></button>
                             <button class="secondary-button capture-icon-button" title="選択範囲を独立したフローチャートにする" aria-label="選択範囲を独立したフローチャートにする" @onclick="() => AtScope(displayedScope, () => OpenIndependentFlow())" disabled="@(_busy || !TextRangeValid)"><CaptureIcon Name="Flow" /></button>
                         }
@@ -182,17 +187,9 @@
                     <section id="capture-tools-menu" class="capture-action-popover" popover="auto" role="dialog" aria-label="その他の操作">
                         <h3>その他の操作</h3>
                         <div class="capture-action-list">
-                            @if (ViewingLiveRecord && displayedPlay is { CanStart: true, GameId: not null })
-                            {
-                                <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="() => AtScopeAsync(displayedScope, () => StartRecordingAsync(displayedPlay))" disabled="@_busy"><CaptureIcon Name="Play" />記録を開始</button>
-                            }
                             @if (ViewingLiveRecord && displayedPlay is { CanFinish: true })
                             {
-                                <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="() => AtScopeAsync(displayedScope, () => FinishRecordingAsync(displayedLive))" disabled="@_busy"><CaptureIcon Name="Stop" />記録を終了</button>
-                            }
-                            @if (CanPrepareRecording && displayedGameId is not null)
-                            {
-                                <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="() => PrepareRecordingAsync(displayedGameId, displayedWorkId)" disabled="@_busy"><CaptureIcon Name="Link" />記録の準備</button>
+                                <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="() => AtScopeAsync(displayedScope, () => RequestFinishAsync(displayedLive))" disabled="@_busy"><CaptureIcon Name="Stop" />記録を終了</button>
                             }
                             @if (!_flowOpen)
                             {
@@ -440,22 +437,36 @@
     </section></div>
 }
 
-<span class="capture-sr-only" role="status">@_message</span>
-
 @code {
     private RenderFragment DialogFailure(string label) => @<div class="capture-dialog-feedback">
         @if (_error is not null) { <CaptureFailureDetails Label="@label" Detail="@_error" /> }
     </div>;
 }
 
-@if (_rangeSelection is not null)
+@if (_finishOpen && _finishTarget is { } finishTarget)
+{
+    <div class="modal-backdrop"><section id="capture-editor" class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-finish-title">
+        <header class="capture-dialog-header"><h2 id="capture-finish-title">記録を終了</h2>@DialogFailure("記録終了失敗")</header>
+        <p>「@SelectedGameTitle」の記録を終了します。保存していない区間は終了すると残りません。</p>
+        @if (!CanSaveBeforeFinish) { <p>末尾を固定できる本文がまだありません。</p> }
+        <div class="capture-dialog-actions">
+            <button type="button" class="secondary-button scenario-action" @onclick="BackFromFinish" disabled="@_busy">戻る</button>
+            <button type="button" class="secondary-button scenario-action capture-danger" @onclick="() => AtScopeAsync(displayedScope, () => FinishDiscardingRangeAsync(finishTarget))" disabled="@_busy">区間を破棄して終了</button>
+            <button type="button" class="launch-button scenario-action scenario-action--primary" @onclick="() => AtScopeAsync(displayedScope, () => OpenRangeForFinishAsync(finishTarget))" disabled="@(_busy || !CanSaveBeforeFinish)">区間を保存して終了</button>
+        </div>
+    </section></div>
+}
+
+@if (_rangeEditorOpen && displayedDraft is not null && displayedDraftTarget is not null)
 {
     <div class="modal-backdrop"><section id="capture-editor" class="capture-dialog" role="dialog" aria-modal="true" aria-labelledby="capture-range-title">
-        <header class="capture-dialog-header"><h2 id="capture-range-title">区間</h2>@DialogFailure("区間の保存失敗")<button class="secondary-button capture-icon-button" title="区間を取り消す" aria-label="区間を取り消す" @onclick="() => CancelRangeDraftAsync(displayedDraftTarget!, displayedDraft!)" disabled="@_busy"><CaptureIcon Name="Close" /></button></header>
-        <CaptureRangeFields @key="displayedDraft" Name="@_rangeName" NameChanged="name => UpdateRangeDraft(displayedDraft, () => _rangeName = name)"
+        <header class="capture-dialog-header"><h2 id="capture-range-title">@(_finishTarget is null ? "区間" : "保存して記録を終了")</h2>@DialogFailure("区間の操作失敗")</header>
+        <ScenarioRangeDraftEditor @key="displayedDraft" Name="@_rangeName" NameChanged="name => UpdateRangeDraft(displayedDraft, () => _rangeName = name)"
             Tags="_rangeTags" TagsChanged="tags => UpdateRangeDraft(displayedDraft, () => _rangeTags = tags)"
-            AvailableTags="AvailableRangeTags" SuggestedTags="_gameSpeakers" Disabled="_busy" />
-        <div class="capture-dialog-actions"><button class="launch-button capture-text-button" @onclick="() => SaveRangeAsync(displayedDraftTarget!, displayedDraft!)" disabled="@(_busy || string.IsNullOrWhiteSpace(_rangeName))"><CaptureIcon Name="Save" />区間を保存</button></div>
+            AvailableTags="AvailableRangeTags" SuggestedTags="_gameSpeakers" Disabled="_busy"
+            Save="() => AtScopeAsync(displayedScope, () => SaveRangeAsync(displayedDraft.Live ? displayedLive : displayedDraftTarget, displayedDraft))"
+            Discard="() => AtScopeAsync(displayedScope, () => CancelRangeDraftAsync(displayedDraft.Live ? displayedLive : displayedDraftTarget, displayedDraft))"
+            Close="HideRangeDraft" />
     </section></div>
 }
 
@@ -764,7 +775,7 @@
     private PlayRecordingTarget? _screenshotSettingsTarget;
     private long _rangeListsVersion = -1;
     private string _rangeName = "";
-    private bool EditorOpen => _savedScenes is not null || _independentFlowConfirm || _exportOpen || _screenshotSettingsOpen || _screenshotItem is not null || _settingsOpen || _bulkOpen || _edit is not null || _partition is not null || _rangeSelection is not null || _historyDialog != HistoryDialog.None;
+    private bool EditorOpen => _savedScenes is not null || _independentFlowConfirm || _exportOpen || _screenshotSettingsOpen || _screenshotItem is not null || _settingsOpen || _bulkOpen || _edit is not null || _partition is not null || _rangeEditorOpen || _finishOpen || _historyDialog != HistoryDialog.None;
     private bool FollowingView => !_flowOpen && _offset == 0 && !_pickingRange;
     private CapturePosition? _pageCeiling;
     private bool CanEdit => _rangeId == 0 && !_pickingRange;
@@ -897,13 +908,15 @@
     private async Task ReadRecordingStateAsync()
     {
         var play = await RecordingOperations.GetCurrentStateAsync();
+        var previous = _snapshot;
         _snapshot = CaptureService.Snapshot;
         _playState = play?.GameId == _snapshot.PlayGameId && play?.Target.ScopeVersion == _snapshot.PlayScopeVersion ? play : null;
+        ObserveResume(previous, _snapshot, _playState);
     }
     private async Task SynchronizeViewAsync()
     {
         var play = CaptureService.CurrentPlayTarget;
-        if (_followPlaySelection && play.Profile is { } active && active.Id != _profileId)
+        if (_followPlaySelection && _following && TracksCurrentScope && !EditorOpen && play.Profile is { } active && active.Id != _profileId)
         {
             _profileId = active.Id;
             _profiles = await Store.GetCaptureProfilesAsync();
@@ -957,10 +970,9 @@
             ? await RecordingOperations.GetDesktopPendingRangeAsync(PlayRecordingOperations.DesktopTarget(displayed, _profileId)) : null;
         if (_rangeSelection is { Live: true } draft && !ReferenceEquals(draft, _pendingLiveRange))
         {
-            _rangeSelection = null;
-            _rangeDraftTarget = null;
-            _rangeName = "";
-            _rangeTags = [];
+            ClearRangeDraft();
+            _finishOpen = false;
+            _finishTarget = null;
             _error = _errorLabel = null;
             _focusEditor = false;
             _restoreFocus = true;
@@ -1062,6 +1074,14 @@
     private Task StopHistoryCaptureAsync(PlayRecordingTarget expected) => RunAsync(async () =>
     {
         if (!ViewingLiveRecord || !HistoryCaptureActive) return;
+        _pendingLiveRange = await RecordingOperations.GetDesktopPendingRangeAsync(expected);
+        if (HasUnfinishedRange)
+        {
+            _historyDialog = HistoryDialog.None;
+            _finishTarget = expected;
+            _finishOpen = _focusEditor = true;
+            return;
+        }
         await RecordingOperations.FinishDesktopAsync(expected); _snapshot = CaptureService.Snapshot;
         _historyCounts = await Store.GetCaptureHistoryCountsAsync(_recordId);
         _focusHistoryContent = true;
@@ -1156,19 +1176,15 @@
     private Task ToggleRecordingPauseAsync(PlayRecordingTarget expected, bool pause) => RunAsync(async () =>
     {
         await RecordingOperations.PauseDesktopAsync(expected, pause);
-        _snapshot = CaptureService.Snapshot;
-    }, failureLabel: pause ? "一時停止失敗" : "記録再開失敗");
+        await ReadRecordingStateAsync();
+    }, success: pause ? "記録を一時停止しました。" : "記録を再開しました。", failureLabel: pause ? "一時停止失敗" : "記録再開失敗");
     private Task StartRecordingAsync(PlayRecordingState displayed) => RunAsync(async () =>
     {
         await RecordingOperations.StartAsync(displayed.GameId!, displayed.Target);
         await ReadRecordingStateAsync();
     }, failureLabel: "記録開始失敗");
-    private Task FinishRecordingAsync(PlayRecordingTarget expected) => RunAsync(async () =>
-    {
-        await RecordingOperations.FinishDesktopAsync(expected);
-        await ReadRecordingStateAsync();
-    }, failureLabel: "記録終了失敗");
-    private Task BreakLivePathAsync(PlayRecordingTarget expected) => RunAsync(async () => { await RecordingOperations.BreakDesktopPathAsync(expected); _snapshot = CaptureService.Snapshot; }, failureLabel: "経路変更失敗");
+    private Task BreakLivePathAsync(PlayRecordingTarget expected) => RunAsync(
+        () => RecordingOperations.BreakDesktopPathAsync(expected), "次の本文から別経路にします。", failureLabel: "経路変更失敗");
     /// <summary>Switches the workspace without clearing the text query or the mounted flow.</summary>
     private Task ShowViewAsync(bool flow) => RunAsync(async () =>
     {
@@ -1257,9 +1273,10 @@
     {
         if (pending is null) await RecordingOperations.CancelDesktopRangeAsync(expected);
         else await RecordingOperations.CancelDesktopRangeAsync(expected, pending);
+        if (_rangeSelection?.Live == true) ClearRangeDraft();
         _pendingLiveRange = null;
         _snapshot = CaptureService.Snapshot;
-    }, failureLabel: "区間取消失敗");
+    }, "区間指定を破棄しました。", failureLabel: "区間破棄失敗");
     private Task ToggleTextRange() => RunAsync(() =>
     {
         _pickingRange = !_pickingRange; _selected.Clear(); _following = false;
@@ -1282,10 +1299,11 @@
     }
     private void OpenRangeDraft(PlayRecordingRangeSelection selection, PlayRecordingTarget expected)
     {
+        if (_rangeSelection is not null && !ReferenceEquals(_rangeSelection, selection)) return;
         _error = null;
         _rangeSelection = selection;
         _rangeDraftTarget = expected;
-        _rangeName = ""; _rangeTags = []; _focusEditor = true;
+        _rangeEditorOpen = _focusEditor = true;
     }
     private void UpdateRangeDraft(PlayRecordingRangeSelection? displayed, Action update)
     {
@@ -1293,36 +1311,64 @@
     }
     private Task OpenTextRangeAsync(PlayRecordingTarget expected, CaptureTextItem? first, CaptureTextItem? last) => RunAsync(async () =>
     {
-        if (first is null || last is null) return;
+        if (first is null || last is null || _rangeSelection is not null
+            || ViewingLiveRecord && (_pendingLiveRange is not null || _snapshot.RangeStart is not null)) return;
         OpenRangeDraft(await RecordingOperations.SelectDesktopRangeAsync(expected, first, last), expected);
     });
+    /// <summary>Discards only the displayed draft; dismissal and service errors preserve its data.</summary>
     private Task CancelRangeDraftAsync(PlayRecordingTarget expected, PlayRecordingRangeSelection draft) => RunAsync(async () =>
     {
-        if (!ReferenceEquals(draft, _rangeSelection) || expected != _rangeDraftTarget) return;
-        CloseEditors();
+        RequireRangeDraft(expected, draft);
         if (draft.Live)
         {
+            // The shared service owns cancellation of a live range visible to both recorders.
+            await RecordingOperations.CancelDesktopRangeAsync(expected, draft);
             _pendingLiveRange = null;
-            try
-            {
-                await RecordingOperations.CancelDesktopRangeAsync(expected, draft);
-            }
-            finally { _snapshot = CaptureService.Snapshot; }
+            _snapshot = CaptureService.Snapshot;
         }
-    });
+        ClearRangeDraft();
+        if (_finishTarget is not null) BackFromFinish();
+        else _restoreFocus = true;
+        _message = "区間指定を破棄しました。";
+    }, failureLabel: "区間破棄失敗");
+
+    /// <summary>Saves the bound range without replacing the displayed text page or scroll position.</summary>
     private Task SaveRangeAsync(PlayRecordingTarget expected, PlayRecordingRangeSelection draft) => RunAsync(async () =>
     {
-        if (!ReferenceEquals(draft, _rangeSelection) || expected != _rangeDraftTarget || _recordId != draft.CaptureGameId)
-            throw new InvalidOperationException("表示中の区間が変わりました。選び直してください。");
-        await RecordingOperations.SaveDesktopRangeAsync(expected, draft, _rangeName, _rangeTags);
+        RequireRangeDraft(expected, draft);
+        var finish = _finishTarget;
+        if (finish is not null) RequireFinishTarget(finish);
+        var name = _rangeName.Trim();
+        await RecordingOperations.SaveDesktopRangeAsync(expected, draft, name, _rangeTags);
         _snapshot = CaptureService.Snapshot;
-        CloseEditors(); ClearTextRange(); _offset = 0;
-        _focusRangeFilter = true;
-        var saved = _snapshot;
-        try { await RefreshRangeStateAsync(saved); }
-        catch (InvalidOperationException) when (CaptureService.Snapshot.OperationVersion != saved.OperationVersion) { }
-        await LoadItemsAsync();
-    }, "区間を保存しました。");
+        ClearRangeDraft();
+        ClearTextRange();
+        _pendingLiveRange = null;
+        _restoreFocus = true;
+        _message = $"区間「{name}」を保存しました。";
+        if (finish is not null)
+        {
+            // Accept only the token advance from this save, not a concurrent session or operation change.
+            var current = PlayRecordingOperations.DesktopTarget(_snapshot, _profileId);
+            BackFromFinish();
+            if (current.ProfileId != finish.ProfileId || current.RecordId != finish.RecordId || current.SessionId != finish.SessionId ||
+                current.ScopeVersion != finish.ScopeVersion || current.Version != finish.Version + 1)
+                throw ScopeChanged();
+            await RecordingOperations.FinishDesktopAsync(current);
+            await ReadRecordingStateAsync();
+            _message = $"区間「{name}」を保存し、記録を終了しました。";
+        }
+        await LoadScopeListsAsync();
+    }, failureLabel: "区間の保存・終了失敗");
+
+    /// <summary>A retained draft is writable only in its original record and session.</summary>
+    private void RequireRangeDraft(PlayRecordingTarget expected, PlayRecordingRangeSelection draft)
+    {
+        if (!_rangeEditorOpen || !ReferenceEquals(draft, _rangeSelection) || _recordId != draft.CaptureGameId ||
+            (draft.Live ? !ViewingLiveRecord || expected.SessionId != draft.Target.SessionId ||
+                PlayRecordingOperations.DesktopTarget(_snapshot, _profileId) != expected : expected != _rangeDraftTarget))
+            throw ScopeChanged();
+    }
     private void ClearSelection() => _selected.Clear();
     private bool CanOperateOnSelection => _itemsError is null && _selected.Count != 0 && CanEdit;
     private void OpenBulk()
@@ -1527,12 +1573,15 @@
         // The popover item is hidden by the time its dialog receives focus.
         _restoreToolsFocus |= _exportOpen || _savedScenes is not null;
         _savedScenes = null;
-        CancelWindowPick(); _error = null; _independentFlowConfirm = false; _exportOpen = false; _screenshotSettingsOpen = false; _screenshotItem = null; _eventScreenshots = null; _galleryImage = null; _galleryError = null; _pausedCandidates = null; _edit = null; _partition = null; _settingsOpen = false; _bulkOpen = false; _rangeSelection = null; _historyDialog = HistoryDialog.None; _deletionTargets = []; _restoreFocus = true;
+        CancelWindowPick(); _rangeEditorOpen = _finishOpen = false; _finishTarget = null; _error = null; _independentFlowConfirm = false; _exportOpen = false; _screenshotSettingsOpen = false; _screenshotItem = null; _eventScreenshots = null; _galleryImage = null; _galleryError = null; _pausedCandidates = null; _edit = null; _partition = null; _settingsOpen = false; _bulkOpen = false; _historyDialog = HistoryDialog.None; _deletionTargets = []; _restoreFocus = true;
     }
-    [JSInvokable] public async Task CloseEditorFromKeyboard(string? viewKey)
+    [JSInvokable] public void CloseEditorFromKeyboard(string? viewKey)
     {
-        if (_displayedScope?.ViewKey != viewKey || _stop.IsCancellationRequested) return;
-        if (!_busy) { if (_rangeSelection is { } draft && _rangeDraftTarget is { } target) await CancelRangeDraftAsync(target, draft); else CloseEditors(); StateHasChanged(); }
+        if (_displayedScope?.ViewKey != viewKey || _stop.IsCancellationRequested || _busy) return;
+        if (_rangeEditorOpen) HideRangeDraft();
+        else if (_finishOpen) BackFromFinish();
+        else CloseEditors();
+        StateHasChanged();
     }
     private void OpenScreenshotSettings()
     {
