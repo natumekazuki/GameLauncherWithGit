@@ -93,8 +93,8 @@
 .play-selection > .play-finish-impact { white-space:normal; overflow:visible; }
 .play-range-selection-actions { position:relative; flex-wrap:nowrap; }
 .play-range-selection-failure { position:absolute; inset-inline-end:0; }
-.play-related { border: 0; min-width: 0; margin: 0; padding: 0; }
-.play-related legend { padding: 0; margin-block-end: .25rem; }
+.play-body ::deep .saved-scene-list { margin: 0; padding-inline-start: 1.5rem; overflow-wrap: anywhere; }
+.play-body ::deep .saved-scene-list li + li { margin-block-start: .75rem; }
 .play-shell a { color: var(--play-accent); }
 .play-gallery-navigation { display:grid; grid-template-columns:2.75rem minmax(0,1fr) 2.75rem 2.75rem; gap:.5rem; align-items:center; }
 .play-gallery-navigation span { text-align:center; font-size:.875rem; }

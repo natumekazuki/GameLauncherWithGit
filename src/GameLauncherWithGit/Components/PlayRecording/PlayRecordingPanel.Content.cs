@@ -1,6 +1,5 @@
 using GameLauncherWithGit.Application.Models;
 using GameLauncherWithGit.Application.Services;
-using Microsoft.AspNetCore.Components;
 
 namespace GameLauncherWithGit.Components.PlayRecording;
 
@@ -19,7 +18,7 @@ public partial class PlayRecordingPanel
     private IReadOnlyList<CaptureLabel> _labels = [];
     private IReadOnlyList<string> _rangeTags = [], _speakers = [];
     private CaptureTextItem? _editItem, _galleryItem, _first, _last;
-    private long _editLabel, _connectionTarget;
+    private long _editLabel;
     private string _editSpeaker = "";
     private sealed class GalleryImage(string source) { public string Source { get; } = source; }
     private GalleryImage? _galleryImage;
@@ -27,7 +26,7 @@ public partial class PlayRecordingPanel
     private ScenarioFlowGraph? _graph;
     private bool _matchingComplete;
     private ScenarioSceneFlowSnapshot? _sceneFlow;
-    private SceneDraft? _sceneDraft;
+    private bool _savedScenesOpen;
     private PlayRecordingScreenshotResult? _screenshotResult;
 
     private bool TextRangeValid => _first is not null && _last is not null && _first.StartPosition.CompareTo(_last.EndPosition) < 0;
@@ -35,7 +34,6 @@ public partial class PlayRecordingPanel
         .Where(x => x.Kind is CaptureKind.Dialogue or CaptureKind.Narration || x.Id == _editItem?.LabelId)
         .GroupBy(x => x.Kind).Select(g => g.FirstOrDefault(x => x.Id == _editItem?.LabelId) ?? g.First());
     private bool EditingNarration => _labels.Any(x => x.Id == _editLabel && x.Kind == CaptureKind.Narration);
-    private string[] SceneTags => _sceneFlow?.Tags.Select(x => x.Name).ToArray() ?? [];
 
     private void ApplyTextPage(PlayRecordingPage page)
     {
@@ -191,46 +189,9 @@ public partial class PlayRecordingPanel
         var sameName = _ranges.Where(r => r.Name == range.Name).OrderBy(r => r.Id).ToList();
         return sameName.Count == 1 ? range.Name : $"{range.Name} ({sameName.IndexOf(range) + 1})";
     }
-    private string SceneName(long id) => _sceneFlow?.Scenes.FirstOrDefault(s => s.Id == id) is { } scene ? SceneName(scene.Definition) : "場面";
 
-    private sealed class SceneDraft(ScenarioScene? source, ScenarioSceneEdit definition, IReadOnlyList<ScenarioGameTag> tags)
-    {
-        public ScenarioScene? Source { get; } = source;
-        public long Id => Source?.Id ?? 0;
-        public ScenarioSceneEdit Definition { get; } = definition;
-        public string Title { get; set; } = definition.Title;
-        public string Number { get; set; } = definition.DisplayNumber ?? "";
-        public string Chapter { get; set; } = definition.Chapter ?? "";
-        public List<long> RangeIds { get; } = [.. definition.RangeIds];
-        public string[] Tags { get; set; } = definition.TagIds
-            .Select(id => tags.FirstOrDefault(tag => tag.Id == id)?.Name).OfType<string>().ToArray();
-    }
-
-    private void NewScene()
-    {
-        if (ControlsDisabled || _sceneFlow is null) return;
-        _connectionTarget = 0;
-        _sceneDraft = new(null, new("", null, null, 80, 100, [], []), _sceneFlow.Tags);
-    }
-
-    private void SelectScene(ChangeEventArgs args)
-    {
-        if (ControlsDisabled || _sceneFlow is null || !long.TryParse(args.Value?.ToString(), out var id)) return;
-        _connectionTarget = 0;
-        _sceneDraft = _sceneFlow.Scenes.FirstOrDefault(x => x.Id == id) is { } scene
-            ? new(scene, scene.Definition, _sceneFlow.Tags)
-            : null;
-    }
-
-    private void CancelScene() => _sceneDraft = null;
-
-    private void SetSceneRange(SceneDraft draft, long rangeId, bool enabled)
-    {
-        if (ControlsDisabled || _sceneDraft != draft) return;
-        if (enabled)
-        {
-            if (!draft.RangeIds.Contains(rangeId)) draft.RangeIds.Add(rangeId);
-        }
-        else draft.RangeIds.Remove(rangeId);
-    }
+    /// <summary>Resolves saved range references without hiding their IDs when range names are unavailable.</summary>
+    private string SavedSceneRangeName(long id) => _ranges?.Any(range => range.Id == id) == true
+        ? RangeName(id)
+        : $"区間 {id}";
 }

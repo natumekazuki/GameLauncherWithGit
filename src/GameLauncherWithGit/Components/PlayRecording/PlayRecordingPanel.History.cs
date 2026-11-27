@@ -114,48 +114,17 @@ public partial class PlayRecordingPanel
         if (rowId is { } id && IsWorkspaceCurrent(target)) FocusAfterRender(FocusTarget.PathRow, id);
     }, "経路変更失敗");
 
-    private async Task LoadScenesAsync()
+    /// <summary>Reads existing manual scenes on demand under the current Web target and connection.</summary>
+    private async Task ToggleSavedScenesAsync()
     {
         if (_state is not { } state) return;
-        var target = ForDisplay(state);
-        await ReadAsync(target, "scene flow", gameId => Operations.GetSceneFlowAsync(gameId, state.Target), flow =>
-        {
-            _sceneFlow = flow;
-            _scenesError = false;
-        }, () => _scenesError = true);
-        if (IsWorkspaceCurrent(target)) await LoadRangesAsync();
+        _savedScenesOpen = !_savedScenesOpen;
+        _sceneFlow = null;
+        _scenesError = false;
+        if (!_savedScenesOpen) return;
+
+        // ReadAsync discards responses after the displayed target or connection changes.
+        await ReadAsync(ForDisplay(state), "scene flow", gameId => Operations.GetSceneFlowAsync(gameId, state.Target),
+            flow => _sceneFlow = flow, () => _scenesError = true);
     }
-
-    private Task SaveSceneAsync(DisplayTarget target, SceneDraft draft) => RunMutationAsync(target, async () =>
-    {
-        if (_sceneFlow is not { } flow || !ReferenceEquals(_sceneDraft, draft)) return;
-        var edit = draft.Definition with
-        {
-            Title = draft.Title.Trim(),
-            DisplayNumber = Optional(draft.Number),
-            Chapter = Optional(draft.Chapter),
-            RangeIds = draft.RangeIds.ToArray(),
-            TagIds = draft.Tags.Select(name => flow.Tags.FirstOrDefault(tag => tag.Name == name)?.Id).OfType<long>().ToArray()
-        };
-        var id = draft.Id;
-        if (draft.Source is { } scene)
-            await UseActionAsync(target, gameId => Operations.UpdateSceneAsync(gameId, target.Recording, scene, edit));
-        else
-            id = await UseAsync(target, gameId => Operations.CreateSceneAsync(gameId, target.Recording, edit));
-        _sceneDraft = null;
-        await RefreshStatusAsync(loadPane: true);
-        if (IsWorkspaceCurrent(target) && _sceneFlow is { } updated && updated.Scenes.FirstOrDefault(x => x.Id == id) is { } saved)
-            _sceneDraft = new(saved, saved.Definition, updated.Tags);
-    }, "場面保存失敗");
-
-    private Task SetSceneConnectionAsync(DisplayTarget target, long fromId, long toId, bool connected) => RunMutationAsync(target, async () =>
-    {
-        if (_sceneFlow is not { } flow || flow.Scenes.FirstOrDefault(x => x.Id == fromId) is not { } from
-            || flow.Scenes.FirstOrDefault(x => x.Id == toId) is not { } to) return;
-        await UseActionAsync(target, gameId => Operations.SetSceneConnectionAsync(gameId, target.Recording, from, to, connected));
-        _connectionTarget = 0;
-        await RefreshStatusAsync(loadPane: true);
-        if (IsWorkspaceCurrent(target) && _sceneFlow is { } updated && updated.Scenes.FirstOrDefault(x => x.Id == fromId) is { } selected)
-            _sceneDraft = new(selected, selected.Definition, updated.Tags);
-    }, "場面接続失敗");
 }

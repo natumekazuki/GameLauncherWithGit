@@ -12,7 +12,7 @@ public partial class PlayRecordingPanel
 {
     [Inject] private ILogger<PlayRecordingPanel> Logger { get; set; } = default!;
 
-    private enum Pane { Text, Ranges, Paths, Scenes }
+    private enum Pane { Text, Ranges, Paths }
     private enum FocusTarget { FinishImpact, FinishButton, Pause, Resume, Screenshot, RangeStatus, RangeStart, RangePicker, Ranges, Classification, EditButton, PathRow, Gallery, GalleryButton, Text }
     private (FocusTarget Target, long ItemId)? _nextFocus;
     private ElementReference _finishImpact, _finishButton, _pauseButton, _resumeButton, _rangeStatus,
@@ -219,6 +219,8 @@ public partial class PlayRecordingPanel
     private Task SelectPaneAsync(DisplayTarget target, Pane pane) => ReadForDisplayedTargetAsync(target, async () =>
     {
         _pane = pane;
+        _savedScenesOpen = false;
+        _sceneFlow = null;
         CloseGallery();
         CloseTextEditor();
         if (pane != Pane.Text) ClearRangePick();
@@ -230,7 +232,6 @@ public partial class PlayRecordingPanel
         Pane.Text => LoadTextAsync(),
         Pane.Ranges => LoadRangesAsync(),
         Pane.Paths => LoadPathsAsync(),
-        Pane.Scenes => LoadScenesAsync(),
         _ => throw new InvalidOperationException()
     };
 
@@ -251,7 +252,4 @@ public partial class PlayRecordingPanel
         _ => "未判定"
     };
 
-    private static string SceneName(ScenarioSceneEdit scene) => string.IsNullOrWhiteSpace(scene.DisplayNumber)
-        ? scene.Title
-        : $"{scene.DisplayNumber} {scene.Title}";
 }

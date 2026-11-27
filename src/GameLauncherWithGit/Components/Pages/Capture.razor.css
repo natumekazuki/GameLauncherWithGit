@@ -46,6 +46,8 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .capture-history-title { overflow-wrap:anywhere; }
 .capture-history-counts,.capture-muted { color:#adbed5; font-size:.9rem; line-height:1.6; }
 .capture-export-scope { overflow-wrap:anywhere; color:#adbed5; line-height:1.6; }
+.capture-dialog ::deep .saved-scene-list { margin:0; padding-inline-start:1.5rem; overflow-wrap:anywhere; }
+.capture-dialog ::deep .saved-scene-list li + li { margin-block-start:.75rem; }
 .capture-export-mode { border:0; padding:0; margin:0; display:grid; gap:.65rem; }
 .capture-export-mode legend { font-size:.9rem; color:#adbed5; margin-bottom:.5rem; }
 .capture-export-mode label { display:flex; flex-direction:row; align-items:flex-start; gap:.65rem; line-height:1.5; cursor:pointer; }

@@ -203,7 +203,6 @@ public partial class Capture
         _restoreFocus |= editorWasOpen;
         _focusFeed |= hadView && !editorWasOpen;
         _focusEditor = _focusExportSave = _focusRangeFilter = _focusHistoryContent = false;
-        _sceneEditorOpen = false;
         _flowOpen = false;
         _flowGraph = null;
         _flowHighlighted = null;
