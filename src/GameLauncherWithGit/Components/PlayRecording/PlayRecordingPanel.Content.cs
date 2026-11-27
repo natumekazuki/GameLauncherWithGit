@@ -177,6 +177,8 @@ public partial class PlayRecordingPanel
 
     private void CloseGallery()
     {
+        _detailRangeEdit = null;
+        _detailRangeButtons.Clear();
         _galleryItem = null;
         _galleryImage = null;
         _preferredGalleryImageId = null;

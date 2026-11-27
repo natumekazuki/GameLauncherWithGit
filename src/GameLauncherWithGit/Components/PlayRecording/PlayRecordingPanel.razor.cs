@@ -14,7 +14,7 @@ public partial class PlayRecordingPanel
     [Inject] private IJSRuntime Js { get; set; } = default!;
 
     private enum Pane { Text, Paths }
-    private enum FocusTarget { FinishImpact, FinishButton, Pause, Resume, Screenshot, RangeStatus, RangeStart, RangePicker, RangeDraft, RangeEditor, Ranges, Classification, EditButton, PathRow, Gallery, GalleryButton, Text }
+    private enum FocusTarget { FinishImpact, FinishButton, Pause, Resume, Screenshot, RangeStatus, RangeStart, RangePicker, RangeDraft, RangeEditor, Ranges, Classification, EditButton, PathRow, Gallery, GalleryButton, DetailRange, Text }
     private (FocusTarget Target, long ItemId)? _nextFocus;
     private ElementReference _finishImpact, _finishButton, _rangeStatus, _rangeDraftButton, _rangeEditorHeading,
         _startRangeButton, _pickRangeButton, _rangesTab, _editClassification, _galleryHeading, _screenshotButton;
@@ -96,13 +96,15 @@ public partial class PlayRecordingPanel
             FocusTarget.Classification when _pane == Pane.Text && _editItem?.Id == request.ItemId => _editClassification,
             FocusTarget.EditButton or FocusTarget.PathRow when rowVisible && _textRangeId is null && _editItem?.Id != request.ItemId && row is not null => row.Open,
             FocusTarget.Gallery when _pane == Pane.Text && _galleryItem is not null => _galleryHeading,
+            FocusTarget.DetailRange when _pane == Pane.Text && _galleryItem is not null =>
+                _detailRangeButtons.TryGetValue(request.ItemId, out var detailRange) ? detailRange.Open : _galleryHeading,
             FocusTarget.GalleryButton when rowVisible && _editItem?.Id != request.ItemId && row is not null => row.Open,
             FocusTarget.EditButton or FocusTarget.GalleryButton or FocusTarget.Text when textVisible => _textScroller,
             _ => default
         };
         if (destination.Id is not null)
         {
-            try { await destination.FocusAsync(preventScroll: request.Target is FocusTarget.Screenshot or FocusTarget.PathRow or FocusTarget.FinishButton or FocusTarget.GalleryButton); }
+            try { await destination.FocusAsync(preventScroll: request.Target is FocusTarget.Screenshot or FocusTarget.PathRow or FocusTarget.FinishButton or FocusTarget.GalleryButton or FocusTarget.DetailRange); }
             catch (JSDisconnectedException) { }
         }
     }

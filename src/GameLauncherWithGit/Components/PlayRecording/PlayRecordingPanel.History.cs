@@ -81,6 +81,7 @@ public partial class PlayRecordingPanel
     {
         await ReadAsync(target, "labels", gameId => Operations.GetLabelsAsync(gameId, target.Recording), labels =>
         {
+            _detailRangeEdit = null;
             _labels = labels.ToArray();
             BeginTextEdit(item);
         }, () => _actionError = new("分類の取得失敗", "分類を読み込めませんでした。本文を更新してください。"));
