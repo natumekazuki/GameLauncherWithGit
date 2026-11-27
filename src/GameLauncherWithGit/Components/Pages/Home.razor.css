@@ -1,4 +1,3 @@
-.home-header,
 .home-navigation,
 .home-section-heading {
     display: flex;
@@ -7,25 +6,18 @@
     gap: .5rem;
 }
 
-.home-header,
 .home-section-heading {
     justify-content: space-between;
 }
 
 .home-header {
     display: grid;
-    grid-template-columns: max-content minmax(0, 1fr) max-content;
-    grid-template-areas: 'title feedback nav';
+    grid-template-columns: minmax(0, 1fr) minmax(0, 10rem) max-content;
+    grid-template-areas: 'utility feedback nav';
+    align-items: center;
     gap: .75rem;
     padding-block: .35rem 1rem;
     border-bottom: 1px solid #29374a;
-}
-
-.home-header h1 {
-    grid-area: title;
-    margin: 0;
-    font-size: clamp(1.4rem, 3vw, 1.8rem);
-    font-weight: 700;
 }
 
 .home-navigation { grid-area: nav; }
@@ -66,13 +58,15 @@
 }
 
 .home-dialog-heading h2 { margin: 0; overflow-wrap: anywhere; font-size: 1.15rem; }
+.home-dialog-heading:not(:has(.home-feedback)) { grid-template-columns: minmax(0, 1fr); }
 .home-history-result { text-align: start; max-width: 100%; overflow-wrap: anywhere; }
 .home-result-overlay { z-index: 1350; }
 .home-result-modal { width: min(36rem, 100%); }
 .home-result-body p { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .home-card-resume[aria-disabled="true"],
-.game-card-actions .launch-button[aria-disabled="true"],
+.library-page .launch-button[aria-disabled="true"],
+.home-selected-overlay .launch-button[aria-disabled="true"],
 .home-game-details button[aria-disabled="true"] {
     cursor: progress;
     opacity: .65;
@@ -99,23 +93,35 @@
 .home-help-icon { font-weight: 700; font-size: 1.15rem; }
 
 .utility-bar {
+    grid-area: utility;
     justify-content: flex-start;
     gap: .5rem;
     margin: 0;
-    padding-block: .85rem;
 }
 
 .search-control { flex: 1 1 13rem; min-width: 0; }
 .search-input { width: 100%; min-height: 2.5rem; }
 .card-size-control { max-width: 100%; }
 .card-size-label { font-variant-numeric: tabular-nums; }
-.library-page { padding-block: .25rem 2rem; }
-.startup-check-panel, .startup-error-panel { margin-top: 1rem; }
+.library-page { flex: 1; display: flex; flex-direction: column; padding-block: 1rem 0; }
+.library-loading { flex: 1; display: grid; place-items: center; }
+.library-spinner {
+    width: 2rem;
+    aspect-ratio: 1;
+    border: .2rem solid #354760;
+    border-top-color: #9bcaff;
+    border-radius: 50%;
+    animation: library-spin .85s linear infinite;
+}
+
+@keyframes library-spin { to { transform: rotate(1turn); } }
+@media (prefers-reduced-motion: reduce) { .library-spinner { animation: none; } }
+
 .startup-error-panel h2 { font-size: 1.35rem; }
 
 .game-grid {
     grid-template-columns: repeat(auto-fill, minmax(min(100%, max(14rem, calc(280px * var(--game-card-scale)))), 1fr));
-    align-items: start;
+    align-items: stretch;
     gap: 1rem;
 }
 
@@ -133,9 +139,9 @@
     display: grid;
     place-items: center;
     width: 100%;
-    height: auto;
+    height: calc(10rem * var(--game-card-scale));
     min-height: 0;
-    aspect-ratio: 16 / 9;
+    grid-template: minmax(0, 1fr) / minmax(0, 1fr);
     margin: 0;
     border: 0;
     border-radius: .65rem .65rem 0 0;
@@ -143,7 +149,7 @@
     background: #080e18;
 }
 
-.game-thumbnail-image { width: 100%; height: 100%; object-fit: contain; }
+.game-thumbnail-image { display: block; width: 100%; height: 100%; object-fit: contain; }
 .home-card-heading { margin: 0; font-size: clamp(1rem, calc(1.1rem * var(--game-card-scale)), 1.4rem); }
 
 .home-card-selection {
@@ -167,16 +173,24 @@
 .home-media-error { color: #ffb8bf; }
 
 .game-card-actions {
-    justify-content: flex-start;
-    flex-wrap: wrap;
-    margin: 0;
+    justify-content: space-between;
+    flex-wrap: nowrap;
+    margin: auto 0 0;
     padding: .45rem .85rem .75rem;
 }
 
 .game-card-actions > button { flex: 0 0 auto; }
-.game-card-actions > .home-card-problem,
-.game-card-actions > .home-card-resume { width: auto; padding-inline: .5rem; font-size: .85rem; }
-.home-card-resume { margin-inline-start: auto; white-space: nowrap; }
+.game-card-status {
+    display: flex;
+    flex: 1 1 auto;
+    min-width: 0;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: .35rem;
+}
+.game-card-status > button { width: auto; padding-inline: .5rem; font-size: .85rem; }
+.home-playing { color: #bce4ce; font-size: .85rem; }
 
 .home-game-details dl {
     display: grid;
@@ -188,6 +202,8 @@
 
 .home-game-details dt { color: #aabbd0; }
 .home-game-details dd { margin: 0; }
+.home-selected-overlay .editor-modal { overflow-y: auto; }
+.home-selected-overlay .dialog-body { min-height: 2.5rem; }
 .home-git-with-sync {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 3em;
@@ -220,7 +236,8 @@
 .settings-actions-row > button { width: auto; }
 
 :is(.home-header, .utility-bar, .library-page, .startup-error-panel, .editor-overlay)
-    :is(a, button, summary, input, select, h1):focus-visible {
+    :is(a, button, summary, input, select):focus-visible,
+.library-page:focus-visible {
     outline: 2px solid #9bcaff;
     outline-offset: 2px;
 }
@@ -229,20 +246,33 @@
     outline-offset: -2px;
 }
 
-@media (max-width: 680px) {
+@media (max-width: 850px) {
     .home-header {
-        grid-template-columns: max-content minmax(0, 1fr);
-        grid-template-areas: 'title feedback' 'nav nav';
-        grid-template-rows: minmax(2rem, auto) auto;
-        align-items: flex-start;
+        grid-template-columns: minmax(0, 1fr) max-content;
+        grid-template-areas: 'utility utility' 'feedback nav';
     }
 }
 
 @media (max-width: 540px) {
-    .home-navigation { width: 100%; }
     .search-control { flex-basis: 100%; }
+    :is(.home-selected-overlay, .settings-overlay) .dialog-footer {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    :is(.home-selected-overlay, .settings-overlay) .dialog-footer > * {
+        min-width: 0;
+        padding: .4rem .35rem;
+        font-size: .9rem;
+        line-height: 1.3;
+        overflow-wrap: anywhere;
+    }
     .editor-inline-input { min-width: 0; }
     .editor-inline-input input { min-width: 0; }
     .home-delete-action { margin-inline-start: 0; }
     .help-git-table th, .help-git-table td { padding: .3rem; overflow-wrap: anywhere; }
+}
+
+@media (max-height: 360px) {
+    .editor-overlay :is(.editor-modal, .settings-modal) { overflow-y: auto; }
+    .editor-overlay .dialog-body { flex: none; overflow: visible; }
 }
