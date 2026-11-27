@@ -1,19 +1,12 @@
 :root {
-    --play-web-background: #0c1528;
-    --play-web-text: #e6edf7;
-    --play-web-line: #41516b;
-    --play-web-input: #101d30;
-    --play-web-action: #20334d;
-    --play-web-accent: #a4c8ff;
     --play-web-error: #ffc4c0;
     color-scheme: dark;
-    color: var(--play-web-text);
-    background: var(--play-web-background);
+    color: var(--scenario-text);
+    background: var(--scenario-background);
     font: 1rem/1.55 system-ui, sans-serif;
 }
 
 body { margin: 0; }
-:focus-visible { outline: 2px solid var(--play-web-accent); outline-offset: 2px; }
 
 .play-web-entry {
     box-sizing: border-box;
@@ -31,18 +24,6 @@ body { margin: 0; }
 }
 
 .play-web-entry p { margin: 0; }
-.play-web-action {
-    box-sizing: border-box;
-    min-inline-size: 0;
-    min-block-size: 2.75rem;
-    padding: .5rem .75rem;
-    border: 1px solid var(--play-web-line);
-    border-radius: .45rem;
-    color: inherit;
-    font: inherit;
-    line-height: 1.25;
-}
-
 .play-web-actions {
     position: relative;
     display: flex;
@@ -51,13 +32,7 @@ body { margin: 0; }
     gap: .5rem;
 }
 
-.play-web-action {
-    display: inline-flex;
-    align-items: center;
-    justify-self: start;
-    background: var(--play-web-action);
-    cursor: pointer;
-}
+.play-web-action { justify-self: start; }
 
 .play-web-error-details > summary { color: var(--play-web-error); }
 .play-web-error-details > summary::after {
@@ -77,8 +52,8 @@ body { margin: 0; }
     inset-inline: 0;
     inset-block-start: calc(100% + .5rem);
     padding: .75rem;
-    background: var(--play-web-input);
-    border: 1px solid var(--play-web-line);
+    background: var(--scenario-input);
+    border: 1px solid var(--scenario-border);
     border-radius: .45rem;
     overflow-wrap: anywhere;
 }

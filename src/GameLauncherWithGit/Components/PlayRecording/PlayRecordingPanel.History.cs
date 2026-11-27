@@ -48,7 +48,32 @@ public partial class PlayRecordingPanel
             }
             catch (JSDisconnectedException) { return; }
         }
-        if (IsWorkspaceCurrent(target)) ApplyTextPage(page);
+        if (!IsWorkspaceCurrent(target)) return;
+        ApplyTextPage(page);
+        await LoadImageCountsAsync();
+    }
+
+    /// <summary>Loads only metadata for the visible page, keeping confirmed zero separate from failure.</summary>
+    private async Task LoadImageCountsAsync()
+    {
+        if (_state is not { } state || _textItems is not { Count: > 0 } rows) return;
+        var target = ForDisplay(state);
+        var events = rows.Select(x => new CaptureEventKey(x.SessionId, x.Sequence)).Distinct().ToArray();
+        await ReadAsync(target, "image counts", gameId => Operations.GetScreenshotCountsAsync(gameId, target.Recording, events),
+            counts =>
+            {
+                if (!ReferenceEquals(rows, _textItems)) return;
+                if (_imageCounts is null || _imageCounts.Count != counts.Count ||
+                    counts.Any(x => !_imageCounts.TryGetValue(x.Key, out var count) || count != x.Value))
+                    _imageCounts = counts;
+                _imageCountsFailed = false;
+            },
+            () =>
+            {
+                if (!ReferenceEquals(rows, _textItems)) return;
+                _imageCounts = null;
+                _imageCountsFailed = true;
+            });
     }
 
     private Task EditTextAsync(DisplayTarget target, CaptureTextItem item) => ReadForDisplayedTargetAsync(target, async () =>
@@ -73,6 +98,11 @@ public partial class PlayRecordingPanel
             TextSpeakerChanged(item), EditingNarration ? null : Optional(_editSpeaker)));
         CancelTextEdit();
         await LoadTextAsync();
+        if (_state is not { } state || !IsWorkspaceCurrent(target)) return;
+        var current = ForDisplay(state);
+        await ReadAsync(current, "selected corrected text", gameId => Operations.GetItemAtAsync(gameId, current.Recording, item.StartPosition),
+            value => { _galleryItem = value; _detailSuccess = "本文を訂正しました"; },
+            () => _actionError = new("本文の再読込失敗", "訂正は保存しました。本文を開き直してください。"));
     }, "訂正失敗");
 
     private static string? Optional(string input) => string.IsNullOrWhiteSpace(input) ? null : input.Trim();
@@ -89,11 +119,27 @@ public partial class PlayRecordingPanel
         await ReadAsync(target, "text at position", gameId => Operations.GetItemAtAsync(gameId, target.Recording, position),
             value => item = value, () => _actionError = new("本文の取得失敗", "対応する本文を読み込めませんでした。記録を更新してください。"));
         if (item is null) return;
+        if (_pane == Pane.Text && _galleryItem is null) await RememberReadingPositionAsync(target);
+        if (!IsWorkspaceCurrent(target)) return;
         _pane = Pane.Text;
         StopFollowing();
-        if (IsWorkspaceCurrent(target))
-            await ShowGalleryAsync(item, imageId, showRawText: imageId is not null);
+        await ShowGalleryAsync(item, imageId);
     }
+
+    /// <summary>Copies only the selected occurrence of the current workspace.</summary>
+    private Task CopyDetailAsync(DisplayTarget target, CaptureOccurrenceKey key) => ReadForDisplayedTargetAsync(target, async () =>
+    {
+        if (!IsDetailCurrent(target, key) || _galleryItem is not { } item) return;
+        _detailSuccess = null;
+        try { await Js.InvokeVoidAsync("playRecordingText.copy", item.Text); }
+        catch (JSException)
+        {
+            if (IsDetailCurrent(target, key))
+                _actionError = new("コピー失敗", "本文をコピーできませんでした。ブラウザーのクリップボード設定を確認してください。");
+            return;
+        }
+        if (IsDetailCurrent(target, key)) _detailSuccess = "本文をコピーしました";
+    });
 
     private async Task LoadGalleryImageAsync(bool refreshList = true)
     {
@@ -145,8 +191,10 @@ public partial class PlayRecordingPanel
     private Task CutPathAsync(DisplayTarget target, Func<string, Task> operation, long? rowId = null) => RunMutationAsync(target, async () =>
     {
         await UseActionAsync(target, operation);
+        _actionSuccess = "経路の区切りを保存しました";
         await RefreshStatusAsync(loadPane: _pane == Pane.Paths, refreshLatestText: false);
-        if (rowId is { } id && IsWorkspaceCurrent(target)) FocusAfterRender(FocusTarget.PathRow, id);
+        if (rowId is { } id && IsWorkspaceCurrent(target))
+            FocusAfterRender(_galleryItem is null ? FocusTarget.PathRow : FocusTarget.Gallery, id);
     }, "経路変更失敗");
 
     /// <summary>Reads existing manual scenes on demand under the current Web target and connection.</summary>

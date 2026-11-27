@@ -1,13 +1,8 @@
 .play-recording {
-    --play-text: #e6edf7;
-    --play-muted: #adbed5;
-    --play-line: #41516b;
-    --play-surface: #142239;
-    --play-input: #101d30;
-    --play-accent: #a4c8ff;
+    --play-record-state: #a4c8ff;
     min-height: 100dvh;
-    background: #0c1528;
-    color: var(--play-text);
+    background: var(--scenario-background);
+    color: var(--scenario-text);
     color-scheme: dark;
     font: 1rem/1.55 system-ui, sans-serif;
     overflow-wrap: anywhere;
@@ -19,7 +14,7 @@
 .play-shell ::deep h1 { font-size: clamp(1.375rem, 4vw, 1.85rem); line-height: 1.25; }
 .play-shell ::deep h2 { font-size: 1.125rem; }
 .play-shell ::deep h3 { font-size: 1rem; }
-.play-shell ::deep small, .play-muted { color: var(--play-muted); }
+.play-shell ::deep small, .play-muted { color: var(--scenario-muted); }
 .play-header, .play-workspace, .play-body, .play-stack { display: grid; gap: .75rem; min-width: 0; }
 .play-body[hidden] { display:none; }
 .play-workspace { grid-template-rows: auto minmax(0,1fr); }
@@ -28,45 +23,44 @@
 .play-draft-layer { position:absolute; inset:0; z-index:1; overflow:auto; }
 .play-draft-layer[hidden] { display:none; }
 .play-view { display:flex; flex:1 1 auto; min-height:0; }
-.play-view[hidden], .play-text-scroll[hidden] { display:none; }
+.play-view[hidden] { display:none; }
 .play-view > .play-panel { flex:1 1 auto; display:flex; flex-direction:column; overflow:auto; }
-.play-text-scroll { flex:1 1 auto; min-height:7rem; overflow:auto; }
+.play-text-work { flex:1 1 auto; min-height:7rem; min-width:0; display:grid; grid-template-columns:minmax(0,1fr); position:relative; }
+.play-text-scroll { min-width:0; min-height:0; overflow:auto; }
+.play-detail { min-width:0; min-height:0; padding:.65rem; overflow:auto; background:var(--scenario-surface); border:1px solid var(--scenario-border); border-radius:.5rem; }
+.play-detail ::deep .capture-occurrence-detail { display:grid; gap:.65rem; }
+.play-detail ::deep .capture-occurrence-heading,
+.play-detail ::deep .capture-occurrence-actions,
+.play-detail ::deep .capture-occurrence-image-nav { display:flex; align-items:center; flex-wrap:wrap; gap:.45rem; }
+.play-detail ::deep .capture-occurrence-heading { justify-content:space-between; }
+.play-detail ::deep .capture-occurrence-text { white-space:pre-wrap; }
+.play-detail ::deep .capture-occurrence-image { margin:0; }
+.play-detail ::deep .capture-occurrence-image img { display:block; max-width:100%; max-height:64dvh; object-fit:contain; }
 .play-search { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)) auto; align-items:center; gap:.375rem; }
 .play-record-root { margin-inline-end:auto; }
 .play-header { margin-block-end: 1rem; }
 .play-toolbar, .play-actions, .play-nav { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 .play-toolbar { justify-content: space-between; }
-.play-text-toolbar, .play-gallery-toolbar { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:.375rem; }
-.play-text-views, .play-gallery-return { grid-column:3; }
-.play-text-failure, .play-gallery-failure { grid-column:2; justify-self:center; }
-.play-panel, .play-shell ::deep .range-editor { padding: .875rem; background: var(--play-surface); border: 1px solid var(--play-line); border-radius: .65rem; min-width: 0; }
+.play-text-toolbar { display:grid; grid-template-columns:auto minmax(0,1fr) auto; gap:.375rem; }
+.play-text-views { grid-column:3; }
+.play-text-failure { grid-column:2; justify-self:center; }
+.play-panel, .play-shell ::deep .range-editor { padding:.875rem; background:var(--scenario-surface); border:1px solid var(--scenario-border); border-radius:.65rem; min-width:0; }
 .play-nav { margin-block: .125rem; }
 .play-nav button { flex: 1 1 auto; }
-.play-shell ::deep button, .play-shell ::deep input:not([type=checkbox]), .play-shell ::deep select {
+.play-shell ::deep input:not([type=checkbox]), .play-shell ::deep select {
     min-height: 2.75rem;
     min-width: 0;
     max-width: 100%;
-    border: 1px solid var(--play-line);
+    border: 1px solid var(--scenario-border);
     border-radius: .45rem;
     color: inherit;
     font: inherit;
     line-height: 1.25;
 }
-.play-shell ::deep button { padding: .5rem .75rem; background: #20334d; cursor: pointer; }
 .play-text-views button { padding-inline:.45rem; }
-.play-shell ::deep .play-icon-button, .play-shell ::deep .play-labeled-button {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: .4rem;
-}
 .play-shell ::deep .play-icon-button { inline-size: 2.75rem; padding: 0; flex: none; }
 .play-shell ::deep button svg { flex: none; }
-.play-shell ::deep input:not([type=checkbox]), .play-shell ::deep select { width: 100%; padding: .5rem; background: var(--play-input); }
-.play-shell ::deep button:is(:disabled,[aria-disabled=true]) { cursor: default; opacity: .55; }
-.play-shell ::deep button[aria-pressed=true] { background: #253c5a; border-color: var(--play-accent); }
-.play-shell ::deep button.primary { font-weight: 650; background: var(--play-accent); border-color: var(--play-accent); color: #0c1528; }
-.play-shell ::deep :focus-visible { outline: 2px solid var(--play-accent); outline-offset: 2px; }
+.play-shell ::deep input:not([type=checkbox]), .play-shell ::deep select { width:100%; padding:.5rem; background:var(--scenario-input); }
 .play-shell ::deep label, .play-shell ::deep .range-editor { display: grid; gap: .4rem; min-width: 0; }
 .play-shell ::deep label:has(input[type=checkbox]) { display: flex; align-items: center; min-height: 2.75rem; }
 .play-shell ::deep .range-editor { gap: .75rem; }
@@ -79,16 +73,16 @@
 .play-shell ::deep .capture-tag-input button { flex-shrink: 0; }
 .play-shell ::deep .capture-tag-input input { flex: 1; }
 .play-shell ::deep .capture-tag-list button { width: auto; }
-.play-status { color: var(--play-accent); font-weight: 600; }
+.play-status { color:var(--play-record-state); font-weight:600; }
 .play-control-heading { position: relative; }
 .play-control-result { position:absolute; inset-inline-end:0; inset-block-start:50%; translate:0 -50%; max-inline-size:60%; }
 .play-shell ::deep .capture-failure-announcement { position:absolute; inline-size:1px; block-size:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
 .play-shell ::deep .capture-failure-trigger { display:inline-flex; align-items:center; gap:.35rem; color:#ffc4c0; font-size:.875rem; }
-.play-text-failure ::deep .capture-failure-trigger, .play-gallery-failure ::deep .capture-failure-trigger,
+.play-text-failure ::deep .capture-failure-trigger,
 .play-range-selection-failure ::deep .capture-failure-trigger { white-space:nowrap; padding-inline:.25rem; font-size:.8125rem; }
 .play-shell ::deep .capture-failure-popover, .play-row-actions {
     width:min(28rem,calc(100vw - 2rem)); max-height:calc(100dvh - 2rem); padding:1rem;
-    color:var(--play-text); background:var(--play-surface); border:1px solid var(--play-line);
+    color:var(--scenario-text); background:var(--scenario-surface); border:1px solid var(--scenario-border);
     border-radius:.65rem; overflow:auto; box-shadow:0 8px 24px #0009;
 }
 .play-shell ::deep .capture-failure-popover p { margin:.75rem 0; white-space:pre-wrap; }
@@ -97,29 +91,25 @@
 .play-range-controls .play-status { font-size:.875rem; }
 .play-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
 .play-list > li { min-width: 0; }
-.play-item { display: grid; gap: .5rem; padding: .75rem 0; border-bottom: 1px solid var(--play-line); }
+.play-item { display:grid; gap:.5rem; padding:.55rem .125rem; border-bottom:1px solid var(--scenario-border); }
 .play-item p { white-space: pre-wrap; }
-.play-row-content :is(p, span) { max-inline-size:68ch; }
-.play-row-content { display:grid; gap:.25rem; text-align:start; white-space:pre-wrap; }
-.play-shell .play-row-select { border:0; padding:0; background:transparent; min-height:2.75rem; }
-.play-shell .play-row-select:hover { color:var(--play-accent); }
+.play-row-main { display:grid; gap:.2rem; max-inline-size:68ch; }
+.play-row-content { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:start; gap:.35rem; text-align:start; white-space:pre-wrap; }
+.play-shell .play-row-select { border:0; padding:.15rem; color:inherit; font:inherit; background:transparent; min-height:2.75rem; cursor:pointer; }
+.play-shell .play-row-select:is(:hover,[aria-current=true]) { background:var(--scenario-selected); }
+.play-row-content ::deep .capture-image-count { display:inline-flex; align-items:center; gap:.25rem; color:var(--scenario-muted); font-size:.8125rem; }
 .play-shell .play-row-select:disabled { opacity:1; }
 .play-row-actions button { width:auto; }
-.play-selection { border-block: 1px solid var(--play-line); padding-block: .75rem; }
+.play-selection { border-block:1px solid var(--scenario-border); padding-block:.75rem; }
 .play-selection > p { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .play-selection > .play-finish-impact { white-space:normal; overflow:visible; }
 .play-range-selection-actions { position:relative; flex-wrap:nowrap; }
 .play-range-selection-failure { position:absolute; inset-inline-end:0; }
 .play-body ::deep .saved-scene-list { margin: 0; padding-inline-start: 1.5rem; overflow-wrap: anywhere; }
 .play-body ::deep .saved-scene-list li + li { margin-block-start: .75rem; }
-.play-shell a { color: var(--play-accent); }
-.play-gallery-navigation { display:grid; grid-template-columns:2.75rem minmax(0,1fr) 2.75rem 2.75rem; gap:.5rem; align-items:center; }
-.play-gallery-navigation span { text-align:center; font-size:.875rem; }
-.play-gallery { margin: 0; }
-.play-gallery img { display: block; max-width: 100%; max-height: 65dvh; object-fit: contain; }
 .play-shell ::deep .scenario-flow { min-width: 0; }
 .play-shell ::deep .flow-toolbar { flex-wrap: wrap; }
-.play-controls { position: sticky; top: 0; z-index: 1; align-self: start; background: #0c1528; }
+.play-controls { position:sticky; top:0; z-index:1; align-self:start; background:var(--scenario-background); }
 .play-controls > .play-panel { max-height: 47dvh; overflow: auto; }
 
 @media (max-width: 47.99rem) {
@@ -136,4 +126,13 @@
     .play-workspace { grid-template-columns: minmax(15.5rem, 19rem) minmax(0, 1fr); grid-template-rows:minmax(0,1fr); }
     .play-controls { position: sticky; top: 1rem; }
     .play-controls > .play-panel { max-height: 75dvh; }
+}
+
+@media (max-width: 63.99rem) {
+    .play-text-work[data-detail-open] .play-text-scroll { visibility:hidden; }
+    .play-detail { position:absolute; inset:0; }
+}
+
+@media (min-width: 64rem) {
+    .play-text-work[data-detail-open] { grid-template-columns:minmax(0,1.15fr) minmax(0,1fr); gap:.75rem; }
 }

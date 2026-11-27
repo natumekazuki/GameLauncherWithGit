@@ -36,6 +36,15 @@ window.playRecordingText = {
     },
     toEnd(element) {
         if (element) element.scrollTop = element.scrollHeight;
+    },
+    position(element) {
+        return element?.scrollTop ?? 0;
+    },
+    restore(element, top) {
+        if (element) element.scrollTop = top;
+    },
+    copy(text) {
+        return navigator.clipboard.writeText(text);
     }
 };
 

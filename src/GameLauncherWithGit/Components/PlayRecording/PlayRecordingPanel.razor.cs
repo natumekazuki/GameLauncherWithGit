@@ -51,10 +51,21 @@ public partial class PlayRecordingPanel
             if (!_disposed) _ = PollAsync(_lifetime.Token);
             return;
         }
-        if (_scrollToLatest && _pane == Pane.Text && _galleryItem is null && _textScroller.Id is not null)
+        if (_pane == Pane.Text && _galleryItem is null && _textScroller.Id is not null && !_statusError)
         {
-            _scrollToLatest = false;
-            try { await Js.InvokeVoidAsync("playRecordingText.toEnd", _textScroller); }
+            try
+            {
+                if (_restoreReadingPosition is { } top)
+                {
+                    _restoreReadingPosition = null;
+                    await Js.InvokeVoidAsync("playRecordingText.restore", _textScroller, top);
+                }
+                else if (_scrollToLatest)
+                {
+                    _scrollToLatest = false;
+                    await Js.InvokeVoidAsync("playRecordingText.toEnd", _textScroller);
+                }
+            }
             catch (JSDisconnectedException) { }
         }
         if (_nextFocus is not { } request || _busy) return;
@@ -81,16 +92,16 @@ public partial class PlayRecordingPanel
             FocusTarget.RangeEditor when _rangeDraft is { Open: true } => _rangeEditorHeading,
             FocusTarget.RangePicker when textVisible && !_textError && _textItems is { Count: > 0 } && _textRangeId is null => _pickRangeButton,
             FocusTarget.Ranges when _pane == Pane.Text => _rangesTab,
-            FocusTarget.Classification when rowVisible && _editItem?.Id == request.ItemId => _editClassification,
+            FocusTarget.Classification when _pane == Pane.Text && _editItem?.Id == request.ItemId => _editClassification,
             FocusTarget.EditButton or FocusTarget.PathRow when rowVisible && _textRangeId is null && _editItem?.Id != request.ItemId && row is not null => row.Open,
-            FocusTarget.Gallery when _pane == Pane.Text && _galleryItem?.Id == request.ItemId => _galleryHeading,
+            FocusTarget.Gallery when _pane == Pane.Text && _galleryItem is not null => _galleryHeading,
             FocusTarget.GalleryButton when rowVisible && _editItem?.Id != request.ItemId && row is not null => row.Open,
             FocusTarget.EditButton or FocusTarget.GalleryButton or FocusTarget.Text when textVisible => _textHeading,
             _ => default
         };
         if (destination.Id is not null)
         {
-            try { await destination.FocusAsync(preventScroll: request.Target is FocusTarget.Screenshot or FocusTarget.PathRow or FocusTarget.FinishButton); }
+            try { await destination.FocusAsync(preventScroll: request.Target is FocusTarget.Screenshot or FocusTarget.PathRow or FocusTarget.FinishButton or FocusTarget.GalleryButton); }
             catch (JSDisconnectedException) { }
         }
     }
@@ -132,12 +143,12 @@ public partial class PlayRecordingPanel
                     if (_disposed) return;
                     var connectionVersion = ObserveConnection();
                     if (!WebSession.IsConnectionCurrent(connectionVersion)) return;
-                    var before = (_state, _statusLoaded, _statusError, _textItems, _textError, _workspace, _rangeDraft, _latest);
+                    var before = (_state, _statusLoaded, _statusError, _textItems, _textError, _workspace, _rangeDraft, _latest, _imageCounts, _imageCountsFailed);
                     _pollRead = RefreshStatusAsync(loadPane: _statusError, statusOnly: _busy);
                     try { await _pollRead; }
                     catch (DisplayChangedException) { }
                     finally { _pollRead = null; }
-                    if (!_disposed && before != (_state, _statusLoaded, _statusError, _textItems, _textError, _workspace, _rangeDraft, _latest)) StateHasChanged();
+                    if (!_disposed && before != (_state, _statusLoaded, _statusError, _textItems, _textError, _workspace, _rangeDraft, _latest, _imageCounts, _imageCountsFailed)) StateHasChanged();
                 });
             }
         }
@@ -239,8 +250,14 @@ public partial class PlayRecordingPanel
     {
         if (pane == _pane) return;
         // Keep the text surface mounted, and stop updates while the flow is in use.
-        if (_pane == Pane.Text) StopFollowing();
+        if (_pane == Pane.Text)
+        {
+            StopFollowing();
+            if (_galleryItem is null) await RememberReadingPositionAsync(target);
+        }
+        if (!IsWorkspaceCurrent(target)) return;
         _pane = pane;
+        if (pane == Pane.Text && _galleryItem is null) _restoreReadingPosition = _readingPosition;
         if (pane == Pane.Paths ? _graph is null || _pathsError : _textItems is null || _textError)
             await LoadPaneAsync();
     });
@@ -251,6 +268,18 @@ public partial class PlayRecordingPanel
         Pane.Paths => LoadPathsAsync(),
         _ => throw new InvalidOperationException()
     };
+
+    /// <summary>Captures the Web text viewport's position before leaving it or opening its detail.</summary>
+    private async Task RememberReadingPositionAsync(DisplayTarget target)
+    {
+        if (_textScroller.Id is null) return;
+        try
+        {
+            var position = await Js.InvokeAsync<double>("playRecordingText.position", _textScroller);
+            if (IsWorkspaceCurrent(target)) _readingPosition = position;
+        }
+        catch (JSDisconnectedException) { }
+    }
 
     /// <summary>Keeps saved ranges and legacy scenes in a secondary section of the text surface.</summary>
     private Task ToggleSavedRangesAsync(DisplayTarget target) => ReadForDisplayedTargetAsync(target, async () =>

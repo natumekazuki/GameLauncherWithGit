@@ -13,10 +13,13 @@ public partial class PlayRecordingPanel
     private readonly List<CapturePosition> _olderPages = [];
     private CapturePosition? _nextBefore;
     private CapturePosition? _pausedBefore;
+    private double? _readingPosition, _restoreReadingPosition;
     private string _textSearchInput = "", _speakerSearchInput = "";
     private string? _textSearch, _speakerSearch;
     private long? _textRangeId;
     private IReadOnlyList<CaptureTextItem>? _textItems;
+    private IReadOnlyDictionary<CaptureEventKey, int>? _imageCounts;
+    private bool _imageCountsFailed;
     private IReadOnlyList<CaptureRange>? _ranges;
     private IReadOnlyList<CaptureLabel> _labels = [];
     private IReadOnlyList<string> _rangeTags = [], _speakers = [];
@@ -25,7 +28,8 @@ public partial class PlayRecordingPanel
     private string _editSpeaker = "";
     private sealed class GalleryImage(string source) { public string Source { get; } = source; }
     private GalleryImage? _galleryImage;
-    private string? _preferredGalleryImageId, _galleryText;
+    private string? _preferredGalleryImageId, _detailSuccess;
+    private long? _selectedItemId;
     private ScenarioFlowGraph? _graph;
     private bool _matchingComplete;
     private ScenarioSceneFlowSnapshot? _sceneFlow;
@@ -45,6 +49,8 @@ public partial class PlayRecordingPanel
         if (_textItems is null || !_textItems.SequenceEqual(rows))
         {
             _textItems = rows;
+            _imageCounts = null;
+            _imageCountsFailed = false;
             var ids = rows.Select(row => row.Id).ToHashSet();
             foreach (var id in _rowButtons.Keys.Where(id => !ids.Contains(id)).ToArray()) _rowButtons.Remove(id);
             foreach (var id in ids) _rowButtons.TryAdd(id, new());
@@ -101,6 +107,9 @@ public partial class PlayRecordingPanel
         _pane = Pane.Text;
         _latest = latest;
         _textRangeId = rangeId;
+        _readingPosition = null;
+        _restoreReadingPosition = null;
+        _selectedItemId = null;
         ResetTextPages();
         _textItems = null;
         CloseTextEditor();
@@ -154,7 +163,7 @@ public partial class PlayRecordingPanel
 
     private void CancelTextEdit()
     {
-        if (_editItem is { } item) FocusAfterRender(FocusTarget.EditButton, item.Id);
+        if (_editItem is not null) FocusAfterRender(FocusTarget.Gallery);
         CloseTextEditor();
     }
 
@@ -169,41 +178,70 @@ public partial class PlayRecordingPanel
     {
         _galleryItem = null;
         _galleryImage = null;
-        _galleryText = null;
         _preferredGalleryImageId = null;
+        _detailSuccess = null;
         _galleryError = false;
         _galleryIndex = 0;
         _galleryImages = null;
     }
 
-    private Task OpenGalleryAsync(DisplayTarget target, CaptureTextItem item) => ReadForDisplayedTargetAsync(target, () => ShowGalleryAsync(item));
+    /// <summary>Resolves the underlying item even if a range filter clipped its displayed slice.</summary>
+    private Task OpenDetailAsync(DisplayTarget target, CaptureTextItem item) =>
+        ReadForDisplayedTargetAsync(target, () => OpenResolvedTextAsync(target, item.StartPosition));
 
     private void ReturnFromGallery()
     {
         if (_galleryItem is { } item) FocusAfterRender(FocusTarget.GalleryButton, item.Id);
+        _restoreReadingPosition = _readingPosition;
+        CloseTextEditor();
         CloseGallery();
     }
 
-    private Task ShowGalleryAsync(CaptureTextItem item, string? imageId = null, bool showRawText = false)
+    /// <summary>Opens the controlled detail for one occurrence; only this surface loads image bodies.</summary>
+    private async Task ShowGalleryAsync(CaptureTextItem item, string? imageId)
     {
         StopFollowing();
         CloseTextEditor();
         CloseGallery();
         _galleryItem = item;
-        _galleryText = showRawText ? item.RawText : item.Text;
+        _selectedItemId = item.Id;
         _preferredGalleryImageId = imageId;
         FocusAfterRender(FocusTarget.Gallery, item.Id);
-        return LoadGalleryImageAsync();
+        await LoadGalleryImageAsync();
+        if (_ranges is null) await LoadRangesAsync();
     }
+
+    /// <summary>Checks a shared-detail event against the still-displayed root and raw occurrence.</summary>
+    private bool IsDetailCurrent(DisplayTarget target, CaptureOccurrenceKey key) => IsWorkspaceCurrent(target)
+        && _galleryItem is { } item && key == new CaptureOccurrenceKey(target.Recording.HistoryRoot, item.StartPosition);
+
+    /// <summary>Starts selecting a range from the open occurrence using the existing shared draft path.</summary>
+    private void PickRangeFromDetail(DisplayTarget target, CaptureOccurrenceKey key)
+    {
+        if (ControlsDisabled || _textRangeId is not null || _rangeDraft is not null || !IsDetailCurrent(target, key)) return;
+        _pickingRange = true;
+        _first = _galleryItem;
+        _last = null;
+        ReturnFromGallery();
+        FocusAfterRender(FocusTarget.RangePicker);
+    }
+
+    /// <summary>Displays actual counts only after the metadata query returns for this page.</summary>
+    private int? ImageCount(CaptureTextItem item) =>
+        _imageCounts?.TryGetValue(new(item.SessionId, item.Sequence), out var count) == true ? count : null;
+
+    /// <summary>Returns saved ranges intersecting the selected UTF-16 text slice.</summary>
+    private IEnumerable<CaptureRange> RangesFor(CaptureTextItem item) =>
+        _ranges?.Where(range => item.EndPosition.CompareTo(range.Start) > 0 && item.StartPosition.CompareTo(range.End) < 0) ?? [];
 
     private bool CanPageGallery(int direction) =>
         _galleryImages is { } images && _galleryIndex + direction >= 0 && _galleryIndex + direction < images.Count;
 
-    private Task PageGalleryAsync(DisplayTarget target, int direction) => ReadForDisplayedTargetAsync(target, async () =>
+    private Task PageGalleryAsync(DisplayTarget target, (CaptureOccurrenceKey Occurrence, int Direction) request) => ReadForDisplayedTargetAsync(target, async () =>
     {
-        if (!CanPageGallery(direction)) return;
+        if (!IsDetailCurrent(target, request.Occurrence) || !CanPageGallery(request.Direction)) return;
         _preferredGalleryImageId = null;
-        _galleryIndex += direction;
+        _galleryIndex += request.Direction;
         await LoadGalleryImageAsync(refreshList: false);
     });
 
@@ -220,7 +258,11 @@ public partial class PlayRecordingPanel
     {
         if (_ranges is null || _ranges.FirstOrDefault(r => r.Id == id) is not { } range) return "選んだ区間";
         var sameName = _ranges.Where(r => r.Name == range.Name).OrderBy(r => r.Id).ToList();
-        return sameName.Count == 1 ? range.Name : $"{range.Name} ({sameName.IndexOf(range) + 1})";
+        if (sameName.Count == 1) return range.Name;
+        var number = sameName.IndexOf(range) + 1;
+        return _rangeStartLabels.TryGetValue(range.Id, out var label)
+            ? $"{range.Name} ({label} · {number})"
+            : $"{range.Name} ({number})";
     }
 
     /// <summary>Resolves saved range references without hiding their IDs when range names are unavailable.</summary>

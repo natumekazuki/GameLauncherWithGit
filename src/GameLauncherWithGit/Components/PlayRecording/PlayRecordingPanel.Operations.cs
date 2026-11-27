@@ -21,6 +21,7 @@ public partial class PlayRecordingPanel
     private bool _focusNextSharedRange;
     private bool _finishAfterRangeSave;
     private bool _waitingAfterResume;
+    private readonly Dictionary<long, string> _rangeStartLabels = [];
     private ScenarioRecordingDisplay RecordingDisplay => _state switch
     {
         { Paused: true } => ScenarioRecordingDisplay.Paused,
@@ -209,9 +210,14 @@ public partial class PlayRecordingPanel
         _textSearchInput = _speakerSearchInput = "";
         _textSearch = _speakerSearch = null;
         _textItems = null;
+        _imageCounts = null;
+        _imageCountsFailed = false;
+        _readingPosition = _restoreReadingPosition = null;
+        _selectedItemId = null;
         _rowButtons.Clear();
         _nextFocus = null;
         _ranges = null;
+        _rangeStartLabels.Clear();
         _labels = [];
         _rangeTags = _speakers = [];
         _textError = _rangesError = _pathsError = _scenesError = false;
@@ -236,6 +242,17 @@ public partial class PlayRecordingPanel
                 _rangeTags = ranges.SelectMany(x => x.Tags).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
                 _rangesError = false;
             }, () => _rangesError = true);
+        // Only duplicate names need a distinguishing date; resolve their original start in this record.
+        if (!_rangesError && _ranges is { } saved)
+        {
+            foreach (var range in saved.GroupBy(x => x.Name, StringComparer.Ordinal).Where(g => g.Count() > 1).SelectMany(g => g))
+            {
+                if (_rangeStartLabels.ContainsKey(range.Id) || _state is not { } current || !IsWorkspaceCurrent(target)) continue;
+                var recorded = ForDisplay(current);
+                await ReadAsync(recorded, "range start", gameId => Operations.GetItemAtAsync(gameId, recorded.Recording, range.Start),
+                    item => _rangeStartLabels[range.Id] = item.ReceivedAt.ToLocalTime().ToString("M/d HH:mm:ss"), () => { });
+            }
+        }
         if (_rangeDraft is not null)
             await ReadAsync(target, "speakers", gameId => Operations.GetSpeakersAsync(gameId, target.Recording), speakers => _speakers = speakers, () => _speakers = []);
     }
@@ -408,7 +425,10 @@ public partial class PlayRecordingPanel
             var shot = await UseAsync(target, gameId => Operations.TakeScreenshotAsync(gameId, target.Recording));
             await RefreshStatusAsync(loadPane: false, refreshLatestText: false);
             if (StillShowingRecording() && _state?.Target.SessionId == shot.Event.SessionId)
+            {
                 _screenshotResult = shot;
+                await LoadImageCountsAsync();
+            }
         }, "撮影失敗", "ゲーム画像を保存できませんでした。PCのゲーム画面を最前面にして、もう一度撮影してください。");
 
         if (StillShowingRecording()) FocusAfterRender(FocusTarget.Screenshot);
