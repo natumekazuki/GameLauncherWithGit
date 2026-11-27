@@ -418,7 +418,15 @@
                 <ScenarioFlowView @key="(target.GameId, target.Recording.HistoryRoot, target.ConnectionVersion)"
                                   Graph="graph" MatchingComplete="_matchingComplete"
                                   OpenOccurrence="occurrence => OpenOccurrenceAsync(target, occurrence)"
-                                  CutOccurrence="occurrence => CutOccurrenceAsync(target, occurrence)" />
+                                  CutOccurrence="occurrence => CutOccurrenceAsync(target, occurrence)">
+                    <OccurrenceImages Context="occurrence">
+                        @{ var key = new CaptureOccurrenceKey(target.Recording.HistoryRoot, occurrence.Start); }
+                        <CaptureFlowOccurrenceImages @key="(target.GameId, key.RecordId, target.ConnectionVersion)"
+                                                     Occurrence="key"
+                                                     LoadImageIds="(requested, token) => LoadFlowImageIdsAsync(target, key, requested, token)"
+                                                     ReadImage="(requested, imageId, token) => ReadFlowImageBytesAsync(target, key, requested, imageId, token)" />
+                    </OccurrenceImages>
+                </ScenarioFlowView>
             </div>
         }
     </section>;

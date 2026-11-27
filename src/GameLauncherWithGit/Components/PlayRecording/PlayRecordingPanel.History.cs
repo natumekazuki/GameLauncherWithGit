@@ -112,6 +112,39 @@ public partial class PlayRecordingPanel
     private Task OpenOccurrenceAsync(DisplayTarget target, ScenarioFlowOccurrence occurrence) =>
         ReadForDisplayedTargetAsync(target, () => OpenResolvedTextAsync(target, occurrence.Start));
 
+    /// <summary>Returns only metadata for the occurrence selected in the current flow.</summary>
+    private Task<IReadOnlyList<string>> LoadFlowImageIdsAsync(DisplayTarget target, CaptureOccurrenceKey selected,
+        CaptureOccurrenceKey requested, CancellationToken cancellationToken) =>
+        ReadFlowImageAsync(target, selected, requested, cancellationToken, async gameId =>
+        {
+            var images = await Operations.GetScreenshotsAsync(gameId, target.Recording, requested.EventKey);
+            return (IReadOnlyList<string>)images.Select(image => image.ImageId).ToArray();
+        });
+
+    /// <summary>Confirms that one selected image still belongs to this occurrence before returning bytes.</summary>
+    private Task<byte[]> ReadFlowImageBytesAsync(DisplayTarget target, CaptureOccurrenceKey selected,
+        CaptureOccurrenceKey requested, string imageId, CancellationToken cancellationToken) =>
+        ReadFlowImageAsync(target, selected, requested, cancellationToken,
+            gameId => Operations.ReadScreenshotAsync(gameId, target.Recording, requested.EventKey, imageId));
+
+    /// <summary>Uses the rendered command token and discards results if the selection or display has changed.</summary>
+    private async Task<T> ReadFlowImageAsync<T>(DisplayTarget target, CaptureOccurrenceKey selected,
+        CaptureOccurrenceKey requested, CancellationToken cancellationToken, Func<string, Task<T>> read)
+    {
+        void RequireSelection()
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (requested != selected || selected.RecordId != target.Recording.HistoryRoot
+                || !IsWorkspaceCurrent(target) || _statusError || _graph is null)
+                throw new DisplayChangedException();
+        }
+
+        RequireSelection();
+        var result = await UseAsync(target, read);
+        RequireSelection();
+        return result;
+    }
+
     private Task OpenCapturedEventAsync(DisplayTarget target, PlayRecordingScreenshotResult shot) =>
         ReadForDisplayedTargetAsync(target, () => OpenResolvedTextAsync(target, new(shot.Event.SessionId, shot.Event.Sequence, 0), shot.ImageId));
 
