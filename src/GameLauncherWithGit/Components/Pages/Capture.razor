@@ -262,7 +262,17 @@
                     <div class="capture-flow-graph" hidden="@(_flowLoading || _flowReadError is not null)" inert="@(!_flowOpen || _flowLoading || _flowReadError is not null)">
                         <ScenarioFlowView @key="(_profileId, _recordId)" Graph="_flowGraph" MatchingComplete="_flowMatchingComplete"
                             OpenOccurrence="occurrence => AtScopeAsync(displayedScope, () => OpenFlowOccurrenceAsync(occurrence))"
-                            CutOccurrence="occurrence => AtScopeAsync(displayedScope, () => CutFlowOccurrenceAsync(displayedProfile, occurrence))" />
+                            CutOccurrence="occurrence => AtScopeAsync(displayedScope, () => CutFlowOccurrenceAsync(displayedProfile, occurrence))">
+                            <OccurrenceImages Context="occurrence">
+                                @if (displayedScope is { } imageScope)
+                                {
+                                    var occurrenceKey = new CaptureOccurrenceKey(imageScope.RecordId, occurrence.Start);
+                                    <CaptureFlowOccurrenceImages @key="(imageScope.ViewKey, occurrenceKey)" Occurrence="occurrenceKey"
+                                        LoadImageIds="(key, token) => LoadFlowImageIdsAsync(imageScope, occurrence, key, token)"
+                                        ReadImage="(key, imageId, token) => ReadFlowImageAsync(imageScope, occurrence, key, imageId, token)" />
+                                }
+                            </OccurrenceImages>
+                        </ScenarioFlowView>
                     </div>
                 }
                 @if (_flowLoading) { <ScenarioLoading Label="フローチャートを読込中…" /> }

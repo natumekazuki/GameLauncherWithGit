@@ -142,11 +142,32 @@ public partial class Capture
 
     /// <summary>Reads metadata only from the same event-scoped store for text and flow details.</summary>
     private Task<IReadOnlyList<string>> ReadOccurrenceImageIdsAsync(DisplayedScope? expected, CaptureOccurrenceKey key,
-        Func<bool> isSelected, CancellationToken token) => ReadSelectedImageDataAsync<IReadOnlyList<string>>(expected, key, isSelected, async () =>
+        Func<bool> isSelected, CancellationToken token, bool resolveFlowPosition = false) => ReadSelectedImageDataAsync<IReadOnlyList<string>>(expected, key, isSelected, async () =>
     {
+        // Flow supplies a raw UTF-16 position rather than an already resolved text item.
+        if (resolveFlowPosition)
+        {
+            await FindOccurrenceItemAsync(key.RecordId, key.Position);
+            token.ThrowIfCancellationRequested();
+        }
         var metadata = await ScreenshotStore.GetEventScreenshotMetadataAsync(key.RecordId, [key.EventKey], token);
         return metadata.Single().Images.Select(image => image.ImageId).ToArray();
     }, token);
+
+    /// <summary>The shared flow owns the selected generation; each delegate is bound to that exact graph occurrence.</summary>
+    private bool IsFlowImageSelection(DisplayedScope expected, ScenarioFlowOccurrence selected, CaptureOccurrenceKey requested) =>
+        requested.RecordId == expected.RecordId && requested.Position == selected.Start &&
+        _flowGraph?.Occurrences.Any(occurrence => occurrence.Id == selected.Id && occurrence.Start == selected.Start) == true;
+
+    /// <summary>Lists attachments for the selected raw flow position, not the block as a whole.</summary>
+    private Task<IReadOnlyList<string>> LoadFlowImageIdsAsync(DisplayedScope expected, ScenarioFlowOccurrence selected,
+        CaptureOccurrenceKey key, CancellationToken token) => ReadOccurrenceImageIdsAsync(expected, key,
+        () => IsFlowImageSelection(expected, selected, key), token, resolveFlowPosition: true);
+
+    /// <summary>Loads only the selected image from the flow detail, with the same checks as the text detail.</summary>
+    private Task<byte[]> ReadFlowImageAsync(DisplayedScope expected, ScenarioFlowOccurrence selected, CaptureOccurrenceKey key,
+        string imageId, CancellationToken token) => ReadOccurrenceImageBytesAsync(expected, key, imageId,
+        () => IsFlowImageSelection(expected, selected, key), token);
 
     /// <summary>Reads one PNG; the store verifies that the image belongs to the selected record and event.</summary>
     private Task<byte[]> ReadOccurrenceImageBytesAsync(DisplayedScope? expected, CaptureOccurrenceKey key, string imageId,

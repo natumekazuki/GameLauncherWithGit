@@ -84,9 +84,9 @@ input[type=checkbox] { width:1rem; height:1rem; margin:0; accent-color:#85b4ff; 
 .capture-detail-pane ::deep .capture-occurrence-heading { display:flex; justify-content:space-between; gap:.75rem; align-items:center; }
 .capture-detail-pane ::deep .capture-occurrence-heading h3 { font-size:1.1rem; margin:0; }
 .capture-detail-pane ::deep .capture-occurrence-text { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.65; margin:0; }
-.capture-detail-actions,.capture-detail-pane ::deep .capture-occurrence-actions,.capture-detail-pane ::deep .capture-occurrence-image-nav { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; margin-block:.5rem; }
+.capture-detail-actions,.capture-content ::deep .capture-occurrence-actions,.capture-content ::deep .capture-occurrence-image-nav { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem; margin-block:.5rem; }
 .capture-detail-pane ::deep .capture-occurrence-detail button { width:auto; }
-.capture-detail-pane ::deep .capture-occurrence-image { margin:0; }
+.capture-content ::deep .capture-occurrence-image { margin:0; }
 .capture-detail-pane ::deep .capture-occurrence-image img { display:block; max-width:100%; max-height:60vh; object-fit:contain; }
 .capture-inline-edit { display:grid; gap:.5rem; margin-block:.6rem; }
 @media (min-width:1500px) {
