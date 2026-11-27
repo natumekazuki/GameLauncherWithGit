@@ -23,6 +23,7 @@
 .play-header, .play-workspace, .play-body, .play-stack { display: grid; gap: .75rem; min-width: 0; }
 .play-body[hidden] { display:none; }
 .play-workspace { grid-template-rows: auto minmax(0,1fr); }
+.play-workspace[hidden] { display:none; }
 .play-body { display:flex; flex-direction:column; min-height:0; }
 .play-view { display:flex; flex:1 1 auto; min-height:0; }
 .play-view[hidden], .play-text-scroll[hidden] { display:none; }

@@ -14,7 +14,7 @@ new MutationObserver(() => {
         const workspace = document.querySelector("#play-recording-content [data-play-recording-workspace]");
         if (workspace) {
             workspace.setAttribute("data-play-recording-stale", "");
-            for (const detail of workspace.querySelectorAll("[data-play-recording-error-details][popover]")) {
+            for (const detail of workspace.querySelectorAll("[popover]")) {
                 if (typeof detail.hidePopover === "function" && detail.matches(":popover-open")) detail.hidePopover();
             }
         }

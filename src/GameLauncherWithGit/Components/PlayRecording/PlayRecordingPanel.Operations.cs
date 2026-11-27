@@ -61,7 +61,8 @@ public partial class PlayRecordingPanel
                 if (!_statusError)
                 {
                     Logger.LogWarning("Play recording Web status unavailable ({ExceptionType}).", ex.GetType().Name);
-                    ClearTargetData();
+                    // An unavailable status is not a confirmed target change. Hide and disable the view,
+                    // but preserve its position and inputs until a successful read resolves the scope.
                     _statusError = true;
                     StateHasChanged();
                 }

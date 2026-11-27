@@ -5,7 +5,7 @@
     <div class="play-shell" data-play-recording-workspace @key="_workspace">
         <header class="play-header">
             <h1>プレイ記録</h1>
-            @if (_state is { } current)
+            @if (!_statusError && _state is { } current)
             {
                 <div class="play-toolbar">
                     <h2>@current.Title</h2>
@@ -15,20 +15,20 @@
             }
         </header>
 
+        @if (_statusError)
+        {
+            <div class="play-panel play-stack">
+                <div><CaptureFailureDetails Label="記録の取得失敗" Detail="記録対象を読み込めませんでした。再読込してください。" Web="true" /></div>
+                <div><button type="button" class="play-labeled-button" @onclick="RefreshAsync" disabled="@_busy"><CaptureIcon Name="Refresh" />再読込</button></div>
+            </div>
+        }
         @if (_state is not { } displayed)
         {
-            @if (_statusError)
-            {
-                <div class="play-panel play-stack">
-                    <div><CaptureFailureDetails Label="記録の取得失敗" Detail="記録対象を読み込めませんでした。再読込してください。" Web="true" /></div>
-                    <div><button type="button" class="play-labeled-button" @onclick="RefreshAsync" disabled="@_busy"><CaptureIcon Name="Refresh" />再読込</button></div>
-                </div>
-            }
-            else if (!_statusLoaded)
+            if (!_statusError && !_statusLoaded)
             {
                 <p role="status">記録対象を読み込み中…</p>
             }
-            else
+            else if (!_statusError)
             {
                 <p role="status">PCのプレイ対象を待っています。</p>
             }
@@ -36,7 +36,7 @@
         else
         {
             var workspaceTarget = ForDisplay(displayed);
-            <div class="play-workspace" aria-busy="@Bool(_busy)">
+            <div class="play-workspace" hidden="@_statusError" aria-busy="@Bool(_busy)">
                 <section class="play-controls play-stack" aria-label="プレイ中の操作">
                     <div class="play-panel play-stack">
                         <div class="play-control-heading">
