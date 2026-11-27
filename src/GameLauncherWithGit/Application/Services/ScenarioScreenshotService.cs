@@ -6,10 +6,15 @@ using Microsoft.Extensions.Logging;
 namespace GameLauncherWithGit.Application.Services;
 
 public sealed record ScreenshotFailure(DateTimeOffset OccurredAt, string Message);
+/// <summary>The result of a committed image, tied to its frozen recording event.</summary>
+public sealed record ScreenshotSuccess(ScreenshotTarget Target, string ImageId, DateTimeOffset OccurredAt);
 public sealed record PlayRecordingScreenshot(string ImageId, int Width, int Height, DateTimeOffset CapturedAt);
 public sealed record PlayRecordingScreenshotResult(CaptureEventKey Event, string ImageId);
 public sealed record ScreenshotStatus(string Status, bool Busy, bool Registered, ScreenshotHotkey Hotkey,
-    CaptureWindow? Window, bool ManualWindow, long SavedCount, ScreenshotFailure? LastFailure = null);
+    CaptureWindow? Window, bool ManualWindow, long SavedCount, ScreenshotFailure? LastFailure = null)
+{
+    public ScreenshotSuccess? LastSuccess { get; init; }
+}
 
 public sealed class ScenarioScreenshotService : IAsyncDisposable
 {
@@ -264,7 +269,9 @@ public sealed class ScenarioScreenshotService : IAsyncDisposable
         await _capture.FlushPendingAsync().WaitAsync(cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         var saved = await _store.SaveScreenshotAsync(target, new(frame.Width, frame.Height, frame.PixelHash, frame.PngBytes), capturedAt, cancellationToken);
-        Update(s => s with { SavedCount = s.SavedCount + 1, Status = "スクリーンショットを保存しました" });
+        // Publish only after commit, using the frozen event rather than the current live position.
+        var success = new ScreenshotSuccess(target, saved.ImageId, _clock.GetUtcNow());
+        Update(s => s with { SavedCount = s.SavedCount + 1, Status = "スクリーンショットを保存しました", LastSuccess = success });
         return new(target.Event, saved.ImageId);
     }
 
