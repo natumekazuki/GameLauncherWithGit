@@ -91,6 +91,8 @@
             const dismiss = dialog.querySelector('[data-dialog-dismiss]:not([disabled])');
             if (dismiss) {
                 event.preventDefault();
+                // Match clicking the dismiss button: commit any change-on-blur to the draft before checking it.
+                dismiss.focus({ preventScroll: true });
                 dismiss.click();
             }
             return;
