@@ -58,6 +58,7 @@
 }
 
 .home-dialog-heading h2 { margin: 0; overflow-wrap: anywhere; font-size: 1.15rem; }
+.home-dialog-heading:not(:has(.home-feedback)) { grid-template-columns: minmax(0, 1fr); }
 .home-history-result { text-align: start; max-width: 100%; overflow-wrap: anywhere; }
 .home-result-overlay { z-index: 1350; }
 .home-result-modal { width: min(36rem, 100%); }
@@ -201,6 +202,8 @@
 
 .home-game-details dt { color: #aabbd0; }
 .home-game-details dd { margin: 0; }
+.home-selected-overlay .editor-modal { overflow-y: auto; }
+.home-selected-overlay .dialog-body { min-height: 2.5rem; }
 .home-git-with-sync {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 3em;
@@ -252,8 +255,24 @@
 
 @media (max-width: 540px) {
     .search-control { flex-basis: 100%; }
+    :is(.home-selected-overlay, .settings-overlay) .dialog-footer {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    :is(.home-selected-overlay, .settings-overlay) .dialog-footer > * {
+        min-width: 0;
+        padding: .4rem .35rem;
+        font-size: .9rem;
+        line-height: 1.3;
+        overflow-wrap: anywhere;
+    }
     .editor-inline-input { min-width: 0; }
     .editor-inline-input input { min-width: 0; }
     .home-delete-action { margin-inline-start: 0; }
     .help-git-table th, .help-git-table td { padding: .3rem; overflow-wrap: anywhere; }
+}
+
+@media (max-height: 360px) {
+    .editor-overlay :is(.editor-modal, .settings-modal) { overflow-y: auto; }
+    .editor-overlay .dialog-body { flex: none; overflow: visible; }
 }
