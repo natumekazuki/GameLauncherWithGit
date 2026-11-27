@@ -115,9 +115,10 @@ internal static class PlayRecordingWebApplication
         app.UseAntiforgery();
         MapAsset(app, "play-recording.css", "text/css; charset=utf-8");
         MapAsset(app, "play-recording.js", "text/javascript; charset=utf-8");
-        MapScopedStyle(app, "capture-tags.css");
-        MapScopedStyle(app, "scenario-flow.css");
-        MapScopedStyle(app, "play-recording-panel.css");
+        MapDesktopStyle(app, "scenario-shared.css");
+        MapDesktopStyle(app, "capture-tags.css");
+        MapDesktopStyle(app, "scenario-flow.css");
+        MapDesktopStyle(app, "play-recording-panel.css");
 
         var components = app.MapRazorComponents<PlayRecordingRoot>().AddInteractiveServerRenderMode(options =>
         {
@@ -140,8 +141,8 @@ internal static class PlayRecordingWebApplication
                 ?? throw new InvalidOperationException($"Missing embedded Web host asset: {file}."),
             contentType));
 
-    /// <summary>Exposes only the named Web component style when embedded by the desktop build.</summary>
-    private static void MapScopedStyle(WebApplication app, string file)
+    /// <summary>Exposes only the named stylesheet when embedded by the desktop build.</summary>
+    private static void MapDesktopStyle(WebApplication app, string file)
     {
         var assembly = typeof(PlayRecordingWebApplication).Assembly;
         var resourceName = $"PlayRecordingWeb.{file}";

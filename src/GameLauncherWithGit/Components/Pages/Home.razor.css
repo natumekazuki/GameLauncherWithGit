@@ -231,9 +231,28 @@
 .delete-confirm-note p { margin-block: 0 .4rem; }
 .home-section-heading h3 { margin-bottom: 0; }
 .home-section-heading { margin-bottom: .65rem; }
-.settings-quick-links { flex: none; gap: .5rem; margin: 0; padding: 0 1rem .7rem; }
+.settings-quick-links { flex: none; gap: .5rem; margin: 0 0 .7rem; padding: 0; }
 .settings-quick-links > button { width: auto; }
 .settings-actions-row > button { width: auto; }
+.settings-sync-grid .settings-value-row {
+    grid-template-columns: minmax(0, 1fr) min(28%, 5.75rem);
+    justify-self: stretch;
+}
+.settings-sync-grid .settings-value-label {
+    white-space: normal;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    text-overflow: clip;
+}
+.home-settings-disclosure {
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+    width: auto;
+    min-height: 2.5rem;
+}
+.home-settings-disclosure[aria-expanded="true"] ::deep svg { transform: rotate(90deg); }
+.settings-overlay .launch-button[aria-disabled="true"] { cursor: progress; opacity: .65; }
 
 :is(.home-header, .utility-bar, .library-page, .startup-error-panel, .editor-overlay)
     :is(a, button, summary, input, select):focus-visible,
@@ -268,6 +287,7 @@
     }
     .editor-inline-input { min-width: 0; }
     .editor-inline-input input { min-width: 0; }
+    .home-branch-overlay :is(.branch-switch-row, .branch-create-row) > :is(input, select) { flex-basis: 100%; }
     .home-delete-action { margin-inline-start: 0; }
     .help-git-table th, .help-git-table td { padding: .3rem; overflow-wrap: anywhere; }
 }
