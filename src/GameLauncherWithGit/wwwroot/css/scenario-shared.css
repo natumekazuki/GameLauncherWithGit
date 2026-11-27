@@ -48,3 +48,25 @@
     outline: var(--scenario-focus);
     outline-offset: var(--scenario-focus-offset);
 }
+
+.scenario-loading {
+    display: inline-flex;
+    align-items: center;
+    gap: .45em;
+    max-inline-size: 100%;
+    color: var(--scenario-muted);
+}
+
+.scenario-loading-spinner {
+    box-sizing: border-box;
+    flex: none;
+    inline-size: 1em;
+    block-size: 1em;
+    border: .1em solid var(--scenario-border);
+    border-block-start-color: var(--scenario-text);
+    border-radius: 50%;
+    animation: scenario-loading-spin .85s linear infinite;
+}
+
+@keyframes scenario-loading-spin { to { transform: rotate(1turn); } }
+@media (prefers-reduced-motion: reduce) { .scenario-loading-spinner { animation: none; } }
