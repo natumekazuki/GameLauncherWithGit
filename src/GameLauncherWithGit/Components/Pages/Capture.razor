@@ -349,11 +349,29 @@
                                 <button type="button" class="scenario-action" @onclick="() => AtScopeAsync(displayedScope, () => CutHistoryOccurrenceAsync(displayedProfile, detail))" disabled="@_busy">ここから別経路</button>
                             }
                         </div>
-                        @foreach (var range in _ranges.Where(r => r.Start.CompareTo(key.Position) <= 0 && r.End.CompareTo(key.Position) > 0))
+                        @foreach (var range in DetailRanges(key, detail))
                         {
-                            <div class="capture-detail-actions">
-                                <button type="button" class="scenario-action" @onclick="() => AtScopeAsync(displayedScope, () => OpenHistoryManagementAsync(range.Id))" disabled="@_busy">@RangeName(range) の名前・タグ</button>
-                                @if (range.Tags.Length > 0) { <span>@string.Join(" · ", range.Tags)</span> }
+                            var rangeEditor = _detailRangeEdit is { } edit && edit.RangeId == range.Id ? edit : null;
+                            <div @key="range.Id">
+                                <div class="capture-detail-actions">
+                                    <button id="@DetailRangeButtonId(range.Id)" type="button" class="scenario-action"
+                                        aria-expanded="@(rangeEditor is not null ? "true" : "false")"
+                                        @onclick="() => AtScope(displayedScope, () => EditDetailRange(key, range.Id))"
+                                        disabled="@(_busy || _detailRangeEdit is not null && rangeEditor is null)">@RangeName(range) の名前・タグ</button>
+                                    @if (range.Tags.Length > 0) { <span>@string.Join(" · ", range.Tags)</span> }
+                                    @if (rangeEditor is not null) { @DialogFailure("区間の名前・タグを保存できませんでした") }
+                                </div>
+                                @if (rangeEditor is not null)
+                                {
+                                    <div class="capture-inline-edit">
+                                        <CaptureRangeFields @bind-Name="rangeEditor.Name" @bind-Tags="rangeEditor.Tags"
+                                            AvailableTags="AvailableRangeTags" SuggestedTags="_gameSpeakers" Disabled="_busy" AutoFocus="true" />
+                                        <div class="capture-detail-actions">
+                                            <button type="button" class="scenario-action" @onclick="() => CloseDetailRangeEdit(rangeEditor)" disabled="@_busy">キャンセル</button>
+                                            <button type="button" class="scenario-action scenario-action--primary" @onclick="() => AtScopeAsync(displayedScope, () => SaveDetailRangeAsync(rangeEditor, displayedProfile))" disabled="@(_busy || string.IsNullOrWhiteSpace(rangeEditor.Name))">名前とタグを保存</button>
+                                        </div>
+                                    </div>
+                                }
                             </div>
                         }
                         </div>
@@ -1078,13 +1096,11 @@
         await ReloadFilteredItemsAsync();
     });
     private Task ClearHistorySearchAsync() { _textSearchInput = _speakerSearchInput = ""; return SearchHistoryAsync(); }
-    private Task OpenHistoryManagementAsync() => OpenHistoryManagementAsync(null);
-    private Task OpenHistoryManagementAsync(long? rangeId) => RunAsync(async () =>
+    private Task OpenHistoryManagementAsync() => RunAsync(async () =>
     {
         _historyCounts = await Store.GetCaptureHistoryCountsAsync(_recordId);
         _ranges = await Store.GetCaptureRangesAsync(_recordId);
-        var requestedRange = rangeId ?? _rangeId;
-        _managedRangeId = _ranges.Any(x => x.Id == requestedRange) ? requestedRange : _ranges.FirstOrDefault()?.Id ?? 0;
+        _managedRangeId = _ranges.Any(x => x.Id == _rangeId) ? _rangeId : _ranges.FirstOrDefault()?.Id ?? 0;
         LoadManagedRangeName(); _historyDialog = HistoryDialog.Manage; _focusEditor = true;
     });
     private void LoadManagedRangeName()

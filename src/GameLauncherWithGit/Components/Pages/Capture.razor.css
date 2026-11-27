@@ -20,7 +20,7 @@ button:not(.scenario-action):not(.scenario-focus):focus-visible,input:not(.scena
 .capture-operation-result { min-block-size:1.5em; color:var(--scenario-muted); overflow-wrap:anywhere; }
 .capture-shot-result { display:flex; flex:1 0 100%; align-items:center; flex-wrap:wrap; gap:.5rem; min-block-size:2.75rem; color:var(--scenario-muted); }
 .capture-dialog ::deep .scenario-range-draft-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:.5rem; }
-.capture-dialog ::deep .scenario-range-name input { background:var(--scenario-input); color:var(--scenario-text); border:1px solid var(--scenario-border); border-radius:5px; padding:.5rem; min-width:0; width:100%; }
+.capture-dialog ::deep .scenario-range-name input,.capture-detail-pane ::deep .scenario-range-name input { background:var(--scenario-input); color:var(--scenario-text); border:1px solid var(--scenario-border); border-radius:5px; padding:.5rem; min-width:0; width:100%; }
 .capture-text-workspace[hidden],.capture-flow-workspace[hidden],.capture-flow-graph[hidden] { display:none; }
 .capture-filters[hidden] { display:none; }
 .capture-flow-title { font-size:1rem; margin:.5rem 0; }

@@ -20,6 +20,17 @@ public partial class Capture
     private bool _detailImagesLoading, _focusDetail, _restoreDetailFocus;
     private bool _correctionOpen, _focusCorrection;
     private ElementReference _detailHost, _correctionHost;
+    private DetailRangeEdit? _detailRangeEdit;
+    private long? _restoreDetailRangeFocus;
+
+    /// <summary>Holds name and tags for one saved range without changing the selected occurrence.</summary>
+    private sealed class DetailRangeEdit(CaptureOccurrenceKey occurrence, CaptureRange range)
+    {
+        public CaptureOccurrenceKey Occurrence { get; } = occurrence;
+        public long RangeId { get; } = range.Id;
+        public string Name { get; set; } = range.Name;
+        public string[] Tags { get; set; } = range.Tags.ToArray();
+    }
 
     private ScreenshotSuccess? VisibleShot(ScreenshotStatus status) =>
         ViewingLiveRecord && status.LastSuccess is { } shot && shot.Target.CaptureGameId == _recordId &&
@@ -57,6 +68,8 @@ public partial class Capture
         _detailKey = key;
         _detailOpener = opener;
         _detailMessage = null;
+        _detailRangeEdit = null;
+        _restoreDetailRangeFocus = null;
         _detailImageIndex = 0;
         _following = false;
         _correctionOpen = _edit?.StartPosition == item.StartPosition;
@@ -163,14 +176,66 @@ public partial class Capture
         _detailKey = null;
         _detailImages = null;
         _detailMessage = null;
+        _detailRangeEdit = null;
+        _restoreDetailRangeFocus = null;
         _detailImageSource = _detailImageError = null;
         _detailImagesLoading = _focusDetail = _correctionOpen = false;
     }
 
     private void HandleDetailKey(KeyboardEventArgs args)
     {
-        if (args.Key == "Escape" && _detailKey is { } key) CloseDetail(key);
+        if (args.Key != "Escape" || _busy) return;
+        // Close the innermost editor before dismissing the selected occurrence.
+        if (_detailRangeEdit is { } editor) CloseDetailRangeEdit(editor);
+        else if (_detailKey is { } key) CloseDetail(key);
     }
+
+    /// <summary>Matches the displayed occurrence span against saved ranges, including clipped text.</summary>
+    private IEnumerable<CaptureRange> DetailRanges(CaptureOccurrenceKey key, CaptureTextItem item) => _ranges.Where(range =>
+        range.CaptureGameId == key.RecordId && range.Start.CompareTo(item.EndPosition) < 0 &&
+        range.End.CompareTo(key.Position) > 0);
+
+    private static string DetailRangeButtonId(long rangeId) => $"capture-detail-range-{rangeId}";
+
+    /// <summary>Opens only the clicked range and keeps the preview and feed in place.</summary>
+    private void EditDetailRange(CaptureOccurrenceKey key, long rangeId)
+    {
+        if (_busy || !IsDetailCurrent(key) || _detailItem is not { } item) return;
+        if (_detailRangeEdit is { } open)
+        {
+            // Keep the expanded button as the toggle for that exact editor.
+            if (open.RangeId == rangeId) CloseDetailRangeEdit(open);
+            return;
+        }
+        if (DetailRanges(key, item).FirstOrDefault(range => range.Id == rangeId) is not { } range) return;
+        _error = _errorLabel = _detailMessage = null;
+        _detailRangeEdit = new(key, range);
+    }
+
+    /// <summary>Discards the local edit and restores its opener, leaving the preview mounted.</summary>
+    private void CloseDetailRangeEdit(DetailRangeEdit edit)
+    {
+        if (!ReferenceEquals(edit, _detailRangeEdit)) return;
+        _detailRangeEdit = null;
+        _error = _errorLabel = null;
+        _restoreDetailRangeFocus = edit.RangeId;
+    }
+
+    /// <summary>Changes only the selected range's metadata through the existing record-scoped write.</summary>
+    private Task SaveDetailRangeAsync(DetailRangeEdit edit, PlayRecordingTarget target) => RunAsync(async () =>
+    {
+        if (!ReferenceEquals(edit, _detailRangeEdit) || !IsDetailCurrent(edit.Occurrence) || _detailItem is not { } item ||
+            !DetailRanges(edit.Occurrence, item).Any(range => range.Id == edit.RangeId))
+            throw ScopeChanged();
+
+        var expected = _displayedScope;
+        await WriteHistoryAsync(target, recordId => Store.UpdateCaptureRangeAsync(recordId, edit.RangeId, edit.Name, edit.Tags));
+        // Refresh only range metadata so the filtered page and selected image do not move.
+        var ranges = await Store.GetCaptureRangesAsync(edit.Occurrence.RecordId);
+        if (!await CanPublishAsync(expected) || !ReferenceEquals(edit, _detailRangeEdit) || !IsDetailCurrent(edit.Occurrence)) return;
+        _ranges = ranges;
+        CloseDetailRangeEdit(edit);
+    }, failureLabel: "区間の名前・タグを保存できませんでした");
 
     /// <summary>Resumes the current item’s correction draft without replacing an unsaved draft for another line.</summary>
     private void EditDetail(CaptureOccurrenceKey key)
@@ -211,6 +276,11 @@ public partial class Capture
         {
             _focusCorrection = false;
             await _correctionHost.FocusAsync();
+        }
+        if (_restoreDetailRangeFocus is { } rangeId && _detailKey is not null)
+        {
+            _restoreDetailRangeFocus = null;
+            await _module.InvokeVoidAsync("focusTextDetailOpener", DetailRangeButtonId(rangeId));
         }
     }
 }
