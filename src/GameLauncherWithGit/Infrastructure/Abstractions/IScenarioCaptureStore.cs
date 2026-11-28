@@ -18,6 +18,10 @@ public interface IScenarioCaptureStore
     Task<IReadOnlyList<CaptureTextItem>> GetGameCaptureItemsAsync(long profileId, int limit = 200, int offset = 0, long? labelId = null, bool unclassifiedOnly = false, bool latest = false, long? rangeId = null, CaptureKind? kind = null, string? textSearch = null, string? speakerSearch = null, CapturePosition? before = null);
     Task<IReadOnlyList<CaptureDeletionTarget>> GetCaptureDeletionTargetsAsync(long profileId, IReadOnlyCollection<long> itemIds);
     Task<CaptureDeletionResult> DeleteCaptureEventsAsync(long profileId, IReadOnlyCollection<CaptureEventKey> events);
+    /// <summary>Resolves a full saved item from the displayed row identity and possibly clipped positions.</summary>
+    Task<CaptureOccurrenceDeletionTarget> GetCaptureOccurrenceDeletionTargetAsync(long recordId, CaptureOccurrenceDeletionRequest request);
+    /// <summary>Deletes one still-current confirmed item. The caller must hold the desktop history gate and reject active capture for this record.</summary>
+    Task<CaptureDeletionResult> DeleteCaptureOccurrenceAsync(long recordId, CaptureOccurrenceDeletionTarget target);
     Task<CaptureHistoryCounts> GetCaptureHistoryCountsAsync(long profileId);
     Task<CaptureDeletionResult> ClearCaptureHistoryAsync(long profileId);
     Task UpdateCaptureRangeAsync(long profileId, long rangeId, string name, IReadOnlyCollection<string> tags);

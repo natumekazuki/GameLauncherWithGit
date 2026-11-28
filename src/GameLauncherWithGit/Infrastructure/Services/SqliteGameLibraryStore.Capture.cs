@@ -60,6 +60,12 @@ public sealed partial class SqliteGameLibraryStore
                 ManualSpeakerText TEXT NULL,
                 FOREIGN KEY(SessionId, ReceiveSequence) REFERENCES CaptureEvents(SessionId, ReceiveSequence),
                 UNIQUE(SessionId, ReceiveSequence, StartUtf16));
+            CREATE TABLE IF NOT EXISTS CaptureDeletedSpans (
+                SessionId INTEGER NOT NULL, ReceiveSequence INTEGER NOT NULL,
+                StartUtf16 INTEGER NOT NULL CHECK(StartUtf16 >= 0),
+                EndUtf16 INTEGER NOT NULL CHECK(EndUtf16 > StartUtf16),
+                PRIMARY KEY(SessionId, ReceiveSequence, StartUtf16),
+                FOREIGN KEY(SessionId, ReceiveSequence) REFERENCES CaptureEvents(SessionId, ReceiveSequence) ON DELETE CASCADE);
             CREATE TABLE IF NOT EXISTS CaptureRanges (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
                 CaptureGameId INTEGER NOT NULL REFERENCES CaptureGames(Id), Name TEXT NOT NULL,
@@ -74,6 +80,7 @@ public sealed partial class SqliteGameLibraryStore
                 ImageId TEXT NOT NULL REFERENCES CaptureImages(Id), CapturedAt TEXT NOT NULL,
                 PRIMARY KEY(SessionId,ReceiveSequence,ImageId),
                 FOREIGN KEY(SessionId,ReceiveSequence) REFERENCES CaptureEvents(SessionId,ReceiveSequence) ON DELETE CASCADE);
+            CREATE INDEX IF NOT EXISTS IX_CaptureEventImages_Image ON CaptureEventImages(ImageId);
             """;
         await command.ExecuteNonQueryAsync(cancellationToken);
         await EnsureScenarioSceneFlowSchemaAsync(connection, cancellationToken);
@@ -229,11 +236,15 @@ public sealed partial class SqliteGameLibraryStore
     }
 
     private static async Task InsertCaptureItemsAsync(SqliteConnection connection, SqliteTransaction transaction,
-        long sessionId, CaptureReceived received, CaptureRules rules, IReadOnlyList<CaptureLabel> labels)
+        long sessionId, CaptureReceived received, CaptureRules rules, IReadOnlyList<CaptureLabel> labels,
+        IReadOnlyList<DeletedCaptureSpan>? deleted = null)
     {
         if (received.Role == CaptureRole.Name || received.Text.Length == 0) return;
         ValidateCaptureLabel(labels, received.LabelId);
-        foreach (var segment in ScenarioTextProcessor.Split(received.Text, rules))
+        var segments = ScenarioTextProcessor.Split(received.Text, rules);
+        // Fresh appends bypass exclusions; only historical rebuilds can have suppressed source positions.
+        var retained = deleted is { Count: > 0 } ? ExcludeDeletedCaptureSegments(segments, deleted) : segments;
+        foreach (var segment in retained)
         {
             var labelId = received.LabelId ?? labels.FirstOrDefault(x => x.Kind == segment.Kind)?.Id;
             await using var command = CaptureCommand(connection, transaction, """
@@ -410,6 +421,7 @@ public sealed partial class SqliteGameLibraryStore
             ("$session", sessionId), ("$sequence", sequence));
         var raw = await find.ExecuteScalarAsync() as string ?? throw new InvalidOperationException("本文原文が見つかりません。");
         ScenarioTextProcessor.ValidateBoundaries(raw, boundaries);
+        var deleted = await ReadDeletedCaptureSpansAsync(connection, transaction, sessionId, sequence);
         if (parts is not null)
         {
             if (parts.Count != boundaries.Count + 1) throw new ArgumentException("分割数が一致しません。");
@@ -428,12 +440,13 @@ public sealed partial class SqliteGameLibraryStore
         var index = 0;
         foreach (var end in boundaries.Append(raw.Length))
         {
-            if (end > start)
+            // Manual metadata belongs to the requested part even if a deletion leaves multiple visible slices.
+            foreach (var slice in RetainedCaptureSlices(start, end, deleted))
             {
                 await using var add = CaptureCommand(connection, transaction, """
                     INSERT INTO CaptureItems(SessionId,ReceiveSequence,StartUtf16,LengthUtf16,HasManualLabel,ManualLabelId,HasManualSpeaker,ManualSpeakerText)
                     VALUES($session,$sequence,$start,$length,$manual,$label,$manual,$speaker)
-                    """, ("$session", sessionId), ("$sequence", sequence), ("$start", start), ("$length", end - start),
+                    """, ("$session", sessionId), ("$sequence", sequence), ("$start", slice.Start), ("$length", slice.Length),
                     ("$manual", parts is not null), ("$label", parts?[index].LabelId), ("$speaker", parts?[index].Speaker));
                 await add.ExecuteNonQueryAsync();
             }
@@ -477,12 +490,13 @@ public sealed partial class SqliteGameLibraryStore
             ValidateCaptureLabel(labels, sourceLabel);
             if (target.Length == group.Count() && !group.Any(x => x.ManualBoundaries || x.ManualLabel || x.ManualSpeaker))
             {
+                var deleted = await ReadDeletedCaptureSpansAsync(connection, transaction, sessionId, group.Key);
                 await using var clear = CaptureCommand(connection, transaction,
                     "DELETE FROM CaptureItems WHERE SessionId=$session AND ReceiveSequence=$sequence",
                     ("$session", sessionId), ("$sequence", group.Key));
                 await clear.ExecuteNonQueryAsync();
                 await InsertCaptureItemsAsync(connection, transaction, sessionId,
-                    new(group.Key, target[0].ReceivedAt, source, target[0].RawText, CaptureRole.Body, sourceLabel), rules, labels);
+                    new(group.Key, target[0].ReceivedAt, source, target[0].RawText, CaptureRole.Body, sourceLabel), rules, labels, deleted);
                 await using var ids = CaptureCommand(connection, transaction,
                     "SELECT Id FROM CaptureItems WHERE SessionId=$session AND ReceiveSequence=$sequence",
                     ("$session", sessionId), ("$sequence", group.Key));
