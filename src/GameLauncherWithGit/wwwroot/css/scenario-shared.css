@@ -77,3 +77,8 @@
 
 @keyframes scenario-loading-spin { to { transform: rotate(1turn); } }
 @media (prefers-reduced-motion: reduce) { .scenario-loading-spinner { animation: none; } }
+
+/* Do not let a bounded tail replacement anchor to an older row before the shared JS can follow it. */
+[data-scenario-feed-pending] {
+    overflow-anchor: none;
+}

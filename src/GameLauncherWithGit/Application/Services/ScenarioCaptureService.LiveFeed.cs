@@ -13,9 +13,13 @@ public sealed record ScenarioLiveFeedVersion(long RecordId, long SessionId, long
 public sealed partial class ScenarioCaptureService
 {
     private ScenarioLiveFeedVersion? _liveFeedVersion;
+    private ScenarioLiveFeedVersion? _liveFeedSpeakerVersion;
 
     /// <summary>The newest committed body version, also available if a subscriber skipped a wakeup.</summary>
     public ScenarioLiveFeedVersion? LiveFeedVersion => Volatile.Read(ref _liveFeedVersion);
+
+    /// <summary>Tracks delayed automatic speaker writes separately from new body arrivals.</summary>
+    internal ScenarioLiveFeedVersion? LiveFeedSpeakerVersion => Volatile.Read(ref _liveFeedSpeakerVersion);
 
     /// <summary>Signals a committed body. Subscribers schedule their work without blocking the capture writer.</summary>
     public event Action<ScenarioLiveFeedVersion>? LiveFeedCommitted;
@@ -37,4 +41,9 @@ public sealed partial class ScenarioCaptureService
             }
         }
     }
+
+    /// <summary>Publishes a committed speaker batch under the capture state gate.</summary>
+    private void PublishLiveFeedSpeakers(long recordId, long sessionId, long scopeVersion) =>
+        Volatile.Write(ref _liveFeedSpeakerVersion,
+            new(recordId, sessionId, scopeVersion, (_liveFeedSpeakerVersion?.Revision ?? 0) + 1));
 }

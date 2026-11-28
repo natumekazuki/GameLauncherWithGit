@@ -21,9 +21,12 @@ export function observe(element, owner, scope) {
         state.end = end;
         owner.invokeMethodAsync("FeedFollowing", scope, end).catch(() => {});
     };
-    const invalidate = () => { state.pending = null; };
+    const invalidate = () => {
+        state.pending = null;
+        element.removeAttribute("data-scenario-feed-pending");
+    };
     const onScroll = () => {
-        if (state.pending && element.scrollTop < state.pending.top - 1) invalidate();
+        if (state.pending && element.scrollTop < state.pending.top - 1 && !atEnd(element, scope)) invalidate();
         update();
     };
     const onKey = event => {
@@ -31,7 +34,10 @@ export function observe(element, owner, scope) {
         if (["ArrowUp", "PageUp", "Home", " "].includes(event.key)) invalidate();
     };
     const listeners = [["scroll", onScroll], ["wheel", invalidate], ["touchmove", invalidate], ["keydown", onKey]];
-    state.remove = () => listeners.forEach(([event, listener]) => element.removeEventListener(event, listener));
+    state.remove = () => {
+        invalidate();
+        listeners.forEach(([event, listener]) => element.removeEventListener(event, listener));
+    };
     state.update = update;
     feeds.set(element, state);
     listeners.forEach(([event, listener]) => element.addEventListener(event, listener, { passive: true }));
@@ -49,14 +55,16 @@ export function arm(element, scope) {
     const state = feeds.get(element);
     const ticket = ++state.generation;
     state.pending = { ticket, top: element.scrollTop };
+    element.setAttribute("data-scenario-feed-pending", "");
     return ticket;
 }
 
-export function apply(element, scope, ticket) {
+export function apply(element, scope, ticket, follow = true) {
     const state = feeds.get(element);
     if (state?.scope !== scope || state.pending?.ticket !== ticket) return;
     state.pending = null;
-    scroll(element, true);
+    if (follow) scroll(element, true);
+    element.removeAttribute("data-scenario-feed-pending");
 }
 
 export function scroll(element, end) {
