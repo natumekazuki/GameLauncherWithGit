@@ -125,6 +125,26 @@ public sealed class ScenarioRangeFlowStoreTests : IAsyncLifetime
         Assert.Equal(4, (await _store.GetCaptureRangesAsync(record)).Count);
     }
 
+    /// <summary>Deleting all source events leaves a saved range selectable through its existing saved-range query.</summary>
+    [Fact]
+    public async Task RealSnapshotRetainsAnExplicitRangeAfterDeletingAllItsText()
+    {
+        var record = await CreateRecordAsync("synthetic");
+        var session = await AppendTraceAsync(record, ["本文"]);
+        var start = new CapturePosition(session, 1, 0);
+        var end = new CapturePosition(session, 1, 2);
+        var range = await _store.SaveCaptureRangeAsync(record, "保存した名前", start, end);
+        var before = ScenarioRangeFlowProjector.Build(await _store.GetScenarioMaterialAsync(record, new()));
+        await _store.DeleteCaptureEventsAsync(record, [new(session, 1)]);
+        var snapshot = await _store.GetScenarioMaterialAsync(record, new());
+        var after = ScenarioRangeFlowProjector.Build(snapshot);
+
+        Assert.Empty(Assert.Single(snapshot.Ranges).Spans);
+        Assert.Equal(Assert.Single(before.Nodes), Assert.Single(after.Nodes));
+        Assert.Empty(after.Edges);
+        Assert.Empty(await _store.GetGameCaptureItemsAsync(record, rangeId: range));
+    }
+
     /// <summary>Registers a synthetic record without launching an executable or opening a repository.</summary>
     private async Task<long> CreateRecordAsync(string gameId)
     {
