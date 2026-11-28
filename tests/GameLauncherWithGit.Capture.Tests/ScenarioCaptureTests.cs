@@ -28,6 +28,61 @@ public sealed class ScenarioCaptureTests : IDisposable
     private static CaptureReceived Receive(long sequence, string text, CaptureRole role = CaptureRole.Body, DateTimeOffset? time = null) =>
         new(sequence, time ?? DateTimeOffset.UtcNow, Source, text, role);
 
+    /// <summary>Readers can query the new body when notified; test reception and name-only input must not wake them.</summary>
+    // @test-value v2
+    // kind = "invariant"
+    // claim = "正式本文の保存確定後だけ、対象付きの版が進む"
+    // oracle = { type = "contract", ref = "ScenarioCaptureService.LiveFeedCommitted" }
+    // fault = "テスト受信や名前入力で更新する、またはcommit前や別対象の版で通知する"
+    // observable = "通知時点での別SQLite接続の本文、通知された版と対象"
+    // observation_boundary = "public-boundary"
+    // scope = "capture writer and live feed"
+    // lifecycle = "permanent"
+    // @end-test-value
+    [Fact]
+    public async Task LiveFeedPublishesCommittedBodyForTheExactSession()
+    {
+        var (profile, _) = await StartAsync();
+        var host = new FakeHost();
+        await using var manager = new ScenarioCaptureService(_store, host, NullLogger<ScenarioCaptureService>.Instance);
+        var updates = new List<(ScenarioLiveFeedVersion Version, long VisibleRows)>();
+        manager.LiveFeedCommitted += _ => throw new InvalidOperationException("Test listener");
+        manager.LiveFeedCommitted += version =>
+        {
+            using var connection = new SqliteConnection($"Data Source={Path.Combine(_directory, "library.db")}");
+            connection.Open();
+            using var count = connection.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM CaptureItems WHERE SessionId=$session";
+            count.Parameters.AddWithValue("$session", version.SessionId);
+            updates.Add((version, (long)count.ExecuteScalar()!));
+        };
+        Assert.True(await manager.BeginGameAsync("game"));
+        await manager.SelectProcessAsync(Environment.ProcessId);
+        var body = Source with { ProcessId = (uint)Environment.ProcessId };
+        var name = body with { Context = body.Context + 1 };
+        await manager.SaveRulesAsync(new()
+        {
+            Selections = [new(body.HookCode, body.HookName, body.Context, body.Context2, CaptureRole.Body),
+                new(name.HookCode, name.HookName, name.Context, name.Context2, CaptureRole.Name)]
+        });
+        host.Emit(body, "「テスト本文」");
+        await manager.ConfirmProcessAsync();
+        host.Emit(name, "名前");
+        await manager.FlushPendingAsync();
+        Assert.Null(manager.LiveFeedVersion);
+        host.Emit(body, "「一」");
+        host.Emit(body, "「二」");
+        await manager.FlushPendingAsync();
+
+        var snapshot = manager.Snapshot;
+        Assert.Equal(new long[] { 1, 2 }, updates.Select(x => x.VisibleRows));
+        Assert.Equal(new long[] { 1, 2 }, updates.Select(x => x.Version.Revision));
+        Assert.All(updates, observation =>
+            Assert.True(observation.Version.Matches(profile.Id, snapshot.SessionId, snapshot.PlayScopeVersion)));
+        Assert.False(updates[0].Version.Matches(profile.Id, snapshot.SessionId, snapshot.PlayScopeVersion + 1));
+        Assert.Equal(updates[^1].Version, manager.LiveFeedVersion);
+    }
+
     // @test-value v2
     // kind = "invariant"
     // claim = "混在本文は原文を欠かさないUTF-16範囲に分割される"
