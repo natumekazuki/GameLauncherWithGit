@@ -4,7 +4,7 @@
     container-type: inline-size;
 }
 
-.flow-toolbar, .flow-zoom, .flow-visits, .flow-occurrence-actions {
+.flow-toolbar, .flow-zoom, .flow-selection {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
@@ -17,7 +17,7 @@
     margin-block: .5rem .75rem;
 }
 
-.flow-toolbar label {
+.flow-chart-picker {
     display: grid;
     gap: .25rem;
     min-inline-size: 0;
@@ -39,7 +39,7 @@
 .flow-zoom-step { min-inline-size: 2.75rem; }
 .flow-zoom output { min-inline-size: 3.25em; text-align: center; font-variant-numeric: tabular-nums; }
 .flow-matching { align-self: center; }
-.flow-matching, .flow-empty, .flow-connections { color: var(--scenario-muted); font-size: .875rem; }
+.flow-matching, .flow-empty { color: var(--scenario-muted); font-size: .875rem; }
 .flow-workarea {
     --flow-height: max(11rem, min(53dvh, calc(100dvh - 12rem)));
     display: grid;
@@ -47,7 +47,6 @@
     align-items: start;
     gap: .75rem;
 }
-.flow-workarea[hidden] { display: none; }
 
 .flow-viewport {
     position: relative;
@@ -100,26 +99,10 @@
     overflow-wrap: anywhere;
     line-height: 1.35;
 }
-.flow-node small { display: block; margin-top: 4px; color: var(--scenario-muted); }
-.flow-reading {
-    box-sizing: border-box;
-    min-inline-size: 0;
-    padding: .75rem;
-    border: 1px solid var(--scenario-border);
-    border-radius: .55rem;
-    background: var(--scenario-surface);
-}
-.flow-reading button { max-inline-size: 100%; overflow-wrap: anywhere; }
-.flow-reading ::deep svg, .flow-zoom ::deep svg { flex: none; }
-.flow-occurrence { margin-block-start: .75rem; }
-.flow-occurrence p { max-inline-size: 76ch; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
-.flow-connections { margin-block-end: 0; }
-.flow-occurrence-images { min-inline-size: 0; }
-.flow-occurrence-images:not(:empty) { margin-block-start: .75rem; }
-.flow-occurrence-images ::deep img { max-inline-size: 100%; block-size: auto; }
+.flow-selection { gap: .5rem 1rem; }
+.flow-selection strong { min-inline-size: 0; overflow-wrap: anywhere; }
+.flow-zoom ::deep svg { flex: none; }
 
 @container (min-width: 52rem) {
     .flow-workarea { --flow-height: max(13rem, calc(100dvh - 15rem)); }
-    .flow-workarea:has(.flow-reading) { grid-template-columns: minmax(0, 1fr) clamp(14rem, 25%, 22rem); }
-    .flow-reading { max-block-size: var(--flow-height); overflow: auto; }
 }

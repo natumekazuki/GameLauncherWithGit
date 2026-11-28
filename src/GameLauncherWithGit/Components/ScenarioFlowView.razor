@@ -1,88 +1,71 @@
 @using GameLauncherWithGit.Application.Models
 
-<section class="scenario-flow" aria-label="シナリオのフローチャート">
-    <div class="flow-toolbar">
-        <label>フローチャート
-            <select class="scenario-focus" @bind="_chartId" @bind:after="ChangeChart" disabled="@(Graph.Charts.Count == 0)">
-                @for (var i = 0; i < Graph.Charts.Count; i++)
-                {
-                    var chart = Graph.Charts[i];
-                    <option value="@chart.Id">フローチャート @(i + 1) · @chart.OccurrenceIds.Count 出現</option>
-                }
-            </select>
-        </label>
-        @if (_blocks.Length > 0)
-        {
+<section class="scenario-flow" aria-label="シナリオのフローチャート" data-flow-chart-id="@_chartId">
+    @if (_nodes.Length == 0)
+    {
+        <p class="flow-empty">観測した経路はありません。</p>
+    }
+    else
+    {
+        <div class="flow-toolbar">
+            <div class="flow-chart-picker">
+                <label for="@_chartSelectId">フローチャート</label>
+                <select id="@_chartSelectId" class="scenario-focus" @bind="_chartId" @bind:after="ChangeChart">
+                    @for (var i = 0; i < Graph.Charts.Count; i++)
+                    {
+                        var chart = Graph.Charts[i];
+                        <option value="@chart.Id">フローチャート @(i + 1) · @chart.NodeIds.Count 区間</option>
+                    }
+                </select>
+            </div>
             <div class="flow-zoom" role="group" aria-label="フローの倍率">
                 <button type="button" class="scenario-action" @onclick="Fit" aria-pressed="@(_fit ? "true" : "false")">全体表示</button>
                 <button type="button" class="scenario-action flow-zoom-step" @onclick="ZoomOut" disabled="@(_fit || _zoomIndex == 0)" aria-label="縮小">−</button>
                 <output aria-live="polite">@(_fit ? "全体" : $"{Zoom}%")</output>
                 <button type="button" class="scenario-action flow-zoom-step" @onclick="ZoomIn" disabled="@(!_fit && _zoomIndex == ZoomLevels.Length - 1)" aria-label="拡大"><CaptureIcon Name="Plus" /></button>
             </div>
-        }
-        <span class="flow-matching" role="status">@(MatchingComplete ? "照合済み" : "照合途中 · 未照合の本文は別ブロックで表示")</span>
-    </div>
-    @if (_blocks.Length == 0)
-    {
-        <p class="flow-empty">観測した経路はありません。</p>
-    }
-    <div class="flow-workarea" hidden="@(_blocks.Length == 0)">
-        <div @key="_viewportRevision" class="flow-viewport @(_fit ? "flow-viewport-fit" : "") scenario-focus" tabindex="0" role="region" aria-label="観測した経路">
-            <svg class="flow-surface" width="@Scaled(_canvasWidth)" height="@Scaled(_canvasHeight)" viewBox="@($"0 0 {_canvasWidth} {_canvasHeight}")" preserveAspectRatio="xMidYMin meet">
-                <defs>
-                    <marker id="@_arrowId" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
-                        <path class="flow-arrow" d="M 0 0 L 10 5 L 0 10 z" />
-                    </marker>
-                </defs>
-                <g aria-hidden="true">
-                    @foreach (var edge in _edges)
-                    {
-                        <path class="flow-edge @(edge.Revisit ? "flow-edge-revisit" : "")" d="@edge.Path" marker-end="@($"url(#{_arrowId})")" />
-                    }
-                </g>
-                @foreach (var block in _blocks)
-                {
-                    var position = _positions[block.Id];
-                    <foreignObject @key="block.Id" x="@(position.X - FocusInset)" y="@(position.Y - FocusInset)"
-                                   width="@(NodeWidth + FocusInset * 2)" height="@(NodeHeight + FocusInset * 2)">
-                        <div class="flow-node-frame" xmlns="http://www.w3.org/1999/xhtml">
-                            <button type="button" class="flow-node scenario-focus" aria-pressed="@(_selected?.BlockId == block.Id ? "true" : "false")" @onclick="() => SelectBlock(block.Id)">
-                                <span>@block.Text</span><small>@block.OccurrenceIds.Count 出現</small>
-                            </button>
-                        </div>
-                    </foreignObject>
-                }
-            </svg>
+            <span class="flow-matching" role="status">@(MatchingComplete ? "照合済み" : "照合途中")</span>
         </div>
-        @if (_selected is { } selected)
-        {
-            <div class="flow-reading" aria-label="選択したブロック">
-                <div class="flow-visits" role="group" aria-label="ブロックの出現">
-                    @foreach (var occurrence in _byBlock[selected.BlockId])
+        <div class="flow-workarea">
+            <div @key="_viewportRevision" class="flow-viewport @(_fit ? "flow-viewport-fit" : "") scenario-focus" tabindex="0" role="region" aria-label="観測した経路">
+                <svg class="flow-surface" width="@Scaled(_canvasWidth)" height="@Scaled(_canvasHeight)" viewBox="@($"0 0 {_canvasWidth} {_canvasHeight}")" preserveAspectRatio="xMidYMin meet">
+                    <defs>
+                        <marker id="@_arrowId" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+                            <path class="flow-arrow" d="M 0 0 L 10 5 L 0 10 z" />
+                        </marker>
+                    </defs>
+                    <g aria-hidden="true">
+                        @foreach (var edge in _edges)
+                        {
+                            <path class="flow-edge @(edge.Revisit ? "flow-edge-revisit" : "")" d="@edge.Path" marker-end="@($"url(#{_arrowId})")"
+                                  data-flow-from="@edge.Edge.FromId" data-flow-to="@edge.Edge.ToId" />
+                        }
+                    </g>
+                    @foreach (var node in _nodes)
                     {
-                        var number = _visitNumbers[occurrence.Id];
-                        <button @key="occurrence.Id" type="button" class="scenario-action" aria-pressed="@(selected.Id == occurrence.Id ? "true" : "false")" @onclick="() => SelectOccurrence(occurrence)">記録 @number.Session · @number.Visit @(occurrence.CutBefore ? "· 別経路の先頭" : "")</button>
+                        var position = _positions[node.Id];
+                        <foreignObject @key="node.Id" x="@(position.X - FocusInset)" y="@(position.Y - FocusInset)"
+                                       width="@(NodeWidth + FocusInset * 2)" height="@(NodeHeight + FocusInset * 2)">
+                            <div class="flow-node-frame" xmlns="http://www.w3.org/1999/xhtml">
+                                <button type="button" class="flow-node scenario-focus" data-flow-node-id="@node.Id"
+                                        aria-pressed="@(_selected?.Id == node.Id ? "true" : "false")" @onclick="() => _selected = node">
+                                    <span>@node.Name</span>
+                                </button>
+                            </div>
+                        </foreignObject>
                     }
-                </div>
-                <div class="flow-occurrence">
-                    @if (selected.Speaker is not null)
-                    {
-                        <strong>@selected.Speaker</strong>
-                    }
-                    <p>@selected.Text</p>
-                    <div class="flow-occurrence-actions">
-                        <button type="button" class="scenario-action" @onclick="() => OpenOccurrence.InvokeAsync(selected)"><CaptureIcon Name="Image" />本文・画像へ</button>
-                        <button type="button" class="scenario-action" @onclick="() => CutOccurrence.InvokeAsync(selected)" disabled="@selected.CutBefore"><CaptureIcon Name="PathBreak" />ここから別経路</button>
-                    </div>
-                    <p class="flow-connections">@ConnectionSummary(selected)</p>
-                    @if (OccurrenceImages is { } renderImages)
-                    {
-                        <div class="flow-occurrence-images">@renderImages(selected)</div>
-                    }
-                </div>
+                </svg>
             </div>
-        }
-    </div>
+            @if (_selected is { } selected && OpenRange.HasDelegate)
+            {
+                <div class="flow-selection" role="group" aria-label="選択した区間">
+                    <strong id="@_selectedNameId">@selected.Name</strong>
+                    <button type="button" class="scenario-action" data-flow-open-range="@selected.Id"
+                            aria-describedby="@_selectedNameId" @onclick="() => OpenRange.InvokeAsync(selected)">区間の本文を見る</button>
+                </div>
+            }
+        </div>
+    }
 </section>
 
 @code {
@@ -95,21 +78,19 @@
     private const int DefaultZoom = 2;
     private static readonly int[] ZoomLevels = [50, 75, 100, 125, 150, 200];
 
-    [Parameter, EditorRequired] public ScenarioFlowGraph Graph { get; set; } = new([], [], [], []);
+    [Parameter, EditorRequired] public ScenarioRangeFlowGraph Graph { get; set; } = new([], [], []);
     [Parameter] public bool MatchingComplete { get; set; }
-    [Parameter] public EventCallback<ScenarioFlowOccurrence> OpenOccurrence { get; set; }
-    [Parameter] public EventCallback<ScenarioFlowOccurrence> CutOccurrence { get; set; }
-    [Parameter] public RenderFragment<ScenarioFlowOccurrence>? OccurrenceImages { get; set; }
+    [Parameter] public EventCallback<ScenarioRangeFlowNode> OpenRange { get; set; }
 
     private readonly string _arrowId = $"flow-arrow-{Guid.NewGuid():N}";
-    private ScenarioFlowGraph? _laidOutGraph;
+    private readonly string _selectedNameId = $"flow-range-{Guid.NewGuid():N}";
+    private readonly string _chartSelectId = $"flow-chart-{Guid.NewGuid():N}";
+    private ScenarioRangeFlowGraph? _laidOutGraph;
     private string? _chartId;
-    private ScenarioFlowOccurrence? _selected;
-    private ScenarioFlowBlock[] _blocks = [];
-    private Dictionary<string, ScenarioFlowOccurrence[]> _byBlock = [];
-    private readonly Dictionary<string, (int Session, int Visit)> _visitNumbers = [];
+    private ScenarioRangeFlowNode? _selected;
+    private ScenarioRangeFlowNode[] _nodes = [];
     private readonly Dictionary<string, (int X, int Y)> _positions = [];
-    private readonly List<(string Path, bool Revisit)> _edges = [];
+    private readonly List<(ScenarioRangeFlowEdge Edge, string Path, bool Revisit)> _edges = [];
     private int _canvasWidth = 1, _canvasHeight = 1;
     private int _viewportRevision;
     private int _zoomIndex = DefaultZoom;
@@ -124,21 +105,11 @@
             return;
 
         _laidOutGraph = Graph;
-        _visitNumbers.Clear();
-        var session = 0;
-        foreach (var occurrences in Graph.Occurrences.GroupBy(o => o.Start.SessionId).OrderBy(g => g.Key))
-        {
-            session++;
-            var visit = 0;
-            foreach (var occurrence in occurrences.OrderBy(o => o.Start))
-                _visitNumbers.Add(occurrence.Id, (session, ++visit));
-        }
-
-        // Block/chart IDs can change after a cut or matching pass. The raw start identifies the visit.
-        var restored = _selected is { } previous ? Graph.Occurrences.FirstOrDefault(o => o.Start == previous.Start) : null;
-        if (restored is not null)
-            _chartId = restored.ChartId;
-        Layout(restored, _selected?.BlockId);
+        // A matching pass may regroup charts; the selected range ID still identifies the same node.
+        var selectedId = _selected?.Id;
+        if (selectedId is not null && !Graph.Charts.Any(chart => chart.Id == _chartId && chart.NodeIds.Contains(selectedId)))
+            _chartId = Graph.Charts.FirstOrDefault(chart => chart.NodeIds.Contains(selectedId))?.Id ?? _chartId;
+        Layout(selectedId);
     }
 
     private void ChangeChart()
@@ -146,7 +117,7 @@
         _zoomIndex = DefaultZoom;
         _fit = false;
         _viewportRevision++;
-        Layout(null, null);
+        Layout(null);
     }
 
     private void Fit() => _fit = true;
@@ -157,52 +128,33 @@
         _fit = false;
     }
 
-    private void SelectBlock(string id)
-    {
-        if (_selected?.BlockId != id)
-            SelectOccurrence(_byBlock[id][0]);
-    }
-
-    private void SelectOccurrence(ScenarioFlowOccurrence occurrence) => _selected = occurrence;
-
-    private string ConnectionSummary(ScenarioFlowOccurrence selected)
-    {
-        var incoming = Graph.Edges.SelectMany(e => e.Traversals).Count(t => t.ToOccurrenceId == selected.Id);
-        var outgoing = Graph.Edges.SelectMany(e => e.Traversals).Count(t => t.FromOccurrenceId == selected.Id);
-        return $"この出現の接続：前 {incoming} · 次 {outgoing}";
-    }
-
-    private void Layout(ScenarioFlowOccurrence? restored, string? previousBlock)
+    private void Layout(string? selectedId)
     {
         _positions.Clear();
         _edges.Clear();
-        if (!Graph.Charts.Any(c => c.Id == _chartId))
-            _chartId = Graph.Charts.FirstOrDefault()?.Id;
-        var visits = Graph.Occurrences.Where(o => o.ChartId == _chartId).OrderBy(o => o.Start).ToArray();
-        _byBlock = visits.GroupBy(o => o.BlockId).ToDictionary(g => g.Key, g => g.ToArray());
-        var blocksById = Graph.Blocks.ToDictionary(b => b.Id);
-        _blocks = _byBlock.Keys.Select(id => blocksById[id]).ToArray();
-        _selected = restored ?? (previousBlock is not null && _byBlock.TryGetValue(previousBlock, out var previousVisits)
-            ? previousVisits[0] : visits.FirstOrDefault());
-        if (_blocks.Length == 0)
+        var chart = Graph.Charts.FirstOrDefault(c => c.Id == _chartId) ?? Graph.Charts.FirstOrDefault();
+        _chartId = chart?.Id;
+        var nodesById = Graph.Nodes.ToDictionary(node => node.Id);
+        _nodes = chart?.NodeIds.Select(id => nodesById[id]).ToArray() ?? [];
+        _selected = _nodes.FirstOrDefault(node => node.Id == selectedId) ?? _nodes.FirstOrDefault();
+        if (_nodes.Length == 0)
             return;
 
-        var visitIds = visits.Select(o => o.Id).ToHashSet();
-        var order = _blocks.Select((block, i) => (block.Id, Index: i)).ToDictionary(x => x.Id, x => x.Index);
-        var edges = Graph.Edges.Where(e => order.ContainsKey(e.FromBlockId) && order.ContainsKey(e.ToBlockId)
-            && e.Traversals.Any(t => visitIds.Contains(t.FromOccurrenceId) && visitIds.Contains(t.ToOccurrenceId))).ToArray();
+        // Show only the provided relationships within this chart, never infer edges from names or positions.
+        var order = _nodes.Select((node, i) => (node.Id, Index: i)).ToDictionary(x => x.Id, x => x.Index);
+        var edges = Graph.Edges.Where(e => order.ContainsKey(e.FromId) && order.ContainsKey(e.ToId)).ToArray();
 
-        var outgoing = edges.GroupBy(e => e.FromBlockId).ToDictionary(g => g.Key, g => g.ToArray());
-        var inputs = edges.Where(e => e.FromBlockId != e.ToBlockId).Select(e => e.ToBlockId).ToHashSet();
-        var returns = FindReturns(_blocks.OrderBy(b => inputs.Contains(b.Id)).Select(b => b.Id), outgoing);
+        var outgoing = edges.GroupBy(e => e.FromId).ToDictionary(g => g.Key, g => g.ToArray());
+        var inputs = edges.Where(e => e.FromId != e.ToId).Select(e => e.ToId).ToHashSet();
+        var returns = FindReturns(_nodes.OrderBy(node => inputs.Contains(node.Id)).Select(node => node.Id), outgoing);
 
         // Rank only the acyclic part so a merge stays below its forward inputs, even if it was
         // first observed on a shorter path. Cycles are represented by their return arrows.
-        var levels = new int[_blocks.Length];
-        var indegrees = new int[_blocks.Length];
+        var levels = new int[_nodes.Length];
+        var indegrees = new int[_nodes.Length];
         foreach (var edge in edges.Where(e => !returns.Contains(e)))
-            indegrees[order[edge.ToBlockId]]++;
-        var queue = new Queue<string>(_blocks.Where(b => indegrees[order[b.Id]] == 0).Select(b => b.Id));
+            indegrees[order[edge.ToId]]++;
+        var queue = new Queue<string>(_nodes.Where(node => indegrees[order[node.Id]] == 0).Select(node => node.Id));
         while (queue.TryDequeue(out var id))
         {
             var from = order[id];
@@ -210,45 +162,45 @@
             {
                 if (returns.Contains(edge))
                     continue;
-                var to = order[edge.ToBlockId];
+                var to = order[edge.ToId];
                 levels[to] = Math.Max(levels[to], levels[from] + 1);
                 if (--indegrees[to] == 0)
-                    queue.Enqueue(edge.ToBlockId);
+                    queue.Enqueue(edge.ToId);
             }
         }
 
-        var rows = _blocks.GroupBy(b => levels[order[b.Id]]).ToArray();
+        var rows = _nodes.GroupBy(node => levels[order[node.Id]]).ToArray();
         var columns = rows.Max(r => r.Count());
         _canvasWidth = Margin * 2 + (columns - 1) * ColumnStep + NodeWidth;
         _canvasHeight = Margin * 2 + levels.Max() * RowStep + NodeHeight;
         foreach (var row in rows)
         {
             var left = Margin + (columns - row.Count()) * ColumnStep / 2;
-            foreach (var block in row)
+            foreach (var node in row)
             {
-                _positions.Add(block.Id, (left, Margin + row.Key * RowStep));
+                _positions.Add(node.Id, (left, Margin + row.Key * RowStep));
                 left += ColumnStep;
             }
         }
-        _blocks = rows.OrderBy(row => row.Key).SelectMany(row => row).ToArray();
+        _nodes = rows.OrderBy(row => row.Key).SelectMany(row => row).ToArray();
 
         foreach (var edge in edges)
         {
-            var from = _positions[edge.FromBlockId];
-            var to = _positions[edge.ToBlockId];
+            var from = _positions[edge.FromId];
+            var to = _positions[edge.ToId];
             var revisit = returns.Contains(edge);
             var nearLeft = from.X + NodeWidth / 2 <= _canvasWidth / 2;
             var rail = revisit ? Margin / 4 : nearLeft ? Margin * 3 / 4 : _canvasWidth - Margin / 2;
-            _edges.Add((EdgePath(from, to, rail), revisit));
+            _edges.Add((edge, EdgePath(from, to, rail), revisit));
         }
     }
 
-    private static HashSet<ScenarioFlowEdge> FindReturns(IEnumerable<string> roots,
-        Dictionary<string, ScenarioFlowEdge[]> outgoing)
+    private static HashSet<ScenarioRangeFlowEdge> FindReturns(IEnumerable<string> roots,
+        Dictionary<string, ScenarioRangeFlowEdge[]> outgoing)
     {
         var visited = new HashSet<string>();
         var active = new HashSet<string>();
-        var returns = new HashSet<ScenarioFlowEdge>();
+        var returns = new HashSet<ScenarioRangeFlowEdge>();
         var stack = new Stack<(string Id, int Next)>();
         foreach (var root in roots)
         {
@@ -267,12 +219,12 @@
 
                 stack.Push((frame.Id, frame.Next + 1));
                 var edge = edges[frame.Next];
-                if (active.Contains(edge.ToBlockId))
+                if (active.Contains(edge.ToId))
                     returns.Add(edge);
-                else if (visited.Add(edge.ToBlockId))
+                else if (visited.Add(edge.ToId))
                 {
-                    active.Add(edge.ToBlockId);
-                    stack.Push((edge.ToBlockId, 0));
+                    active.Add(edge.ToId);
+                    stack.Push((edge.ToId, 0));
                 }
             }
         }
