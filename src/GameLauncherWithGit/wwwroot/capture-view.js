@@ -1,19 +1,118 @@
-const observers = new WeakMap();
-export function observeFeed(element, owner) {
-    const listener = () => {
-        const scope = element.dataset.captureScope;
-        if (scope) owner.invokeMethodAsync('FeedFollowing', scope, element.scrollHeight - element.scrollTop - element.clientHeight < 40);
-    };
-    element.addEventListener('scroll', listener, { passive: true });
-    observers.set(element, listener);
+const commands = new WeakMap();
+export function observeFeedCommands(element, owner, menu) {
+    unobserveFeedCommands(element);
+    const events = new AbortController();
+    const disposeMenu = observeRowMenu(element, owner, menu, { signal: events.signal });
+    commands.set(element, () => { events.abort(); disposeMenu(); });
 }
-export function unobserveFeed(element) {
-    const listener = observers.get(element);
-    if (listener) element.removeEventListener('scroll', listener);
-    observers.delete(element);
+export function unobserveFeedCommands(element) {
+    const dispose = commands.get(element);
+    if (!dispose) return;
+    dispose();
+    commands.delete(element);
     restoreFocus();
 }
-export function scrollFeed(element, end) { element.scrollTop = end ? element.scrollHeight : 0; }
+
+/** Routes the PC row's context gestures through one popover without intercepting ordinary scrolling. */
+function observeRowMenu(feed, owner, menu, options) {
+    let active, touch, consumed;
+    const action = menu.querySelector('[data-capture-row-delete]');
+    const hit = target => target instanceof Element ? target.closest('[data-capture-row]') : null;
+    const notify = (scope, open) => owner.invokeMethodAsync('RowMenuVisibility', scope, open).catch(() => {});
+    const valid = (row, scope) => scope && scope === feed.dataset.captureScope &&
+        feed.dataset.captureRowMenuBlocked !== 'true' && feed.contains(row) && !row.disabled && row.getClientRects().length;
+
+    function close(restore = false) {
+        const selection = active;
+        active = null;
+        if (menu.matches(':popover-open')) menu.hidePopover();
+        if (selection) notify(selection.scope, false);
+        const row = selection?.row;
+        if (restore && row?.isConnected && !row.disabled) row.focus({ preventScroll: true });
+    }
+
+    function open(row, scope, x, y) {
+        if (!valid(row, scope)) return false;
+        if (!active) notify(scope, true);
+        active = { row, scope, id: row.dataset.captureRow };
+        if (!menu.matches(':popover-open')) menu.showPopover();
+        const box = menu.getBoundingClientRect();
+        const anchor = row.getBoundingClientRect();
+        // Keyboard requests anchor to the row. Pointer requests stay near where the row was pressed.
+        menu.style.left = `${Math.max(6, Math.min(x ?? anchor.left, innerWidth - box.width - 6))}px`;
+        menu.style.top = `${Math.max(6, Math.min(y ?? anchor.bottom, innerHeight - box.height - 6))}px`;
+        action.focus({ preventScroll: true });
+        return true;
+    }
+
+    function cancelTouch() {
+        clearTimeout(touch?.timer);
+        touch = null;
+    }
+
+    feed.addEventListener('contextmenu', event => {
+        const row = hit(event.target);
+        if (!row || !valid(row, feed.dataset.captureScope)) return;
+        event.preventDefault();
+        if (event.pointerType === 'touch' || touch?.row === row) return;
+        // Some keyboard-generated contextmenu events have no pointer coordinates.
+        const hasPoint = event.button === 2 || event.clientX !== 0 || event.clientY !== 0;
+        open(row, feed.dataset.captureScope, hasPoint ? event.clientX : null, hasPoint ? event.clientY : null);
+    }, options);
+    feed.addEventListener('keydown', event => {
+        if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
+        const row = hit(event.target);
+        if (row && open(row, feed.dataset.captureScope)) event.preventDefault();
+    }, options);
+
+    feed.addEventListener('pointerdown', event => {
+        cancelTouch();
+        if (event.pointerType !== 'touch' || !event.isPrimary) return;
+        consumed = null;
+        const row = hit(event.target), scope = feed.dataset.captureScope;
+        if (!row || !valid(row, scope)) return;
+        const gesture = { row, scope, id: event.pointerId, x: event.clientX, y: event.clientY };
+        gesture.timer = setTimeout(() => {
+            if (touch === gesture && open(row, scope, gesture.x, gesture.y + 12)) consumed = gesture;
+        }, 550);
+        touch = gesture;
+    }, { ...options, passive: true });
+    document.addEventListener('pointermove', event => {
+        if (touch?.id === event.pointerId && Math.hypot(event.clientX - touch.x, event.clientY - touch.y) > 12) cancelTouch();
+    }, { ...options, passive: true });
+    for (const type of ['pointerup', 'pointercancel']) document.addEventListener(type, event => {
+        if (touch?.id === event.pointerId) cancelTouch();
+        // Suppress only the synthetic click from the pointer that opened the long-press menu.
+        const released = consumed;
+        if (released?.id === event.pointerId) setTimeout(() => { if (consumed === released) consumed = null; }, 450);
+    }, { ...options, passive: true });
+    document.addEventListener('click', event => {
+        if (!consumed || !(event.pointerType === 'touch' || event.sourceCapabilities?.firesTouchEvents) ||
+            Math.hypot(event.clientX - consumed.x, event.clientY - consumed.y) > 24) return;
+        consumed = null;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+    }, { ...options, capture: true });
+    document.addEventListener('scroll', () => { cancelTouch(); close(); }, { ...options, capture: true, passive: true });
+    window.addEventListener('blur', () => { cancelTouch(); close(); }, options);
+
+    menu.addEventListener('keydown', event => {
+        if (event.key === 'Escape' || event.key === 'Tab') { event.preventDefault(); close(true); }
+    }, options);
+    menu.addEventListener('toggle', () => { if (!menu.matches(':popover-open')) close(); }, options);
+    action.addEventListener('click', () => {
+        const selection = active;
+        close(true);
+        if (selection && valid(selection.row, selection.scope))
+            owner.invokeMethodAsync('OpenRowDeletionFromMenuAsync', selection.scope, selection.id);
+    }, options);
+
+    // A route change or another operation can retire the row while the native popover is open.
+    const changes = new MutationObserver(() => { if (active && !valid(active.row, active.scope)) close(); });
+    changes.observe(feed, { childList: true, subtree: true, attributes: true,
+        attributeFilter: ['data-capture-scope', 'data-capture-row-menu-blocked', 'disabled'] });
+    return () => { cancelTouch(); close(); changes.disconnect(); };
+}
 export function focusTextDetail(element) {
     element.focus({ preventScroll: true });
     element.onkeydown = event => {
@@ -40,14 +139,14 @@ export function focusEditorContent() {
 }
 let previousFocus;
 let previousBodyStyle;
-export function focusEditor(owner, scope) {
+export function focusEditor(owner, scope, openerId) {
     const dialog = document.getElementById('capture-editor');
     if (!dialog) return;
     const controls = () => [...dialog.querySelectorAll('button, input, select, textarea, [tabindex="0"]')]
         .filter(x => !x.disabled && x.getClientRects().length > 0 && getComputedStyle(x).visibility !== 'hidden');
     // A finish confirmation can replace the range editor and back again; restore the first opener.
     if (!previousBodyStyle) {
-        previousFocus = document.activeElement;
+        previousFocus = (openerId && document.getElementById(openerId)) || document.activeElement;
         document.querySelector('.capture-page')?.setAttribute('inert', '');
         previousBodyStyle = { overflow: document.body.style.overflow, paddingRight: document.body.style.paddingRight };
         const scrollbar = window.innerWidth - document.documentElement.clientWidth;
