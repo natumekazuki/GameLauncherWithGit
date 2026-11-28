@@ -1085,7 +1085,7 @@
     {
         var expected = _displayedScope;
         var ceiling = _following && _offset == 0 ? null : _pageCeiling;
-        var version = CaptureService.LiveFeedVersion;
+        var (version, revisions) = ReadFeedCheckpoint(expected);
         IReadOnlyList<CaptureTextItem> items;
         try
         {
@@ -1105,7 +1105,7 @@
         // An explicit latest read already contains at least the version present when that read began.
         if (ceiling is null && _offset == 0 && !HasHistorySearch && _rangeId == 0 && _filter == "all" &&
             expected is not null && version is not null && CurrentLiveVersion(expected, version))
-            _renderedLiveRevision = Math.Max(_renderedLiveRevision, version.Revision);
+            ConsumeFeedRevisions(revisions);
         await LoadScreenshotCountsAsync();
     }
 
