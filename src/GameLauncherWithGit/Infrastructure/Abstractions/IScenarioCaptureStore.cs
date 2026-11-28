@@ -15,7 +15,8 @@ public interface IScenarioCaptureStore
     Task<IReadOnlyList<CaptureSession>> GetCaptureSessionsAsync(long profileId);
     /// <summary>指定された記録範囲の有効話者を重複なし・名称順で返す。別の記録範囲、未確定、空白のみの値は除く。</summary>
     Task<IReadOnlyList<string>> GetGameCaptureSpeakersAsync(long profileId);
-    Task<IReadOnlyList<CaptureTextItem>> GetGameCaptureItemsAsync(long profileId, int limit = 200, int offset = 0, long? labelId = null, bool unclassifiedOnly = false, bool latest = false, long? rangeId = null, CaptureKind? kind = null, string? textSearch = null, string? speakerSearch = null, CapturePosition? before = null);
+    /// <summary>Reads saved text or one temporary half-open interval from the same record, clipped before searching.</summary>
+    Task<IReadOnlyList<CaptureTextItem>> GetGameCaptureItemsAsync(long profileId, int limit = 200, int offset = 0, long? labelId = null, bool unclassifiedOnly = false, bool latest = false, long? rangeId = null, CaptureKind? kind = null, string? textSearch = null, string? speakerSearch = null, CapturePosition? before = null, CaptureRangeSelection? interval = null);
     Task<IReadOnlyList<CaptureDeletionTarget>> GetCaptureDeletionTargetsAsync(long profileId, IReadOnlyCollection<long> itemIds);
     Task<CaptureDeletionResult> DeleteCaptureEventsAsync(long profileId, IReadOnlyCollection<CaptureEventKey> events);
     /// <summary>Resolves a full saved item from the displayed row identity and possibly clipped positions.</summary>
