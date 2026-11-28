@@ -27,6 +27,14 @@
             <span class="flow-matching" role="status">@(MatchingComplete ? "照合済み" : "照合途中")</span>
         </div>
         <div class="flow-workarea">
+            @if (_selected is { } selected && OpenRange.HasDelegate)
+            {
+                <div class="flow-selection" role="group" aria-label="選択した区間">
+                    <strong id="@_selectedNameId">@selected.Name</strong>
+                    <button type="button" class="scenario-action" data-flow-open-range="@selected.Id" @ref="_openRangeButton"
+                            aria-describedby="@_selectedNameId" @onclick="() => OpenRange.InvokeAsync(selected)">区間の本文を見る</button>
+                </div>
+            }
             <div @key="_viewportRevision" class="flow-viewport @(_fit ? "flow-viewport-fit" : "") scenario-focus" tabindex="0" role="region" aria-label="観測した経路">
                 <svg class="flow-surface" width="@Scaled(_canvasWidth)" height="@Scaled(_canvasHeight)" viewBox="@($"0 0 {_canvasWidth} {_canvasHeight}")" preserveAspectRatio="xMidYMin meet">
                     <defs>
@@ -48,7 +56,7 @@
                                        width="@(NodeWidth + FocusInset * 2)" height="@(NodeHeight + FocusInset * 2)">
                             <div class="flow-node-frame" xmlns="http://www.w3.org/1999/xhtml">
                                 <button type="button" class="flow-node scenario-focus" data-flow-node-id="@node.Id"
-                                        aria-pressed="@(_selected?.Id == node.Id ? "true" : "false")" @onclick="() => _selected = node">
+                                        aria-pressed="@(_selected?.Id == node.Id ? "true" : "false")" @onclick="e => SelectNode(node, e.Detail == 0)">
                                     <span>@node.Name</span>
                                 </button>
                             </div>
@@ -56,14 +64,6 @@
                     }
                 </svg>
             </div>
-            @if (_selected is { } selected && OpenRange.HasDelegate)
-            {
-                <div class="flow-selection" role="group" aria-label="選択した区間">
-                    <strong id="@_selectedNameId">@selected.Name</strong>
-                    <button type="button" class="scenario-action" data-flow-open-range="@selected.Id"
-                            aria-describedby="@_selectedNameId" @onclick="() => OpenRange.InvokeAsync(selected)">区間の本文を見る</button>
-                </div>
-            }
         </div>
     }
 </section>
@@ -94,10 +94,25 @@
     private int _canvasWidth = 1, _canvasHeight = 1;
     private int _viewportRevision;
     private int _zoomIndex = DefaultZoom;
-    private bool _fit;
+    private bool _fit, _focusOpenRange;
+    private ElementReference _openRangeButton;
 
     private int Zoom => ZoomLevels[_zoomIndex];
     private int Scaled(int size) => _fit ? size : (int)Math.Ceiling(size * Zoom / 100d);
+
+    /// <summary>Moves keyboard activation to the next action without moving the diagram.</summary>
+    private void SelectNode(ScenarioRangeFlowNode node, bool keyboard)
+    {
+        _selected = node;
+        _focusOpenRange = keyboard && OpenRange.HasDelegate;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_focusOpenRange) return;
+        _focusOpenRange = false;
+        if (_openRangeButton.Id is not null) await _openRangeButton.FocusAsync(preventScroll: true);
+    }
 
     protected override void OnParametersSet()
     {
