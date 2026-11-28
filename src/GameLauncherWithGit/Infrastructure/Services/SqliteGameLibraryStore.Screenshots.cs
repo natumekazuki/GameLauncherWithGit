@@ -11,6 +11,11 @@ namespace GameLauncherWithGit.Infrastructure.Services;
 public sealed partial class SqliteGameLibraryStore
 {
     private const string ImageHashAlgorithm = "sha256-dimensions-rgba8-v1";
+    // A fully deleted display event remains for raw positions and replay protection, not as a valid image target.
+    private const string ScreenshotEventVisible = """
+        (NOT EXISTS(SELECT 1 FROM CaptureDeletedSpans d WHERE d.SessionId=e.SessionId AND d.ReceiveSequence=e.ReceiveSequence)
+            OR EXISTS(SELECT 1 FROM CaptureItems i WHERE i.SessionId=e.SessionId AND i.ReceiveSequence=e.ReceiveSequence))
+        """;
     private sealed record ScenarioScreenshotAsset(string ImageId, int Width, int Height, string PixelHash, string FilePath);
     private readonly SemaphoreSlim _screenshotFilesLock = new(1, 1);
     private static string FormatScenarioId(long id) => id.ToString(CultureInfo.InvariantCulture);
@@ -45,9 +50,10 @@ public sealed partial class SqliteGameLibraryStore
             }
             cancellationToken.ThrowIfCancellationRequested();
             await using var transaction = connection.BeginTransaction();
-            await using (var owner = CaptureCommand(connection, transaction, """
+            await using (var owner = CaptureCommand(connection, transaction, $"""
             SELECT e.RawText FROM CaptureEvents e JOIN CaptureSessions s ON s.Id=e.SessionId
             WHERE s.CaptureGameId=$game AND e.SessionId=$session AND e.ReceiveSequence=$sequence AND e.InputRole=1
+            AND {ScreenshotEventVisible}
             """, ("$game", target.CaptureGameId), ("$session", target.Event.SessionId), ("$sequence", target.Event.Sequence)))
             {
                 if (await owner.ExecuteScalarAsync() is not string text || string.IsNullOrWhiteSpace(text))
@@ -94,9 +100,9 @@ public sealed partial class SqliteGameLibraryStore
         await EnsureInitializedAsync(default);
         await using var connection = await OpenConnectionAsync(default);
         await using var transaction = connection.BeginTransaction(deferred: true);
-        await using var owner = CaptureCommand(connection, transaction, """
+        await using var owner = CaptureCommand(connection, transaction, $"""
             SELECT s.CaptureGameId FROM CaptureEvents e JOIN CaptureSessions s ON s.Id=e.SessionId
-            WHERE e.SessionId=$session AND e.ReceiveSequence=$sequence
+            WHERE e.SessionId=$session AND e.ReceiveSequence=$sequence AND {ScreenshotEventVisible}
             """, ("$session", key.SessionId), ("$sequence", key.Sequence));
         if (await owner.ExecuteScalarAsync() is not long gameId || gameId != captureGameId)
             throw new ArgumentException("このゲームの本文を選んでください。");
@@ -169,7 +175,7 @@ public sealed partial class SqliteGameLibraryStore
                 SELECT r.Ordinal,s.CaptureGameId,e.ReceiveSequence,l.ImageId,l.CapturedAt
                 FROM requested r
                 LEFT JOIN CaptureSessions s ON s.Id=r.SessionId
-                LEFT JOIN CaptureEvents e ON e.SessionId=r.SessionId AND e.ReceiveSequence=r.ReceiveSequence
+                LEFT JOIN CaptureEvents e ON e.SessionId=r.SessionId AND e.ReceiveSequence=r.ReceiveSequence AND {ScreenshotEventVisible}
                 LEFT JOIN CaptureEventImages l ON l.SessionId=r.SessionId AND l.ReceiveSequence=r.ReceiveSequence
                 WHERE s.CaptureGameId=$game
                 ORDER BY r.Ordinal,l.CapturedAt,l.ImageId
@@ -212,7 +218,7 @@ public sealed partial class SqliteGameLibraryStore
             WITH requested(SessionId,ReceiveSequence) AS (VALUES {string.Join(",", values)})
             SELECT r.SessionId,r.ReceiveSequence,s.CaptureGameId,e.ReceiveSequence,COUNT(l.ImageId)
             FROM requested r LEFT JOIN CaptureSessions s ON s.Id=r.SessionId
-            LEFT JOIN CaptureEvents e ON e.SessionId=r.SessionId AND e.ReceiveSequence=r.ReceiveSequence
+            LEFT JOIN CaptureEvents e ON e.SessionId=r.SessionId AND e.ReceiveSequence=r.ReceiveSequence AND {ScreenshotEventVisible}
             LEFT JOIN CaptureEventImages l ON l.SessionId=r.SessionId AND l.ReceiveSequence=r.ReceiveSequence
             GROUP BY r.SessionId,r.ReceiveSequence,s.CaptureGameId,e.ReceiveSequence
             """;
