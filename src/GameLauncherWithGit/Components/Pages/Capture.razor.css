@@ -104,6 +104,8 @@ input[type=checkbox] { width:1rem; height:1rem; margin:0; accent-color:#85b4ff; 
 .capture-page .capture-row-select { width:100%; padding:0; border:0; border-radius:3px; background:none; color:inherit; font:inherit; line-height:1.65; text-align:start; cursor:pointer; }
 .capture-page .capture-row-select:disabled { opacity:1; cursor:default; }
 .capture-row-select:hover:not(:disabled) { color:#d2e5ff; }
+.capture-row-menu { position:fixed; inset:auto; margin:0; max-inline-size:calc(100vw - 1rem); padding:.35rem; border:1px solid var(--scenario-border); border-radius:6px; background:var(--scenario-surface); color:var(--scenario-text); }
+.capture-row-menu > button { min-inline-size:5rem; }
 .capture-row-edge { display:flex; justify-content:end; gap:.4rem; margin-top:.35rem; }
 .capture-action-popover { position:fixed; inset:0; margin:auto; width:min(25rem,calc(100% - 2rem)); max-height:calc(100% - 2rem); overflow:auto; padding:1rem; border:1px solid #62758e; border-radius:.65rem; background:#152238; color:#e6edf7; box-shadow:0 8px 32px #0008; }
 .capture-action-popover h3 { margin:0 0 .5rem; font-size:1rem; }

@@ -285,7 +285,8 @@
                 }
             </div>
             <div class="capture-text-workspace @(_detailItem is not null ? "capture-text-with-detail" : "")" hidden="@_flowOpen">
-            <div class="capture-feed" @ref="_feed" tabindex="0" aria-label="抽出本文" data-capture-scope="@displayedScope?.ViewKey">
+            <div class="capture-feed" @ref="_feed" tabindex="0" aria-label="抽出本文" data-capture-scope="@displayedScope?.ViewKey"
+                data-capture-row-menu-blocked="@(_flowOpen || EditorOpen || _pickingRange || _busy ? "true" : "false")">
                 @if (_scopeError is not null)
                 {
                     <div class="capture-feed-error">
@@ -320,6 +321,7 @@
                         else
                         {
                             <button id="@RowDetailId(item)" type="button" class="capture-row-reading capture-row-select scenario-focus"
+                                data-capture-row="@item.Id" aria-haspopup="menu"
                                 aria-pressed="@detailsSelected" @onclick="() => AtScopeAsync(displayedScope, () => OpenRowDetailAsync(item))" disabled="@_busy">
                                 @if (item.Speaker is not null) { <strong>@item.Speaker</strong> }
                                 <span>@item.Text</span>
@@ -328,6 +330,9 @@
                         }
                     </article>
                 }
+            </div>
+            <div class="capture-row-menu" @ref="_rowMenu" popover="auto" role="menu" aria-label="本文行の操作">
+                <button type="button" class="scenario-action capture-danger" role="menuitem" data-capture-row-delete>削除</button>
             </div>
             @if (_detailItem is { } detail && _detailKey is { } key)
             {
@@ -477,6 +482,11 @@
                     <button class="secondary-button capture-text-button" @onclick="RetryScreenshotCleanupAsync" disabled="@_busy"><CaptureIcon Name="Refresh" />不要画像の後片付けを再試行</button>
                 </section>
             }
+            else if (_historyDialog == HistoryDialog.DeleteRow && _rowDeletion is { } rowDeletion)
+            {
+                <p>この本文行を削除します。元に戻せません。</p>
+                <div class="capture-deletion-preview" aria-label="削除する本文行"><article><p>@rowDeletion.Item.Text</p></article></div>
+            }
             else if (_historyDialog == HistoryDialog.DeleteSelected)
             {
                 <p>選択した本文を含む @_deletionTargets.Count 件の原文（本文 @(_deletionTargets.Sum(x => x.ItemCount)) 件）を削除します。</p>
@@ -498,7 +508,7 @@
                 <p>区間「@ManagedRangeDisplayName」を削除します。</p>
                 <p>区間と場面・タグとの関連だけを削除します。本文・画像・手動場面・接続・作品タグは残ります。区間の削除は元に戻せません。</p>
             }
-            @if (_historyDialog is HistoryDialog.DeleteSelected or HistoryDialog.Clear && HistoryCaptureActive)
+            @if (_historyDialog is HistoryDialog.DeleteRow or HistoryDialog.DeleteSelected or HistoryDialog.Clear && HistoryCaptureActive)
             {
                 <div class="capture-history-section" role="status">
                     <p>このゲームは取得中です。削除するには取得を停止してください。ゲーム自体は終了しません。</p>
@@ -513,7 +523,7 @@
             <button class="secondary-button" @onclick="CloseEditors" disabled="@_busy">@(_historyDialog == HistoryDialog.Manage ? "閉じる" : "キャンセル")</button>
             @if (_historyDialog != HistoryDialog.Manage)
             {
-                <button class="secondary-button capture-text-button capture-danger" @onclick="() => AtScopeAsync(displayedScope, () => ConfirmHistoryDeletionAsync(displayedProfile))" disabled="@(_busy || (_historyDialog != HistoryDialog.DeleteRange && HistoryCaptureActive))"><CaptureIcon Name="Trash" />@(_historyDialog == HistoryDialog.Clear ? "全履歴を消去" : "削除する")</button>
+                <button class="secondary-button capture-text-button capture-danger" @onclick="() => AtScopeAsync(displayedScope, () => ConfirmHistoryDeletionAsync(displayedProfile))" disabled="@(_busy || _historyDialog == HistoryDialog.DeleteRow || (_historyDialog != HistoryDialog.DeleteRange && HistoryCaptureActive))"><CaptureIcon Name="Trash" />@(_historyDialog == HistoryDialog.Clear ? "全履歴を消去" : "削除する")</button>
             }
         </footer>
     </section></div>
@@ -773,7 +783,7 @@
     private bool HasHistorySearch => _textSearch.Length > 0 || _speakerSearch.Length > 0;
     private bool HistorySearchPending => _textSearchInput.Trim() != _textSearch || _speakerSearchInput.Trim() != _speakerSearch;
     private bool _hasMore, _focusHistoryContent;
-    private enum HistoryDialog { None, Manage, DeleteSelected, Clear, DeleteRange }
+    private enum HistoryDialog { None, Manage, DeleteRow, DeleteSelected, Clear, DeleteRange }
     private HistoryDialog _historyDialog;
     private CaptureHistoryCounts _historyCounts = new(0, 0, 0);
     private IReadOnlyList<CaptureDeletionTarget> _deletionTargets = [];
@@ -791,7 +801,7 @@
         .Concat(_textSearch.Length > 0 ? [$"本文：{_textSearch}"] : Array.Empty<string>()));
     private bool HistoryCaptureActive => _recordId != 0 && CaptureService.Snapshot is { Active: true, RecordId: { } active } && active == _recordId;
     private string ManagedRangeDisplayName => _ranges.FirstOrDefault(x => x.Id == _managedRangeId) is { } range ? RangeName(range) : "";
-    private string HistoryDialogTitle => _historyDialog switch { HistoryDialog.Manage => "履歴管理", HistoryDialog.DeleteSelected => "原文を削除", HistoryDialog.Clear => "全履歴を消去", _ => "区間を削除" };
+    private string HistoryDialogTitle => _historyDialog switch { HistoryDialog.Manage => "履歴管理", HistoryDialog.DeleteRow => "本文行を削除", HistoryDialog.DeleteSelected => "原文を削除", HistoryDialog.Clear => "全履歴を消去", _ => "区間を削除" };
     private string? _launchMessage, _message, _error, _errorLabel;
     private string? _initialError, _pollError;
     private string CaptureStatusLabel => ShortCaptureStatus(_snapshot.Status);
@@ -909,7 +919,7 @@
         {
             if (_observedFeed.Id is not null) await _module.InvokeVoidAsync("unobserveFeed", _observedFeed);
             _observedFeed = _feed;
-            await _module.InvokeVoidAsync("observeFeed", _feed, _self);
+            await _module.InvokeVoidAsync("observeFeed", _feed, _self, _rowMenu);
             _scrollToEnd ??= _following;
         }
         if (_scrollToEnd is { } end) { _scrollToEnd = null; await _module.InvokeVoidAsync("scrollFeed", _feed, end); }
@@ -918,7 +928,7 @@
             _focusAfterInitialRetry = _focusFeed = false;
             await _feed.FocusAsync(preventScroll: true);
         }
-        if (_focusEditor) { _focusEditor = false; await _module.InvokeVoidAsync("focusEditor", _self, _displayedScope?.ViewKey); }
+        if (_focusEditor) { _focusEditor = false; await _module.InvokeVoidAsync("focusEditor", _self, _displayedScope?.ViewKey, _rowDeletion is { } row ? RowDetailId(row.Item) : null); }
         if (_focusSettingsTab) { _focusSettingsTab = false; if (_settingsOpen) await _module.InvokeVoidAsync("focusSettingsTab"); }
         if (_focusHistoryContent) { _focusHistoryContent = false; await _module.InvokeVoidAsync("focusEditorContent"); }
         if (_restoreFocus) { _restoreFocus = false; await _module.InvokeVoidAsync("restoreFocus"); }
@@ -1660,6 +1670,7 @@
     /// <summary>Closes the active dialog and restores focus to its entry point.</summary>
     private void CloseEditors()
     {
+        _rowDeletion = null;
         // The popover item is hidden by the time its dialog receives focus.
         _restoreToolsFocus |= _exportOpen || _savedScenes is not null;
         _savedScenes = null;
