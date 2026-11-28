@@ -115,6 +115,7 @@ internal static class PlayRecordingWebApplication
         app.UseAntiforgery();
         MapAsset(app, "play-recording.css", "text/css; charset=utf-8");
         MapAsset(app, "play-recording.js", "text/javascript; charset=utf-8");
+        MapDesktopAsset(app, "scenario-live-feed.js", "text/javascript; charset=utf-8");
         MapDesktopStyle(app, "scenario-shared.css");
         MapDesktopStyle(app, "capture-tags.css");
         MapDesktopStyle(app, "scenario-flow.css");
@@ -142,12 +143,16 @@ internal static class PlayRecordingWebApplication
             contentType));
 
     /// <summary>Exposes only the named stylesheet when embedded by the desktop build.</summary>
-    private static void MapDesktopStyle(WebApplication app, string file)
+    private static void MapDesktopStyle(WebApplication app, string file) =>
+        MapDesktopAsset(app, file, "text/css; charset=utf-8");
+
+    /// <summary>Serves explicitly embedded desktop assets without exposing other desktop files.</summary>
+    private static void MapDesktopAsset(WebApplication app, string file, string contentType)
     {
         var assembly = typeof(PlayRecordingWebApplication).Assembly;
         var resourceName = $"PlayRecordingWeb.{file}";
         if (assembly.GetManifestResourceInfo(resourceName) is not null)
-            app.MapGet($"/assets/{file}", () => Results.File(assembly.GetManifestResourceStream(resourceName)!, "text/css; charset=utf-8"));
+            app.MapGet($"/assets/{file}", () => Results.File(assembly.GetManifestResourceStream(resourceName)!, contentType));
     }
 
     /// <summary>Retains framework keys only for the listener lifetime.</summary>

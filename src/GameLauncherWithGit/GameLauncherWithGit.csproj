@@ -68,6 +68,7 @@
         <ProjectReference Include="..\GameLauncherWithGit.PlayRecordingWeb\GameLauncherWithGit.PlayRecordingWeb.csproj" />
         <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.4.0" />
         <EmbeddedResource Include="wwwroot\css\scenario-shared.css" LogicalName="PlayRecordingWeb.scenario-shared.css" />
+        <EmbeddedResource Include="wwwroot\scenario-live-feed.js" LogicalName="PlayRecordingWeb.scenario-live-feed.js" />
         <None Include="Resources\TrayIcon\*.ico" CopyToOutputDirectory="PreserveNewest" Link="TrayIcon\%(Filename)%(Extension)" />
         <None Include="..\..\artifacts\luna-native\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Link="Luna\%(Filename)%(Extension)" />
         <None Include="..\..\LICENSE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Link="LICENSE.txt" />

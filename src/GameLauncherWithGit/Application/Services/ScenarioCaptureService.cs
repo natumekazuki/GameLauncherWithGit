@@ -51,7 +51,8 @@ public sealed partial class ScenarioCaptureService : IAsyncDisposable
     private readonly List<SpeakerPending> _speakerPending = [];
     private readonly CancellationTokenSource _stop = new();
     private readonly Task _writerTask, _resolverTask;
-    private sealed record WriteWork(long Session, CaptureReceived? Received, CaptureRules Rules, TaskCompletionSource? Barrier = null, long PathEpoch = 0);
+    private sealed record WriteWork(long Session, CaptureReceived? Received, CaptureRules Rules, TaskCompletionSource? Barrier = null,
+        long PathEpoch = 0, long? RecordId = null, long ScopeVersion = 0);
     private sealed record SpeakerPending(long Session, long Sequence, DateTimeOffset ReceivedAt);
 
     public event Action? StateChanged;
@@ -521,7 +522,8 @@ public sealed partial class ScenarioCaptureService : IAsyncDisposable
         if (_attempted.TryGetValue(received.Source.Key, out var water) && received.Sequence <= water) return;
         _attempted[received.Source.Key] = received.Sequence;
         var size = received.Text.Length * 2;
-        if (_pendingBytes + size > MaxBytes || !_writes.Writer.TryWrite(new(session, received, rules, PathEpoch: _pathEpoch))) { Lose("save-queue"); return; }
+        if (_pendingBytes + size > MaxBytes || !_writes.Writer.TryWrite(new(session, received, rules,
+            PathEpoch: _pathEpoch, RecordId: ActiveRecordId, ScopeVersion: _playEpoch))) { Lose("save-queue"); return; }
         _pendingBytes += size;
         if (received.Role == CaptureRole.Body && !string.IsNullOrWhiteSpace(received.Text))
         {
@@ -707,6 +709,9 @@ public sealed partial class ScenarioCaptureService : IAsyncDisposable
                         _speakerPending.Add(new(work.Session, received.Sequence, received.ReceivedAt));
                     }
                 }
+                // Publish only after the store has committed a new body event.
+                if (saved && hasBody && !string.IsNullOrWhiteSpace(received.Text) && work.RecordId is { } recordId)
+                    PublishLiveFeed(recordId, work.Session, work.ScopeVersion);
             }
             catch (Exception ex)
             {
