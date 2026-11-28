@@ -43,11 +43,12 @@ public partial class PlayRecordingPanel
         .GroupBy(x => x.Kind).Select(g => g.FirstOrDefault(x => x.Id == _editItem?.LabelId) ?? g.First());
     private bool EditingNarration => _labels.Any(x => x.Id == _editLabel && x.Kind == CaptureKind.Narration);
 
-    private void ApplyTextPage(PlayRecordingPage page)
+    private bool ApplyTextPage(PlayRecordingPage page)
     {
         _nextBefore = page.NextBefore;
         var rows = page.Items;
-        if (_textItems is null || !_textItems.SequenceEqual(rows))
+        var changed = _textItems is null || !_textItems.SequenceEqual(rows);
+        if (changed)
         {
             _textItems = rows;
             _imageCounts = null;
@@ -55,9 +56,9 @@ public partial class PlayRecordingPanel
             var ids = rows.Select(row => row.Id).ToHashSet();
             foreach (var id in _rowButtons.Keys.Where(id => !ids.Contains(id)).ToArray()) _rowButtons.Remove(id);
             foreach (var id in ids) _rowButtons.TryAdd(id, new());
-            if (_latest) _scrollToLatest = true;
         }
         _textError = false;
+        return changed;
     }
 
     private void ResetTextPages()
@@ -82,7 +83,7 @@ public partial class PlayRecordingPanel
         _scrollToLatest = true;
     });
 
-    /// <summary>Stops polling updates while this page is being read.</summary>
+    /// <summary>Switches from the latest page to a held cursor for search, ranges or earlier pages.</summary>
     private void StopFollowing()
     {
         if (!_latest) return;
@@ -204,7 +205,6 @@ public partial class PlayRecordingPanel
     /// <summary>Opens the controlled detail for one occurrence; only this surface loads image bodies.</summary>
     private async Task ShowGalleryAsync(CaptureTextItem item, string? imageId)
     {
-        StopFollowing();
         CloseTextEditor();
         CloseGallery();
         _galleryItem = item;

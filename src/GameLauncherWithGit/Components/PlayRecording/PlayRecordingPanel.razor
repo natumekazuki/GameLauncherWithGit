@@ -74,7 +74,7 @@
                         </nav>
                         @if (_pane == Pane.Text)
                         {
-                            <button type="button" class="scenario-action" disabled="@(_busy || _latest && _textRangeId is null)" @onclick="() => FollowLatestAsync(workspaceTarget)">最新へ</button>
+                            <button type="button" class="scenario-action" disabled="@(_busy || _latest && _atFeedEnd && _textRangeId is null)" @onclick="() => FollowLatestAsync(workspaceTarget)">最新へ</button>
                         }
                     </div>
                     <div class="play-view" hidden="@(_pane != Pane.Text)" inert="@overlay">

@@ -11,6 +11,26 @@ public sealed record PlayRecordingObservedFlow(ScenarioFlowGraph Graph, bool Mat
 
 public sealed partial class PlayRecordingOperations
 {
+    /// <summary>Reads the committed invalidation signal; actual history still requires the Web target guard.</summary>
+    internal ScenarioLiveFeedVersion? LiveFeedVersion => Capture.LiveFeedVersion;
+    internal ScenarioLiveFeedVersion? LiveFeedSpeakerVersion => Capture.LiveFeedSpeakerVersion;
+
+    internal event Action<ScenarioLiveFeedVersion> LiveFeedCommitted
+    {
+        add => Capture.LiveFeedCommitted += value;
+        remove => Capture.LiveFeedCommitted -= value;
+    }
+
+    internal long ScreenshotSavedCount => Screenshots.Snapshot.SavedCount;
+
+    /// <summary>Loads a bounded live page only for the authorized target matching the captured version.</summary>
+    internal Task<PlayRecordingPage> GetLiveItemsAsync(string gameId, PlayRecordingTarget expected,
+        ScenarioLiveFeedVersion version, int limit)
+    {
+        if (!version.Matches(expected.HistoryRoot, expected.SessionId, expected.ScopeVersion)) throw Stale();
+        return GetItemsAsync(gameId, expected, limit);
+    }
+
     /// <summary>
     /// Returns oldest to newest within the page. Supply the previous page's NextBefore when loading older text
     /// during live capture so newly appended text does not move the page boundary.

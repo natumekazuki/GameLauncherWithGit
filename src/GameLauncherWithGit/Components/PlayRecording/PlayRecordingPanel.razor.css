@@ -112,7 +112,9 @@
 .play-controls > .play-panel { max-height: 47dvh; overflow: auto; }
 
 @media (max-width: 47.99rem) {
-    .play-body ::deep :is(input, select, button, a, [tabindex]) { scroll-margin-block-start: 48dvh; }
+    /* Leave room for the actual tail below the pinned controls at phone heights. */
+    .play-controls > .play-panel { max-height: clamp(11rem, calc(100dvh - 27rem), 47dvh); }
+    .play-body ::deep :is(input, select, button, a, [tabindex]) { scroll-margin-block-start: clamp(12rem, calc(100dvh - 26rem), 48dvh); }
 }
 
 @media (max-width: 47.99rem) and (max-height: 35rem) {

@@ -6,51 +6,28 @@ namespace GameLauncherWithGit.Components.PlayRecording;
 
 public partial class PlayRecordingPanel
 {
-    /// <summary>Replaces the tail only while the reader remains at its end.</summary>
-    private async Task RefreshLatestTextAsync()
-    {
-        if (_textError) return;
-        try
-        {
-            if (_textScroller.Id is not null && !await Js.InvokeAsync<bool>("playRecordingText.atEnd", _textScroller))
-            {
-                StopFollowing();
-                return;
-            }
-        }
-        catch (JSDisconnectedException) { return; }
-        await LoadTextAsync(checkScrollBeforeApply: true);
-    }
-
-    private Task LoadTextAsync() => LoadTextAsync(checkScrollBeforeApply: false);
-
     /// <summary>Loads one target-checked page and keeps its held cursor when live follow is paused.</summary>
-    private async Task LoadTextAsync(bool checkScrollBeforeApply)
+    private async Task LoadTextAsync()
     {
         if (_state is not { } state) return;
         var target = ForDisplay(state);
         var before = _olderPages.Count == 0 ? _pausedBefore : _olderPages[^1];
         var rangeId = _textRangeId;
+        var version = Operations.LiveFeedVersion;
+        var speakers = Operations.LiveFeedSpeakerVersion;
+        var initialTail = _latest && before is null && rangeId is null && _textItems is null && _galleryItem is null;
         PlayRecordingPage? page = null;
         await ReadAsync(target, "texts", gameId => Operations.GetItemsAsync(gameId, target.Recording, TextPageSize, before: before,
             rangeId: rangeId, textSearch: _textSearch, speakerSearch: _speakerSearch), value => page = value, () => _textError = true,
             _textItems is null ? loading => _textLoading = loading : null);
         if (page is null || !IsWorkspaceCurrent(target)) return;
-        // Reading can resume during the server fetch; do not overwrite a page that is no longer at the tail.
-        if (checkScrollBeforeApply)
-        {
-            try
-            {
-                if (!_latest || _textScroller.Id is not null && !await Js.InvokeAsync<bool>("playRecordingText.atEnd", _textScroller))
-                {
-                    if (IsWorkspaceCurrent(target)) StopFollowing();
-                    return;
-                }
-            }
-            catch (JSDisconnectedException) { return; }
-        }
-        if (!IsWorkspaceCurrent(target)) return;
         ApplyTextPage(page);
+        if (initialTail) _scrollToLatest = true;
+        if (_latest && before is null && rangeId is null && _textSearch is null && _speakerSearch is null)
+        {
+            if (PendingFeed(version, _appliedFeedRevision, target.Recording) is { } body) _appliedFeedRevision = body.Revision;
+            if (PendingFeed(speakers, _appliedSpeakerRevision, target.Recording) is { } resolved) _appliedSpeakerRevision = resolved.Revision;
+        }
         await LoadImageCountsAsync();
     }
 
@@ -59,6 +36,7 @@ public partial class PlayRecordingPanel
     {
         if (_state is not { } state || _textItems is not { Count: > 0 } rows) return;
         var target = ForDisplay(state);
+        var screenshotVersion = Operations.ScreenshotSavedCount;
         var events = rows.Select(x => new CaptureEventKey(x.SessionId, x.Sequence)).Distinct().ToArray();
         await ReadAsync(target, "image counts", gameId => Operations.GetScreenshotCountsAsync(gameId, target.Recording, events),
             counts =>
@@ -68,12 +46,14 @@ public partial class PlayRecordingPanel
                     counts.Any(x => !_imageCounts.TryGetValue(x.Key, out var count) || count != x.Value))
                     _imageCounts = counts;
                 _imageCountsFailed = false;
+                _appliedScreenshotCount = screenshotVersion;
             },
             () =>
             {
                 if (!ReferenceEquals(rows, _textItems)) return;
                 _imageCounts = null;
                 _imageCountsFailed = true;
+                _appliedScreenshotCount = screenshotVersion;
             });
     }
 
@@ -157,7 +137,6 @@ public partial class PlayRecordingPanel
         if (_pane == Pane.Text && _galleryItem is null) await RememberReadingPositionAsync(target);
         if (!IsWorkspaceCurrent(target)) return;
         _pane = Pane.Text;
-        StopFollowing();
         await ShowGalleryAsync(item, imageId);
     }
 
