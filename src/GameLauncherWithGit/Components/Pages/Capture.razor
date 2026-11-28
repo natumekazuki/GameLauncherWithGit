@@ -158,8 +158,9 @@
                         </select></label>
                     }
                 }
-                <label class="capture-filter" title="区間"><CaptureIcon Name="Range" /><select aria-label="区間" value="@_rangeId" @onchange="e => AtScopeAsync(displayedScope, () => ChangeRangeAsync(e))" disabled="@(_busy || displayedScope is null)">
+                <label class="capture-filter" title="区間"><CaptureIcon Name="Range" /><select aria-label="区間" value="@TextRangeChoice" @onchange="e => AtScopeAsync(displayedScope, () => ChangeRangeAsync(e))" disabled="@(_busy || displayedScope is null)">
                     <option value="0">全本文</option>
+                    @if (_observedTextInterval is not null) { <option value="@ObservedTextChoice">未設定区間</option> }
                     @foreach (var range in _ranges) { <option value="@range.Id">@RangeName(range)</option> }
                 </select></label>
                 <label class="capture-filter" title="分類"><CaptureIcon Name="Tag" /><select aria-label="分類" value="@_filter" @onchange="e => AtScopeAsync(displayedScope, () => FilterAsync(e))" disabled="@(_busy || displayedScope is null)">
@@ -235,7 +236,10 @@
                                 <button type="button" class="secondary-button capture-text-button" aria-label="スクリーンショット設定" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="OpenScreenshotSettings" disabled="@_busy"><CaptureIcon Name="Camera" />撮影設定</button>
                             }
                             <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="OpenExtractionSettings" disabled="@_busy"><CaptureIcon Name="Settings" />抽出設定</button>
-                            <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="() => AtScopeAsync(displayedScope, OpenExportAsync)" disabled="@(_busy || _recordId == 0)"><CaptureIcon Name="Export" />書き出し</button>
+                            @if (_observedTextInterval is null)
+                            {
+                                <button type="button" class="secondary-button capture-text-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="() => AtScopeAsync(displayedScope, OpenExportAsync)" disabled="@(_busy || _recordId == 0)"><CaptureIcon Name="Export" />書き出し</button>
+                            }
                             <button type="button" class="secondary-button" popovertarget="capture-tools-menu" popovertargetaction="hide" @onclick="() => AtScopeAsync(displayedScope, () => OpenSavedScenesAsync(displayedScope!))" disabled="@(_busy || _recordId == 0)">保存済みの手動場面</button>
                             @if (_screenshotCountsError is not null)
                             {
@@ -262,18 +266,7 @@
                 {
                     <div class="capture-flow-graph" hidden="@(_flowLoading || _flowReadError is not null)" inert="@(!_flowOpen || _flowLoading || _flowReadError is not null)">
                         <ScenarioFlowView @key="(_profileId, _recordId)" Graph="_flowGraph" MatchingComplete="_flowMatchingComplete"
-                            OpenOccurrence="occurrence => AtScopeAsync(displayedScope, () => OpenFlowOccurrenceAsync(occurrence))"
-                            CutOccurrence="occurrence => AtScopeAsync(displayedScope, () => CutFlowOccurrenceAsync(displayedProfile, occurrence))">
-                            <OccurrenceImages Context="occurrence">
-                                @if (displayedScope is { } imageScope)
-                                {
-                                    var occurrenceKey = new CaptureOccurrenceKey(imageScope.RecordId, occurrence.Start);
-                                    <CaptureFlowOccurrenceImages @key="(imageScope.ViewKey, occurrenceKey)" Occurrence="occurrenceKey"
-                                        LoadImageIds="(key, token) => LoadFlowImageIdsAsync(imageScope, occurrence, key, token)"
-                                        ReadImage="(key, imageId, token) => ReadFlowImageAsync(imageScope, occurrence, key, imageId, token)" />
-                                }
-                            </OccurrenceImages>
-                        </ScenarioFlowView>
+                            OpenRange="node => AtScopeAsync(displayedScope, () => OpenFlowRangeAsync(displayedScope!, node))" />
                     </div>
                 }
                 @if (_flowLoading) { <ScenarioLoading Label="フローチャートを読込中…" /> }
@@ -306,7 +299,7 @@
                 @foreach (var item in _items)
                 {
                     var detailsSelected = _detailItem?.Id == item.Id;
-                    <article class="capture-item @(IsRangeEdge(item) || _flowHighlighted == item.StartPosition || detailsSelected || _selected.Contains(item.Id) ? "capture-range-edge" : "")" @key="item.Id">
+                    <article class="capture-item @(IsRangeEdge(item) || detailsSelected || _selected.Contains(item.Id) ? "capture-range-edge" : "")" @key="item.Id">
                         @if (_pickingRange)
                         {
                             <div class="capture-row-reading">
@@ -748,16 +741,12 @@
 @code {
     private CaptureSnapshot _snapshot = new();
     private PlayRecordingState? _playState;
-    private bool _flowOpen, _flowMatchingComplete, _independentFlowConfirm;
+    private bool _independentFlowConfirm;
     private ScenarioSceneFlowSnapshot? _savedScenes;
     private ElementReference _toolsButton;
     private bool _restoreToolsFocus;
     private IReadOnlyList<ScenarioGameTag> _gameTags = [];
     private IReadOnlyList<string> _gameSpeakers = [];
-    private ScenarioFlowGraph? _flowGraph;
-    private bool _flowLoading, _flowNeedsReload;
-    private string? _flowReadError;
-    private CapturePosition? _flowHighlighted;
     private bool _screenshotSettingsOpen;
 
 
@@ -862,7 +851,7 @@
     private bool EditorOpen => _savedScenes is not null || _independentFlowConfirm || _exportOpen || _screenshotSettingsOpen || _settingsOpen || _bulkOpen || _partition is not null || _rangeEditorOpen || _finishOpen || _historyDialog != HistoryDialog.None;
     private bool FollowingView => !_flowOpen && _offset == 0 && !_pickingRange;
     private CapturePosition? _pageCeiling;
-    private bool CanEdit => _rangeId == 0 && !_pickingRange;
+    private bool CanEdit => _rangeId == 0 && _observedTextInterval is null && !_pickingRange;
     private bool TextRangeValid => _rangeFirst is not null && _rangeLast is not null && _rangeFirst.StartPosition.CompareTo(_rangeLast.EndPosition) < 0;
     private string TextRangeSummary => !_pickingRange ? ""
         : $"開始：{(_rangeFirst is null ? "未指定" : CandidatePreview(_rangeFirst.Text))} ／ 終了：{(_rangeLast is null ? "未指定" : CandidatePreview(_rangeLast.Text))}";
@@ -887,7 +876,7 @@
     private IEnumerable<CaptureLabel> ClassificationChoices(long current) => FixedLabels.Concat(_labels.Where(x => x.Id == current && !FixedLabels.Any(y => y.Id == current)));
     private static string ClassificationChoiceName(CaptureLabel label) => label.Kind is CaptureKind.Dialogue or CaptureKind.Narration ? ClassificationName(label.Kind) : label.Name;
     private string EmptyMessage => SelectedGameTitle is null ? "ゲーム未選択"
-        : HasHistorySearch || _filter != "all" || _rangeId != 0 ? "条件に一致する本文はありません" : "保存された本文はありません";
+        : HasHistorySearch || _filter != "all" || _rangeId != 0 || _observedTextInterval is not null ? "条件に一致する本文はありません" : "保存された本文はありません";
     private static string CandidatePreview(string text) => string.Concat(text.Take(60)).ReplaceLineEndings(" ");
     private sealed class PartDraft { public string Text { get; set; } = ""; public long Label { get; set; } public string Speaker { get; set; } = ""; }
     protected override void OnInitialized()
@@ -939,7 +928,19 @@
             if (_observedFeedScope is { } viewKey) await _liveFeedModule.InvokeVoidAsync("observe", _feed, _self, viewKey);
             else await _liveFeedModule.InvokeVoidAsync("unobserve", _feed);
         }
-        if (_scrollToEnd is { } end) { _scrollToEnd = null; await _liveFeedModule.InvokeVoidAsync("scroll", _feed, end); }
+        if (!_flowOpen)
+        {
+            if (_restoreFlowTextTop is { } top)
+            {
+                _restoreFlowTextTop = null;
+                await _liveFeedModule.InvokeVoidAsync("restore", _feed, top);
+            }
+            else if (_scrollToEnd is { } end)
+            {
+                _scrollToEnd = null;
+                await _liveFeedModule.InvokeVoidAsync("scroll", _feed, end);
+            }
+        }
         await ApplyLiveFeedRenderAsync(pendingLiveRender);
         if (_focusAfterInitialRetry || _focusFeed)
         {
@@ -1094,6 +1095,7 @@
         }
         catch (Exception ex)
         {
+            if (!IsDisplayed(expected)) return;
             _itemsError = ex.Message;
             _items = [];
             _hasMore = false;
@@ -1103,7 +1105,7 @@
         var hasMore = items.Count > 200;
         PublishItemPage(hasMore, hasMore ? items.Skip(1).ToArray() : items);
         // An explicit latest read already contains at least the version present when that read began.
-        if (ceiling is null && _offset == 0 && !HasHistorySearch && _rangeId == 0 && _filter == "all" &&
+        if (ceiling is null && _offset == 0 && !HasHistorySearch && _rangeId == 0 && _observedTextInterval is null && _filter == "all" &&
             expected is not null && version is not null && CurrentLiveVersion(expected, version))
             ConsumeFeedRevisions(revisions);
         await LoadScreenshotCountsAsync();
@@ -1158,10 +1160,10 @@
     {
         // SQLite reads and substring matching must not block the UI while browsing large histories.
         var recordId = _recordId; var rangeId = _rangeId; var kind = FilterKind; var unclassified = _filter == "none";
-        var text = _textSearch; var speaker = _speakerSearch;
+        var text = _textSearch; var speaker = _speakerSearch; var interval = _observedTextInterval;
         return Task.Run(() => Store.GetGameCaptureItemsAsync(recordId, limit, offset,
             unclassifiedOnly: unclassified, latest: true, rangeId: rangeId == 0 ? null : rangeId, kind: kind,
-            textSearch: text, speakerSearch: speaker, before: before));
+            textSearch: text, speakerSearch: speaker, before: before, interval: interval));
     }
     private Task SearchHistoryAsync() => RunAsync(async () =>
     {
@@ -1255,6 +1257,7 @@
     private Task ChangeRangeAsync(ChangeEventArgs e) => RunAsync(async () =>
     {
         if (!long.TryParse(e.Value?.ToString(), out var rangeId) || rangeId != 0 && !_ranges.Any(range => range.Id == rangeId)) return;
+        _observedTextInterval = null;
         _rangeId = rangeId;
         await ReloadFilteredItemsAsync();
     });
@@ -1313,72 +1316,10 @@
     }, failureLabel: "記録開始失敗");
     private Task BreakLivePathAsync(PlayRecordingTarget expected) => RunAsync(
         () => RecordingOperations.BreakDesktopPathAsync(expected), "次の本文から別経路にします。", failureLabel: "経路変更失敗");
-    /// <summary>Switches the workspace without clearing the text query or the mounted flow.</summary>
-    private Task ShowViewAsync(bool flow) => RunAsync(async () =>
-    {
-        if (flow == _flowOpen) return;
-        _flowOpen = flow;
-        if (flow)
-        {
-            _following = false;
-            if (_flowNeedsReload || _flowGraph is null && _flowReadError is null) await LoadFlowAsync();
-        }
-    });
-
-    /// <summary>Reloads graph data without unmounting the same history's flow component.</summary>
-    private async Task LoadFlowAsync()
-    {
-        var expected = _displayedScope;
-        if (expected is null) return;
-        var recordId = expected.RecordId;
-        _flowLoading = true;
-        _flowReadError = null;
-        StateHasChanged();
-        try
-        {
-            // Material and graph overrides must describe the same committed revision.
-            for (var attempt = 0; attempt < 2; attempt++)
-            {
-                var material = await Task.Run(() => MaterialReader.GetScenarioMaterialAsync(recordId, new()));
-                var overrides = await Store.GetScenarioFlowOverridesAsync(recordId);
-                var version = await MaterialReader.GetScenarioMaterialVersionAsync(recordId);
-                if (material.Version != version) continue;
-                var graph = await Task.Run(() => ScenarioFlowMaterialAdapter.Build(material, overrides));
-                if (!await CanPublishAsync(expected)) return;
-                _flowGraph = graph;
-                _flowMatchingComplete = material.MatchingComplete;
-                _flowNeedsReload = false;
-                return;
-            }
-            throw new InvalidOperationException("記録が更新されました。フローチャートを更新して再試行してください。");
-        }
-        catch (Exception ex)
-        {
-            // An error from an obsolete view cannot obscure a new workspace.
-            if (IsDisplayed(expected)) _flowReadError = ex.Message;
-        }
-        finally
-        {
-            if (IsDisplayed(expected)) _flowLoading = false;
-        }
-    }
     private Task CutHistoryOccurrenceAsync(PlayRecordingTarget target, CaptureTextItem item) => RunAsync(async () =>
     {
         await WriteHistoryAsync(target, recordId => Store.SetScenarioFlowCutAsync(recordId, item.StartPosition));
     }, "この出現から別経路にしました。");
-    private Task CutFlowOccurrenceAsync(PlayRecordingTarget target, ScenarioFlowOccurrence occurrence) => RunAsync(async () =>
-    {
-        await WriteHistoryAsync(target, recordId => Store.SetScenarioFlowCutAsync(recordId, occurrence.Start)); await LoadFlowAsync();
-    }, "この出現から別経路にしました。他の周回の接続は残ります。");
-    /// <summary>Opens an exact occurrence by raw position, without replacing the applied text query.</summary>
-    private Task OpenFlowOccurrenceAsync(ScenarioFlowOccurrence occurrence) => RunAsync(async () =>
-    {
-        var item = await FindOccurrenceItemAsync(_recordId, occurrence.Start);
-        _flowOpen = false;
-        _following = false;
-        _flowHighlighted = item.StartPosition;
-        await ShowDetailAsync(item);
-    });
 
     /// <summary>Finds the item that still owns the supplied UTF-16 offset in this record.</summary>
     private async Task<CaptureTextItem> FindOccurrenceItemAsync(long recordId, CapturePosition position)
@@ -1750,7 +1691,7 @@
     /// <summary>Opens the common export form with the structure-only format selected.</summary>
     private Task OpenExportAsync() => RunAsync(async () =>
     {
-        if (_profile is null) return;
+        if (_profile is null || _observedTextInterval is not null) return;
         _ranges = await Store.GetCaptureRangesAsync(_recordId);
         _exportIncludeTags = _exportIncludeTags.Intersect(AvailableRangeTags, StringComparer.Ordinal).ToArray();
         _exportExcludeTags = _exportExcludeTags.Intersect(AvailableRangeTags, StringComparer.Ordinal).ToArray();
@@ -1761,7 +1702,7 @@
     /// <summary>Sends the selected format through the existing scoped TXT or archive writer.</summary>
     private Task SaveExportAsync() => RunAsync(async () =>
     {
-        if (_profile is not { } profile || !_exportOpen) return;
+        if (_profile is not { } profile || !_exportOpen || _observedTextInterval is not null) return;
         try { await WriteExportAsync(_exportFormat, profile.Title); }
         finally { _focusExportSave = _exportOpen; }
     }, failureLabel: "出力失敗");

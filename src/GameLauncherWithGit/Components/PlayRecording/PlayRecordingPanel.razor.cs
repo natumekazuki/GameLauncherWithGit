@@ -83,10 +83,10 @@ public partial class PlayRecordingPanel
             FocusTarget.RangeStart when _state is { Recording: true, Paused: false, CanStartRange: true } && _rangeDraft is null => _startRangeButton,
             FocusTarget.RangeDraft when _rangeDraft is { Open: false } => _rangeDraftButton,
             FocusTarget.RangeEditor when _rangeDraft is { Open: true } => _rangeEditorHeading,
-            FocusTarget.RangePicker when textVisible && !_textError && _textItems is { Count: > 0 } && _textRangeId is null => _pickRangeButton,
+            FocusTarget.RangePicker when textVisible && !_textError && _textItems is { Count: > 0 } && !HasTextRange => _pickRangeButton,
             FocusTarget.Ranges when _pane == Pane.Text => _rangesTab,
             FocusTarget.Classification when _pane == Pane.Text && _editItem?.Id == request.ItemId => _editClassification,
-            FocusTarget.EditButton or FocusTarget.PathRow when rowVisible && _textRangeId is null && _editItem?.Id != request.ItemId && row is not null => row.Open,
+            FocusTarget.EditButton or FocusTarget.PathRow when rowVisible && !HasTextRange && _editItem?.Id != request.ItemId && row is not null => row.Open,
             FocusTarget.Gallery when _pane == Pane.Text && _galleryItem is not null => _galleryHeading,
             FocusTarget.DetailRange when _pane == Pane.Text && _galleryItem is not null =>
                 _detailRangeButtons.TryGetValue(request.ItemId, out var detailRange) ? detailRange.Open : _galleryHeading,

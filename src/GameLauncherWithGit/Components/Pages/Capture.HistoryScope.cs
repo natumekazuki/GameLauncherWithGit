@@ -135,14 +135,15 @@ public partial class Capture
         previous?.Dispose();
     }
 
-    private Task WithHistoryWriteAsync(DisplayedScope? expected, PlayRecordingTarget target, Func<long, Task> write)
+    private async Task WithHistoryWriteAsync(DisplayedScope? expected, PlayRecordingTarget target, Func<long, Task> write)
     {
         if (!IsDisplayed(expected) || target.HistoryRoot != expected!.RecordId) throw ScopeChanged();
-        return RecordingOperations.RunDesktopHistoryAsync(target, recordId =>
+        await RecordingOperations.RunDesktopHistoryAsync(target, recordId =>
         {
             if (!IsDisplayed(expected)) throw ScopeChanged();
             return write(recordId);
         });
+        if (IsDisplayed(expected)) _flowNeedsReload = _flowGraph is not null;
     }
 
     private Task WriteHistoryAsync(PlayRecordingTarget target, Func<long, Task> write) =>
@@ -219,7 +220,8 @@ public partial class Capture
         _flowNeedsReload = false;
         _flowLoading = false;
         _flowReadError = null;
-        _flowHighlighted = null;
+        _observedTextInterval = null;
+        _textTopBeforeFlow = _restoreFlowTextTop = null;
         _pendingLiveRange = null;
         _rangeDraftTarget = _settingsTarget = null;
         _rangeListsVersion = -1;
@@ -249,6 +251,11 @@ public partial class Capture
         var tags = (await SceneStore.GetScenarioSceneFlowAsync(expected.RecordId)).Tags;
         var speakers = await Store.GetGameCaptureSpeakersAsync(expected.RecordId);
         if (!await CanPublishAsync(expected)) return;
+        if (_flowGraph is not null && !_ranges.Select(RangeFlowIdentity).SequenceEqual(ranges.Select(RangeFlowIdentity)))
+            _flowNeedsReload = true;
         (_ranges, _gameTags, _gameSpeakers) = (ranges, tags, speakers);
     }
+
+    private static (long Id, string Name, CapturePosition Start, CapturePosition End) RangeFlowIdentity(CaptureRange range) =>
+        (range.Id, range.Name, range.Start, range.End);
 }

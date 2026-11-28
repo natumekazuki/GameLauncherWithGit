@@ -18,7 +18,7 @@ public partial class PlayRecordingPanel
     private int _wakeQueued;
 
     private bool CanFollowText => !_disposed && !_statusError && !_textError && _pane == Pane.Text && _latest
-        && _textItems is not null && _textRangeId is null && _olderPages.Count == 0 && _pausedBefore is null
+        && _textItems is not null && !HasTextRange && _olderPages.Count == 0 && _pausedBefore is null
         && _textSearch is null && _speakerSearch is null && !_pickingRange && _editItem is null && _galleryItem is null
         && !_savedRangesOpen && _rangeDraft?.Open != true && _finishConfirmation is null;
 

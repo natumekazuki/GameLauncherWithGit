@@ -23,7 +23,7 @@ public partial class Capture
 
     private bool CanFollowLiveFeed => FollowingView && ViewingLiveRecord && !_busy && !_loading && !_stop.IsCancellationRequested &&
         RequestedGameId == _loadedGameId && _scrollToEnd is null && !EditorOpen && _detailKey is null && _edit is null && _selected.Count == 0 &&
-        !HasHistorySearch && !HistorySearchPending && _filter == "all" && _rangeId == 0 && _rangeSelection is null &&
+        !HasHistorySearch && !HistorySearchPending && _filter == "all" && _rangeId == 0 && _observedTextInterval is null && _rangeSelection is null &&
         _pendingLiveRange is null && _openRowMenuViewKey != _displayedScope?.ViewKey;
 
     /// <summary>Schedules a reader turn without waiting for the UI on the capture writer thread.</summary>

@@ -49,6 +49,9 @@ public partial class PlayRecordingPanel
         await UseActionAsync(target, gameId => Operations.RenameDisplayedRangeAsync(
             gameId, target.Recording, draft.Occurrence.Position, draft.Id, draft.Name, draft.Tags));
         if (!IsDetailRangeEditCurrent(target, draft)) return;
+        _pathsNeedReload = _graph is not null;
+        if (_openedFlowRange is { } opened && opened.SavedRangeId == draft.Id)
+            _openedFlowRange = opened with { Name = draft.Name.Trim() };
         CloseDetailRangeEdit();
         _detailSuccess = "区間名・タグを保存しました";
         await LoadRangesAsync();

@@ -41,7 +41,7 @@
 .flow-matching { align-self: center; }
 .flow-matching, .flow-empty { color: var(--scenario-muted); font-size: .875rem; }
 .flow-workarea {
-    --flow-height: max(11rem, min(53dvh, calc(100dvh - 12rem)));
+    --flow-height: max(11rem, 34dvh);
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     align-items: start;
@@ -104,5 +104,10 @@
 .flow-zoom ::deep svg { flex: none; }
 
 @container (min-width: 52rem) {
-    .flow-workarea { --flow-height: max(13rem, calc(100dvh - 15rem)); }
+    /* Keep the selected range's action beside the diagram, not after its canvas height. */
+    .flow-workarea {
+        --flow-height: max(13rem, calc(100dvh - 15rem));
+        grid-template-columns: minmax(0, 1fr) minmax(11rem, 15rem);
+    }
+    .flow-selection { flex-direction: column; align-items: flex-start; }
 }

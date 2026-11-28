@@ -63,7 +63,6 @@ public partial class Capture
         _selected.Remove(itemId);
         if (_detailItem?.Id == itemId) ClearDetail();
         if (_edit?.Id == itemId) DiscardCorrection();
-        _flowNeedsReload = _flowGraph is not null;
         CloseEditors();
         await LoadItemsAsync();
         _message = "本文行を削除しました。";

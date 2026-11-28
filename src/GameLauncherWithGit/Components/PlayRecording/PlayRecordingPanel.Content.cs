@@ -18,6 +18,8 @@ public partial class PlayRecordingPanel
     private string _textSearchInput = "", _speakerSearchInput = "";
     private string? _textSearch, _speakerSearch;
     private long? _textRangeId;
+    private ScenarioRangeFlowNode? _openedFlowRange;
+    private bool HasTextRange => _textRangeId is not null || _openedFlowRange is not null;
     private IReadOnlyList<CaptureTextItem>? _textItems;
     private IReadOnlyDictionary<CaptureEventKey, int>? _imageCounts;
     private bool _imageCountsFailed;
@@ -31,7 +33,7 @@ public partial class PlayRecordingPanel
     private GalleryImage? _galleryImage;
     private string? _preferredGalleryImageId, _detailSuccess;
     private long? _selectedItemId;
-    private ScenarioFlowGraph? _graph;
+    private ScenarioRangeFlowGraph? _graph;
     private bool _matchingComplete;
     private ScenarioSceneFlowSnapshot? _sceneFlow;
     private bool _savedScenesOpen;
@@ -100,15 +102,16 @@ public partial class PlayRecordingPanel
     {
         _textSearch = Optional(_textSearchInput);
         _speakerSearch = Optional(_speakerSearchInput);
-        await OpenTextViewAsync(false, _textRangeId);
+        await OpenTextViewAsync(false, _textRangeId, _openedFlowRange);
         FreezeTextPage();
     });
 
-    private async Task OpenTextViewAsync(bool latest, long? rangeId)
+    private async Task OpenTextViewAsync(bool latest, long? rangeId, ScenarioRangeFlowNode? flowRange = null)
     {
         _pane = Pane.Text;
         _latest = latest;
         _textRangeId = rangeId;
+        _openedFlowRange = flowRange;
         _readingPosition = null;
         _restoreReadingPosition = null;
         _selectedItemId = null;
@@ -222,7 +225,7 @@ public partial class PlayRecordingPanel
     /// <summary>Starts selecting a range from the open occurrence using the existing shared draft path.</summary>
     private void PickRangeFromDetail(DisplayTarget target, CaptureOccurrenceKey key)
     {
-        if (ControlsDisabled || _textRangeId is not null || _rangeDraft is not null || !IsDetailCurrent(target, key)) return;
+        if (ControlsDisabled || HasTextRange || _rangeDraft is not null || !IsDetailCurrent(target, key)) return;
         _pickingRange = true;
         _first = _galleryItem;
         _last = null;

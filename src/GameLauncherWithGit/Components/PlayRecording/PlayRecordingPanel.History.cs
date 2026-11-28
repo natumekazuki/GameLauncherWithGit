@@ -13,17 +13,22 @@ public partial class PlayRecordingPanel
         var target = ForDisplay(state);
         var before = _olderPages.Count == 0 ? _pausedBefore : _olderPages[^1];
         var rangeId = _textRangeId;
+        var interval = _openedFlowRange is { SavedRangeId: null } observed
+            ? new CaptureRangeSelection(target.Recording.HistoryRoot, observed.Start, observed.End) : null;
         var version = Operations.LiveFeedVersion;
         var speakers = Operations.LiveFeedSpeakerVersion;
-        var initialTail = _latest && before is null && rangeId is null && _textItems is null && _galleryItem is null;
+        var initialTail = _latest && before is null && !HasTextRange && _textItems is null && _galleryItem is null;
         PlayRecordingPage? page = null;
-        await ReadAsync(target, "texts", gameId => Operations.GetItemsAsync(gameId, target.Recording, TextPageSize, before: before,
-            rangeId: rangeId, textSearch: _textSearch, speakerSearch: _speakerSearch), value => page = value, () => _textError = true,
+        await ReadAsync(target, "texts", gameId => interval is null
+                ? Operations.GetItemsAsync(gameId, target.Recording, TextPageSize, before: before,
+                    rangeId: rangeId, textSearch: _textSearch, speakerSearch: _speakerSearch)
+                : Operations.GetObservedIntervalItemsAsync(gameId, target.Recording, interval, TextPageSize, before, _textSearch, _speakerSearch),
+            value => page = value, () => _textError = true,
             _textItems is null ? loading => _textLoading = loading : null);
         if (page is null || !IsWorkspaceCurrent(target)) return;
         ApplyTextPage(page);
         if (initialTail) _scrollToLatest = true;
-        if (_latest && before is null && rangeId is null && _textSearch is null && _speakerSearch is null)
+        if (_latest && before is null && !HasTextRange && _textSearch is null && _speakerSearch is null)
         {
             if (PendingFeed(version, _appliedFeedRevision, target.Recording) is { } body) _appliedFeedRevision = body.Revision;
             if (PendingFeed(speakers, _appliedSpeakerRevision, target.Recording) is { } resolved) _appliedSpeakerRevision = resolved.Revision;
@@ -89,41 +94,20 @@ public partial class PlayRecordingPanel
 
     private static string? Optional(string input) => string.IsNullOrWhiteSpace(input) ? null : input.Trim();
 
-    private Task OpenOccurrenceAsync(DisplayTarget target, ScenarioFlowOccurrence occurrence) =>
-        ReadForDisplayedTargetAsync(target, () => OpenResolvedTextAsync(target, occurrence.Start));
-
-    /// <summary>Returns only metadata for the occurrence selected in the current flow.</summary>
-    private Task<IReadOnlyList<string>> LoadFlowImageIdsAsync(DisplayTarget target, CaptureOccurrenceKey selected,
-        CaptureOccurrenceKey requested, CancellationToken cancellationToken) =>
-        ReadFlowImageAsync(target, selected, requested, cancellationToken, async gameId =>
-        {
-            var images = await Operations.GetScreenshotsAsync(gameId, target.Recording, requested.EventKey);
-            return (IReadOnlyList<string>)images.Select(image => image.ImageId).ToArray();
-        });
-
-    /// <summary>Confirms that one selected image still belongs to this occurrence before returning bytes.</summary>
-    private Task<byte[]> ReadFlowImageBytesAsync(DisplayTarget target, CaptureOccurrenceKey selected,
-        CaptureOccurrenceKey requested, string imageId, CancellationToken cancellationToken) =>
-        ReadFlowImageAsync(target, selected, requested, cancellationToken,
-            gameId => Operations.ReadScreenshotAsync(gameId, target.Recording, requested.EventKey, imageId));
-
-    /// <summary>Uses the rendered command token and discards results if the selection or display has changed.</summary>
-    private async Task<T> ReadFlowImageAsync<T>(DisplayTarget target, CaptureOccurrenceKey selected,
-        CaptureOccurrenceKey requested, CancellationToken cancellationToken, Func<string, Task<T>> read)
+    /// <summary>Uses the selected ID or bounded interval from the currently authorized chart.</summary>
+    private Task OpenFlowRangeAsync(DisplayTarget target, ScenarioRangeFlowNode node) => ReadForDisplayedTargetAsync(target, async () =>
     {
-        void RequireSelection()
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (requested != selected || selected.RecordId != target.Recording.HistoryRoot
-                || !IsWorkspaceCurrent(target) || _statusError || _graph is null)
-                throw new DisplayChangedException();
-        }
-
-        RequireSelection();
-        var result = await UseAsync(target, read);
-        RequireSelection();
-        return result;
-    }
+        if (_pane != Pane.Paths || _pathsLoading || _pathsNeedReload || _pathsError ||
+            _graph?.Nodes.Contains(node) != true) return;
+        _textSearchInput = _speakerSearchInput = "";
+        _textSearch = _speakerSearch = null;
+        _savedRangesOpen = false;
+        await OpenTextViewAsync(false, node.SavedRangeId, node);
+        if (!IsWorkspaceCurrent(target)) return;
+        _restoreReadingPosition = 0;
+        FreezeTextPage();
+        FocusAfterRender(FocusTarget.Text);
+    });
 
     private Task OpenCapturedEventAsync(DisplayTarget target, PlayRecordingScreenshotResult shot) =>
         ReadForDisplayedTargetAsync(target, () => OpenResolvedTextAsync(target, new(shot.Event.SessionId, shot.Event.Sequence, 0), shot.ImageId));
@@ -202,7 +186,7 @@ public partial class PlayRecordingPanel
         StateHasChanged();
         try
         {
-            await ReadAsync(target, "observed flow", gameId => Operations.GetObservedFlowAsync(gameId, target.Recording), flow =>
+            await ReadAsync(target, "observed range flow", gameId => Operations.GetRangeFlowAsync(gameId, target.Recording), flow =>
             {
                 if (!IsCurrentRead()) return;
                 _graph = flow.Graph;
@@ -238,12 +222,10 @@ public partial class PlayRecordingPanel
     private Task CutPathAsync(DisplayTarget target, CaptureTextItem item) =>
         CutPathAsync(target, gameId => Operations.CutPathAsync(gameId, target.Recording, item), item.Id);
 
-    private Task CutOccurrenceAsync(DisplayTarget target, ScenarioFlowOccurrence occurrence) =>
-        CutPathAsync(target, gameId => Operations.CutPathAsync(gameId, target.Recording, occurrence.Start));
-
     private Task CutPathAsync(DisplayTarget target, Func<string, Task> operation, long? rowId = null) => RunMutationAsync(target, async () =>
     {
         await UseActionAsync(target, operation);
+        if (IsWorkspaceCurrent(target)) _pathsNeedReload = _graph is not null;
         _actionSuccess = "経路の区切りを保存しました";
         await RefreshStatusAsync(loadPane: _pane == Pane.Paths, refreshLatestText: false);
         if (rowId is { } id && IsWorkspaceCurrent(target))

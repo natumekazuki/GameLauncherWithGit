@@ -264,6 +264,7 @@ public partial class PlayRecordingPanel
         _pendingTail = null;
         ResetTextPages();
         _textRangeId = null;
+        _openedFlowRange = null;
         _textSearchInput = _speakerSearchInput = "";
         _textSearch = _speakerSearch = null;
         _textItems = null;
@@ -385,6 +386,7 @@ public partial class PlayRecordingPanel
             selection = await UseAsync(target, gameId => Operations.SelectRangeAsync(gameId, target.Recording, first, last));
         var currentTarget = ForDisplay(_state!);
         await UseAsync(currentTarget, gameId => Operations.SaveRangeAsync(gameId, currentTarget.Recording, selection, draft.Name.Trim(), draft.Tags));
+        if (IsWorkspaceCurrent(currentTarget)) _pathsNeedReload = _graph is not null;
 
         _rangeDraft = null;
         _finishAfterRangeSave = false;

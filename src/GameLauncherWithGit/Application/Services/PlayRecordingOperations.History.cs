@@ -37,12 +37,21 @@ public sealed partial class PlayRecordingOperations
     /// </summary>
     public Task<PlayRecordingPage> GetItemsAsync(string gameId, PlayRecordingTarget expected, int limit = 40, int offset = 0,
         CapturePosition? before = null, long? rangeId = null, string? textSearch = null, string? speakerSearch = null) =>
+        ReadTextPageAsync(gameId, expected, limit, offset, before, rangeId, textSearch, speakerSearch, null);
+
+    /// <summary>Opens a transient observed interval through the same authorized history read.</summary>
+    internal Task<PlayRecordingPage> GetObservedIntervalItemsAsync(string gameId, PlayRecordingTarget expected,
+        CaptureRangeSelection interval, int limit, CapturePosition? before, string? textSearch, string? speakerSearch) =>
+        ReadTextPageAsync(gameId, expected, limit, 0, before, null, textSearch, speakerSearch, interval);
+
+    private Task<PlayRecordingPage> ReadTextPageAsync(string gameId, PlayRecordingTarget expected, int limit, int offset,
+        CapturePosition? before, long? rangeId, string? textSearch, string? speakerSearch, CaptureRangeSelection? interval) =>
         ForGameAsync(gameId, expected, async () =>
         {
             if (limit is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(limit));
             if (offset < 0 || (before is not null && offset != 0)) throw new ArgumentOutOfRangeException(nameof(offset));
             var items = await Store.GetGameCaptureItemsAsync(expected.ProfileId, limit + 1, offset, latest: true,
-                rangeId: rangeId, textSearch: textSearch, speakerSearch: speakerSearch, before: before);
+                rangeId: rangeId, textSearch: textSearch, speakerSearch: speakerSearch, before: before, interval: interval);
             return new PlayRecordingPage(items.TakeLast(limit).ToArray(), items.Count > limit);
         });
 
@@ -145,6 +154,15 @@ public sealed partial class PlayRecordingOperations
             }
             throw new InvalidOperationException("記録が更新されました。経路を読み込み直してください。");
         });
+
+    /// <summary>Projects the scope-checked snapshot for the recording UI only; the material contract is unchanged.</summary>
+    internal Task<(ScenarioRangeFlowGraph Graph, bool MatchingComplete)> GetRangeFlowAsync(
+        string gameId, PlayRecordingTarget expected) => ForGameAsync(gameId, expected, async () =>
+    {
+        var reader = Material ?? throw new InvalidOperationException("記録経路を読み込めません。");
+        var snapshot = await reader.GetScenarioMaterialAsync(expected.HistoryRoot, new());
+        return (await Task.Run(() => ScenarioRangeFlowProjector.Build(snapshot)), snapshot.MatchingComplete);
+    });
 
     public Task<ScenarioSceneFlowSnapshot> GetSceneFlowAsync(string gameId, PlayRecordingTarget expected) =>
         ForGameAsync(gameId, expected, () => Scenes.GetScenarioSceneFlowAsync(expected.ProfileId));
