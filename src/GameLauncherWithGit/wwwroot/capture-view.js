@@ -28,13 +28,16 @@ function observeRowMenu(feed, owner, menu, options) {
         if (menu.matches(':popover-open')) menu.hidePopover();
         if (selection) notify(selection.scope, false);
         const row = selection?.row;
+        row?.removeAttribute('aria-expanded');
         if (restore && row?.isConnected && !row.disabled) row.focus({ preventScroll: true });
     }
 
     function open(row, scope, x, y) {
         if (!valid(row, scope)) return false;
         if (!active) notify(scope, true);
+        active?.row.removeAttribute('aria-expanded');
         active = { row, scope, id: row.dataset.captureRow };
+        row.setAttribute('aria-expanded', 'true');
         if (!menu.matches(':popover-open')) menu.showPopover();
         const box = menu.getBoundingClientRect();
         const anchor = row.getBoundingClientRect();
