@@ -67,6 +67,15 @@ public sealed class PlayRecordingWebHostTests
             host: backendHost, forwardedScheme: "https", forwardedHost: forwardedHost);
         Assert.Equal("text/css", asset.Content.Headers.ContentType?.MediaType);
         Assert.Equal(HttpStatusCode.OK, asset.StatusCode);
+        // The common feed module is admitted on its one explicit route, not via a desktop asset directory.
+        using var feed = await SendAsync(client, "/assets/scenario-live-feed.js", HttpMethod.Get,
+            host: backendHost, forwardedScheme: "https", forwardedHost: forwardedHost);
+        Assert.Equal(HttpStatusCode.OK, feed.StatusCode);
+        Assert.Equal("text/javascript", feed.Content.Headers.ContentType?.MediaType);
+        Assert.Contains("export function atEnd(", await feed.Content.ReadAsStringAsync());
+        using var desktopAsset = await SendAsync(client, "/assets/capture-view.js", HttpMethod.Get,
+            host: backendHost, forwardedScheme: "https", forwardedHost: forwardedHost);
+        Assert.Equal(HttpStatusCode.NotFound, desktopAsset.StatusCode);
         using var unrelatedOrigin = await SendAsync(client, Negotiate, HttpMethod.Post, local, backendHost, "https", forwardedHost);
         Assert.Equal(HttpStatusCode.Forbidden, unrelatedOrigin.StatusCode);
         using var brokenForwarding = await SendAsync(client, "/", HttpMethod.Get, host: backendHost,

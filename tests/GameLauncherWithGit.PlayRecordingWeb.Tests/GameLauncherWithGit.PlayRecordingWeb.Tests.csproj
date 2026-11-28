@@ -13,5 +13,6 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" PrivateAssets="all" />
     <ProjectReference Include="../../src/GameLauncherWithGit.PlayRecordingWeb/GameLauncherWithGit.PlayRecordingWeb.csproj" />
     <Compile Include="../../src/GameLauncherWithGit/Infrastructure/PlayRecordingWeb/*.cs" />
+    <EmbeddedResource Include="../../src/GameLauncherWithGit/wwwroot/scenario-live-feed.js" LogicalName="PlayRecordingWeb.scenario-live-feed.js" />
   </ItemGroup>
 </Project>

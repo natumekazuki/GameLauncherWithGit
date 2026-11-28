@@ -53,7 +53,7 @@ public sealed partial class ScenarioCaptureService : IAsyncDisposable
     private readonly Task _writerTask, _resolverTask;
     private sealed record WriteWork(long Session, CaptureReceived? Received, CaptureRules Rules, TaskCompletionSource? Barrier = null,
         long PathEpoch = 0, long? RecordId = null, long ScopeVersion = 0);
-    private sealed record SpeakerPending(long Session, long Sequence, DateTimeOffset ReceivedAt);
+    private sealed record SpeakerPending(long Session, long Sequence, DateTimeOffset ReceivedAt, long? RecordId, long ScopeVersion);
 
     public event Action? StateChanged;
 
@@ -706,7 +706,9 @@ public sealed partial class ScenarioCaptureService : IAsyncDisposable
                             _speakerPending.RemoveAt(0);
                             _logger.LogWarning("Speaker matching limit exceeded; text remains saved with unresolved speaker. session={Session}", work.Session);
                         }
-                        _speakerPending.Add(new(work.Session, received.Sequence, received.ReceivedAt));
+                        var nameSourceConfigured = work.Rules.Selections.Any(selection => selection.Role == CaptureRole.Name);
+                        _speakerPending.Add(new(work.Session, received.Sequence, received.ReceivedAt,
+                            nameSourceConfigured ? work.RecordId : null, work.ScopeVersion));
                     }
                 }
                 // Publish only after the store has committed a new body event.
@@ -749,6 +751,13 @@ public sealed partial class ScenarioCaptureService : IAsyncDisposable
             {
                 await _store.ResolveCaptureSpeakersAsync(group.Key,
                 group.Min(x => x.ReceivedAt), now, group.Select(x => x.Sequence).ToArray());
+                // Matching commits later than the body; separately invalidate its presentation, not the arrival version.
+                lock (_gate)
+                {
+                    if (_session == group.Key && ActiveRecordId is { } recordId
+                        && group.Any(item => item.RecordId == recordId && item.ScopeVersion == _playEpoch))
+                        PublishLiveFeedSpeakers(recordId, group.Key, _playEpoch);
+                }
             }
             catch (Exception ex) { _logger.LogError(ex, "Capture speaker matching failed. session={Session}", group.Key); }
         }
