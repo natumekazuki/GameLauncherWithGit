@@ -7,6 +7,7 @@ namespace GameLauncherWithGit.Application.Services;
 public static class ScenarioRangeFlowProjector
 {
     private const string UnsetRangeName = "未設定区間";
+    private const string UnobservedSavedChartId = "chart:saved-without-observations";
 
     private sealed record SavedRange(string Name, CapturePosition Start, CapturePosition End, long Length);
     private sealed record Span(long RangeId, int Start, int End);
@@ -56,7 +57,8 @@ public static class ScenarioRangeFlowProjector
         // The selected material's intersections, not a range's enclosing dates, establish membership.
         foreach (var range in snapshot.Ranges)
         {
-            if (!long.TryParse(range.Id, NumberStyles.None, CultureInfo.InvariantCulture, out var id) || id <= 0) continue;
+            if (!long.TryParse(range.Id, NumberStyles.None, CultureInfo.InvariantCulture, out var id) || id <= 0
+                || range.Start.CompareTo(range.End) >= 0) continue;
             var length = 0L;
             foreach (var span in range.Spans.Distinct())
             {
@@ -71,7 +73,7 @@ public static class ScenarioRangeFlowProjector
                 spans.Add(new(id, start.Offset, end.Offset));
                 length += end.Offset - start.Offset;
             }
-            if (length > 0) ranges.Add(id, new(range.Name, range.Start, range.End, length));
+            ranges.Add(id, new(range.Name, range.Start, range.End, length));
         }
 
         var traces = ReadTraces(graph, spansByEvent).ToArray();
@@ -83,15 +85,17 @@ public static class ScenarioRangeFlowProjector
             if (!nodesByChart.TryGetValue(chartId, out var result)) nodesByChart[chartId] = result = [];
             return result;
         }
-        foreach (var group in allVisits.GroupBy(x => (x.Trace.ChartId, x.RangeId)))
+        var visitedRanges = new HashSet<long>();
+        foreach (var group in allVisits.GroupBy(x => x.RangeId))
         {
+            visitedRanges.Add(group.Key);
             var partitioned = group.Count() > 1;
             foreach (var visit in group)
             {
-                var prefix = FormattableString.Invariant($"{group.Key.ChartId}/range:{visit.RangeId}");
+                var prefix = SavedNodeId(visit.RangeId);
                 var id = partitioned ? $"{prefix}/{PositionId(visit.Start)}" : prefix;
                 visit.Node = new(id, ranges[visit.RangeId].Name, visit.RangeId, visit.Start, visit.End);
-                ChartNodes(group.Key.ChartId).Add(visit.Node);
+                ChartNodes(visit.Trace.ChartId).Add(visit.Node);
                 // An overlapping slice can belong to multiple selectable saved nodes, but not to a directed edge.
                 for (var i = visit.First; i <= visit.Last; i++)
                 {
@@ -103,11 +107,16 @@ public static class ScenarioRangeFlowProjector
             }
         }
 
+        // Explicit saved metadata can outlive its text. Keep it selectable without implying a chart or a transition.
+        foreach (var (id, range) in ranges.Where(x => !visitedRanges.Contains(x.Key)))
+            ChartNodes(UnobservedSavedChartId).Add(new(SavedNodeId(id), range.Name, id, range.Start, range.End));
+
         AddCompleteRevisits(traces, allVisits, ranges);
         var edges = new HashSet<ScenarioRangeFlowEdge>();
         foreach (var trace in traces) ConnectTrace(trace, ChartNodes(trace.ChartId), edges);
-        var chartNodes = graph.Charts.Where(chart => nodesByChart.TryGetValue(chart.Id, out var nodes) && nodes.Count > 0)
-            .Select(chart => (chart.Id, Nodes: nodesByChart[chart.Id].OrderBy(x => x.Start).ThenBy(x => x.End)
+        var chartNodes = graph.Charts.Select(chart => chart.Id).Append(UnobservedSavedChartId)
+            .Where(id => nodesByChart.TryGetValue(id, out var nodes) && nodes.Count > 0)
+            .Select(id => (Id: id, Nodes: nodesByChart[id].OrderBy(x => x.Start).ThenBy(x => x.End)
                 .ThenBy(x => x.Id, StringComparer.Ordinal).ToArray())).ToArray();
         var charts = chartNodes.Select(chart => new ScenarioRangeFlowChart(chart.Id, chart.Nodes.Select(x => x.Id).ToArray())).ToArray();
         return new(charts, chartNodes.SelectMany(x => x.Nodes).ToArray(),
@@ -312,7 +321,7 @@ public static class ScenarioRangeFlowProjector
         void FlushUnset()
         {
             if (start is null || end is null) return;
-            var node = new ScenarioRangeFlowNode($"{trace.ChartId}/interval:{PositionId(start)}", UnsetRangeName, null, start, end);
+            var node = new ScenarioRangeFlowNode($"interval:{PositionId(start)}", UnsetRangeName, null, start, end);
             nodes.Add(node);
             Connect(node, start);
             start = end = null;
@@ -335,4 +344,7 @@ public static class ScenarioRangeFlowProjector
     /// <summary>Encodes the stable raw position independently of display culture.</summary>
     private static string PositionId(CapturePosition position) =>
         FormattableString.Invariant($"{position.SessionId}:{position.Sequence}:{position.Offset}");
+
+    /// <summary>Identifies one saved range independently of the chart generated by the current matching pass.</summary>
+    private static string SavedNodeId(long rangeId) => FormattableString.Invariant($"range:{rangeId}");
 }

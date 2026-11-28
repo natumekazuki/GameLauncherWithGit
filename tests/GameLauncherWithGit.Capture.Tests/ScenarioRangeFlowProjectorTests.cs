@@ -101,6 +101,7 @@ public sealed class ScenarioRangeFlowProjectorTests
         var saved = graph.Nodes.Where(n => n.SavedRangeId == 4).ToArray();
         Assert.Equal(3, saved.Length);
         Assert.Equal(3, saved.Select(n => n.Id).Distinct().Count());
+        Assert.All(saved, node => Assert.StartsWith("range:4/1:", node.Id));
         Assert.Contains(saved, n => n.Start == parts[1].Start && n.End == parts[1].End);
         Assert.Contains(saved, n => n.Start == parts[2].Start && n.End == parts[3].End);
         Assert.Contains(saved, n => n.Start == parts[4].Start && n.End == parts[5].End);
@@ -117,13 +118,12 @@ public sealed class ScenarioRangeFlowProjectorTests
         var b = Part(1, 2, "b");
         var cut = Part(1, 3, "a");
         var d = Part(1, 4, "d");
-        var emptyRange = new ScenarioMaterialRange("4", "本文なし", a.Start, d.End, [], [], [], 0);
-        var graph = Project([a, b, cut, d], [emptyRange], new([cut.Start], []));
+        var graph = Project([a, b, cut, d], [], new([cut.Start], []));
         Assert.Single(graph.Charts);
         Assert.Equal(new[] { (a.Start, b.End), (cut.Start, d.End) }, graph.Nodes.Select(x => (x.Start, x.End)));
         Assert.All(graph.Nodes, n => Assert.Null(n.SavedRangeId));
         Assert.Empty(graph.Edges);
-        Assert.Empty(Project([], [emptyRange]).Charts);
+        Assert.Empty(Project([], []).Charts);
     }
 
     /// <summary>Within a single occurrence only the saved UTF-16 slice is named; surrounding unsaved pieces remain distinct.</summary>
@@ -180,6 +180,54 @@ public sealed class ScenarioRangeFlowProjectorTests
             Assert.Empty(graph.Edges);
             Assert.Equal(second[0].Start, Assert.Single(graph.Nodes, n => n.SavedRangeId is null).Start);
         }
+    }
+
+    /// <summary>Relayout and chart regrouping do not replace the selection key of an unchanged observed interval.</summary>
+    [Fact]
+    public void NodeIdsDoNotDependOnTheMatchingCharts()
+    {
+        var first = Part(1, 1, "saved");
+        var second = Part(1, 2, "interval");
+        var underlying = ScenarioFlowBuilder.Build([first, second], new([], []));
+        var original = new ScenarioMaterialSnapshot(new(Record, 1, 1), true, [], [], [])
+        {
+            Ranges = [Range(8, "保存", first)],
+            Graph = underlying
+        };
+        const string newChart = "chart:changed-by-rematching";
+        var regrouped = original with
+        {
+            Graph = underlying with
+            {
+                Charts = underlying.Charts.Select(chart => chart with { Id = newChart }).ToArray(),
+                Occurrences = underlying.Occurrences.Select(row => row with { ChartId = newChart }).ToArray()
+            }
+        };
+        var before = ScenarioRangeFlowProjector.Build(original);
+        var after = ScenarioRangeFlowProjector.Build(regrouped);
+        Assert.NotEqual(Assert.Single(before.Charts).Id, Assert.Single(after.Charts).Id);
+        Assert.Equal(before.Nodes, after.Nodes);
+        Assert.Equal(before.Edges, after.Edges);
+        Assert.Equal(new[] { "range:8", "interval:1:2:0" }, after.Nodes.Select(n => n.Id));
+    }
+
+    /// <summary>An empty explicit range retains its saved key and position without borrowing an observed chart's edges.</summary>
+    [Fact]
+    public void EmptySavedRangeIsSelectableWithoutAnInventedTransition()
+    {
+        var row = Part(1, 3, "observed");
+        var start = new CapturePosition(1, 1, 0);
+        var end = new CapturePosition(1, 1, 3);
+        var saved = new ScenarioMaterialRange("4", "空になった区間", start, end, [], [], [], 0);
+        var graph = Project([row], [saved]);
+        Assert.Equal(2, graph.Charts.Count);
+        var preserved = Assert.Single(graph.Nodes, n => n.SavedRangeId == 4);
+        Assert.Equal(new ScenarioRangeFlowNode("range:4", saved.Name, 4, start, end), preserved);
+        Assert.Empty(graph.Edges);
+        var empty = Project([], [saved]);
+        Assert.Equal(preserved, Assert.Single(empty.Nodes));
+        Assert.Equal(preserved.Id, Assert.Single(Assert.Single(empty.Charts).NodeIds));
+        Assert.Empty(empty.Edges);
     }
 
     /// <summary>Creates a recorded fragment, using the same block ID only for a confirmed correspondence in the fixture.</summary>
