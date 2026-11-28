@@ -36,7 +36,7 @@ function observeRowMenu(feed, owner, menu, options) {
         if (!valid(row, scope)) return false;
         if (!active) notify(scope, true);
         active?.row.removeAttribute('aria-expanded');
-        active = { row, scope, id: row.dataset.captureRow };
+        active = { row, scope, id: row.dataset.captureRow, feedTop: feed.scrollTop, windowTop: window.scrollY };
         row.setAttribute('aria-expanded', 'true');
         if (!menu.matches(':popover-open')) menu.showPopover();
         const box = menu.getBoundingClientRect();
@@ -100,7 +100,11 @@ function observeRowMenu(feed, owner, menu, options) {
         event.preventDefault();
         event.stopImmediatePropagation();
     }, { ...options, capture: true });
-    document.addEventListener('scroll', () => { cancelTouch(); close(); }, { ...options, capture: true, passive: true });
+    document.addEventListener('scroll', () => {
+        cancelTouch();
+        // A queued scroll event can arrive after opening. Dismiss only if the anchor has actually moved.
+        if (active && (active.feedTop !== feed.scrollTop || active.windowTop !== window.scrollY)) close();
+    }, { ...options, capture: true, passive: true });
     window.addEventListener('blur', () => { cancelTouch(); close(); }, options);
 
     menu.addEventListener('keydown', event => {
