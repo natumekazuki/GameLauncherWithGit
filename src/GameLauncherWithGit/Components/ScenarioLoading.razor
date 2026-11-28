@@ -1,12 +1,8 @@
 <span class="scenario-loading" role="status" aria-label="@Label">
     <span class="scenario-loading-spinner" aria-hidden="true"></span>
-    @if (ShowLabel)
-    {
-        <span>@Label</span>
-    }
+    <span class="scenario-loading-label">@Label</span>
 </span>
 
 @code {
     [Parameter, EditorRequired] public string Label { get; set; } = "";
-    [Parameter] public bool ShowLabel { get; set; } = true;
 }

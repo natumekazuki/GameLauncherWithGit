@@ -105,7 +105,6 @@
 .card-size-label { font-variant-numeric: tabular-nums; }
 .library-page { flex: 1; display: flex; flex-direction: column; padding-block: 1rem 0; }
 .library-loading { flex: 1; display: grid; place-items: center; font-size: 2rem; }
-.settings-loading { font-size: .85rem; }
 
 .startup-error-panel h2 { font-size: 1.35rem; }
 

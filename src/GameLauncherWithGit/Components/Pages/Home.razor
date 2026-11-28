@@ -24,13 +24,17 @@
 @{
     var capture = _games is null ? new CaptureSnapshot() : CaptureService.Snapshot;
     RenderFragment notificationContent = @<div class="home-feedback">
-        @if (_notification is { } feedback)
+        @if (_isLibraryRetrying)
+        {
+            <ScenarioLoading Label="ゲーム一覧を読込中…" />
+        }
+        else if (_notification is { } feedback)
         {
             <button type="button" class="home-feedback-trigger @(feedback.IsSuccess == false ? "home-feedback-error" : null)"
                     aria-haspopup="dialog" aria-label="@($"{feedback.Summary}の詳細")"
                     @onclick="() => OpenResultDetails(feedback.Summary, feedback.Message)">@feedback.Summary</button>
         }
-        else if (IsUserOperationLoading)
+        else if (HasUserOperationProgressCaption)
         {
             <span class="home-feedback-trigger" aria-hidden="true">処理中</span>
         }
@@ -87,7 +91,7 @@
     @if (_isStartupChecking || (_isGitReady && _games is null && _libraryLoadError is null))
     {
         <div class="library-loading">
-            <ScenarioLoading Label="ゲーム一覧を読み込み中" ShowLabel="false" />
+            <ScenarioLoading Label="ゲーム一覧を読み込み中" />
         </div>
     }
     else if (!_isGitReady)
@@ -471,11 +475,11 @@
                 <h2 id="settings-title" tabindex="-1" data-dialog-initial>設定</h2>
                 @if (_isSettingsLoading)
                 {
-                    <div class="home-feedback settings-loading">
+                    <div class="home-feedback">
                         <ScenarioLoading Label="設定を読込中…" />
                     </div>
                 }
-                else if (HasFeedback && !_isEditorOpen && !_isDeleteConfirmOpen && (!_isLogLoading || _notification is not null))
+                else if (HasFeedback && !_isEditorOpen && !_isDeleteConfirmOpen)
                 {
                     @notificationContent
                 }
@@ -1303,7 +1307,7 @@
         _settingsLogRequested = false;
         _focusLogHeading = showLog;
         _isSettingsOpen = true;
-        await RunWithUserOperationLoadingAsync("設定を読み込んでいます...", LoadSettingsAsync);
+        await RunWithUserOperationLoadingAsync("設定を読み込んでいます...", LoadSettingsAsync, showProgressCaption: false);
         if (showLog)
         {
             // The explicit log entry opens the fold and loads its content on first use.
@@ -1382,9 +1386,9 @@
         _discardChanges = null;
     }
 
-    private async Task RunWithUserOperationLoadingAsync(string message, Func<Task> action)
+    private async Task RunWithUserOperationLoadingAsync(string message, Func<Task> action, bool showProgressCaption = true)
     {
-        var operation = new UserOperation(message);
+        var operation = new UserOperation(message, showProgressCaption);
         _userOperations.Add(operation);
         _announcedOperation = operation;
         _operationAnnouncement = message;
@@ -1413,12 +1417,13 @@
         }
     }
 
-    private bool IsUserOperationLoading => _userOperations.Count > 0;
-    private bool HasFeedback => IsUserOperationLoading || _notification is not null;
+    private bool HasUserOperationProgressCaption => _userOperations.Any(operation => operation.ShowProgressCaption);
+    private bool HasFeedback => HasUserOperationProgressCaption || _notification is not null || _isLibraryRetrying;
 
-    private sealed class UserOperation(string message)
+    private sealed class UserOperation(string message, bool showProgressCaption)
     {
         public string Message { get; } = message;
+        public bool ShowProgressCaption { get; } = showProgressCaption;
     }
 
     private async Task LoadSettingsAsync()
@@ -1699,7 +1704,7 @@
 
     private async Task LoadLogEntriesAsync()
     {
-        await RunWithUserOperationLoadingAsync("ログを読み込んでいます...", LoadLogEntriesCoreAsync);
+        await RunWithUserOperationLoadingAsync("ログを読み込んでいます...", LoadLogEntriesCoreAsync, showProgressCaption: false);
     }
 
     private async Task LoadLogEntriesCoreAsync()
@@ -3059,7 +3064,7 @@
                         summary: error is null ? "一覧更新" : "一覧更新エラー");
                 }
                 _focusLibraryRegion = GetSelectedGame() is null;
-            });
+            }, showProgressCaption: false);
         }
         finally
         {
