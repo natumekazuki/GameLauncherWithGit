@@ -77,6 +77,10 @@ function observeRowMenu(feed, owner, menu, options) {
         }, 550);
         touch = gesture;
     }, { ...options, passive: true });
+    // A touch that opened the menu began outside it. Dismiss on the next outside press, not on that release.
+    document.addEventListener('pointerdown', event => {
+        if (active && !menu.contains(event.target)) close();
+    }, { ...options, capture: true, passive: true });
     document.addEventListener('pointermove', event => {
         if (touch?.id === event.pointerId && Math.hypot(event.clientX - touch.x, event.clientY - touch.y) > 12) cancelTouch();
     }, { ...options, passive: true });
