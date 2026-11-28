@@ -8,6 +8,14 @@ public partial class Capture
 {
     private ElementReference _rowMenu;
     private RowDeletion? _rowDeletion;
+    private string? _openRowMenuViewKey;
+
+    /// <summary>Protects the selected row from being replaced while its menu is open.</summary>
+    [JSInvokable]
+    public void RowMenuVisibility(string viewKey, bool open)
+    {
+        if (_displayedScope?.ViewKey == viewKey) _openRowMenuViewKey = open ? viewKey : null;
+    }
 
     /// <summary>Freezes the scope and rendered row for a single-row confirmation.</summary>
     private sealed record RowDeletion(DisplayedScope Scope, CaptureTextItem Item);

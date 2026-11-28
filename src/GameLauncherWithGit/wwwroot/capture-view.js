@@ -1,21 +1,15 @@
-const observers = new WeakMap();
-export function observeFeed(element, owner, menu) {
-    unobserveFeed(element);
+const commands = new WeakMap();
+export function observeFeedCommands(element, owner, menu) {
+    unobserveFeedCommands(element);
     const events = new AbortController();
-    const options = { signal: events.signal };
-    const listener = () => {
-        const scope = element.dataset.captureScope;
-        if (scope) owner.invokeMethodAsync('FeedFollowing', scope, element.scrollHeight - element.scrollTop - element.clientHeight < 40);
-    };
-    element.addEventListener('scroll', listener, { ...options, passive: true });
-    const disposeMenu = observeRowMenu(element, owner, menu, options);
-    observers.set(element, () => { events.abort(); disposeMenu(); });
+    const disposeMenu = observeRowMenu(element, owner, menu, { signal: events.signal });
+    commands.set(element, () => { events.abort(); disposeMenu(); });
 }
-export function unobserveFeed(element) {
-    const dispose = observers.get(element);
+export function unobserveFeedCommands(element) {
+    const dispose = commands.get(element);
     if (!dispose) return;
     dispose();
-    observers.delete(element);
+    commands.delete(element);
     restoreFocus();
 }
 
@@ -24,18 +18,22 @@ function observeRowMenu(feed, owner, menu, options) {
     let active, touch, consumed;
     const action = menu.querySelector('[data-capture-row-delete]');
     const hit = target => target instanceof Element ? target.closest('[data-capture-row]') : null;
+    const notify = (scope, open) => owner.invokeMethodAsync('RowMenuVisibility', scope, open).catch(() => {});
     const valid = (row, scope) => scope && scope === feed.dataset.captureScope &&
         feed.dataset.captureRowMenuBlocked !== 'true' && feed.contains(row) && !row.disabled && row.getClientRects().length;
 
     function close(restore = false) {
-        const row = active?.row;
+        const selection = active;
         active = null;
         if (menu.matches(':popover-open')) menu.hidePopover();
+        if (selection) notify(selection.scope, false);
+        const row = selection?.row;
         if (restore && row?.isConnected && !row.disabled) row.focus({ preventScroll: true });
     }
 
     function open(row, scope, x, y) {
         if (!valid(row, scope)) return false;
+        if (!active) notify(scope, true);
         active = { row, scope, id: row.dataset.captureRow };
         if (!menu.matches(':popover-open')) menu.showPopover();
         const box = menu.getBoundingClientRect();
@@ -101,7 +99,7 @@ function observeRowMenu(feed, owner, menu, options) {
     menu.addEventListener('keydown', event => {
         if (event.key === 'Escape' || event.key === 'Tab') { event.preventDefault(); close(true); }
     }, options);
-    menu.addEventListener('toggle', () => { if (!menu.matches(':popover-open')) active = null; }, options);
+    menu.addEventListener('toggle', () => { if (!menu.matches(':popover-open')) close(); }, options);
     action.addEventListener('click', () => {
         const selection = active;
         close(true);
@@ -115,7 +113,6 @@ function observeRowMenu(feed, owner, menu, options) {
         attributeFilter: ['data-capture-scope', 'data-capture-row-menu-blocked', 'disabled'] });
     return () => { cancelTouch(); close(); changes.disconnect(); };
 }
-export function scrollFeed(element, end) { element.scrollTop = end ? element.scrollHeight : 0; }
 export function focusTextDetail(element) {
     element.focus({ preventScroll: true });
     element.onkeydown = event => {
