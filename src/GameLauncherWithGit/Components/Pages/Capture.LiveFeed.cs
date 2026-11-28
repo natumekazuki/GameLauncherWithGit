@@ -8,12 +8,18 @@ public partial class Capture
     private IJSObjectReference? _liveFeedModule;
     private string? _observedFeedScope;
     private bool _readingLiveFeed;
-    private long _renderedLiveRevision;
+    private FeedRevisions _renderedFeedRevisions;
     private PendingLiveRender? _liveFeedRender;
     private bool _applyingLiveFeed;
 
     /// <summary>Retains the version and scroll ticket for one rendered page.</summary>
-    private sealed record PendingLiveRender(DisplayedScope Scope, ScenarioLiveFeedVersion Version, long Ticket);
+    private sealed record PendingLiveRender(DisplayedScope Scope, ScenarioLiveFeedVersion Version, FeedRevisions Revisions, long Ticket);
+
+    /// <summary>Keeps body commits and delayed speaker writes independently consumable.</summary>
+    private readonly record struct FeedRevisions(long Body, long Speakers)
+    {
+        public bool Advances(FeedRevisions previous) => Body > previous.Body || Speakers > previous.Speakers;
+    }
 
     private bool CanFollowLiveFeed => FollowingView && ViewingLiveRecord && !_busy && !_loading && !_stop.IsCancellationRequested &&
         RequestedGameId == _loadedGameId && _scrollToEnd is null && !EditorOpen && _detailKey is null && _edit is null && _selected.Count == 0 &&
@@ -48,12 +54,27 @@ public partial class Capture
             version.Matches(current.RecordId, current.SessionId, current.PlayScopeVersion);
     }
 
+    /// <summary>Reads the two version counters only for the record and session represented by this view.</summary>
+    private (ScenarioLiveFeedVersion? Identity, FeedRevisions Revisions) ReadFeedCheckpoint(DisplayedScope? scope)
+    {
+        if (scope is null) return default;
+        var body = CaptureService.LiveFeedVersion;
+        var speakers = CaptureService.LiveFeedSpeakerVersion;
+        if (body is not null && !CurrentLiveVersion(scope, body)) body = null;
+        if (speakers is not null && !CurrentLiveVersion(scope, speakers)) speakers = null;
+        return (body ?? speakers, new(body?.Revision ?? 0, speakers?.Revision ?? 0));
+    }
+
+    private void ConsumeFeedRevisions(FeedRevisions revisions) => _renderedFeedRevisions =
+        new(Math.Max(_renderedFeedRevisions.Body, revisions.Body), Math.Max(_renderedFeedRevisions.Speakers, revisions.Speakers));
+
     /// <summary>Reads only the pending latest page at the tail of the same unprotected viewport.</summary>
     private async Task TryReadLiveFeedAsync()
     {
         if (_readingLiveFeed || _liveFeedRender is not null || _pollComplete is not null || !CanFollowLiveFeed ||
-            _liveFeedModule is not { } module || _displayedScope is not { } scope || _observedFeedScope != scope.ViewKey ||
-            CaptureService.LiveFeedVersion is not { } version || version.Revision <= _renderedLiveRevision || !CurrentLiveVersion(scope, version)) return;
+            _liveFeedModule is not { } module || _displayedScope is not { } scope || _observedFeedScope != scope.ViewKey) return;
+        var (identity, revisions) = ReadFeedCheckpoint(scope);
+        if (identity is not { } version || !revisions.Advances(_renderedFeedRevisions)) return;
 
         var feed = _feed;
         bool CanReplace() => CanFollowLiveFeed && CurrentLiveVersion(scope, version) && _observedFeedScope == scope.ViewKey;
@@ -70,11 +91,16 @@ public partial class Capture
 
             // Arm against the old DOM immediately before publishing; do not wait for I/O again before rendering.
             var ticket = await module.InvokeAsync<long?>("arm", feed, scope.ViewKey);
-            if (ticket is null || !CanReplace()) return;
+            if (ticket is null) return;
+            if (!CanReplace())
+            {
+                await module.InvokeVoidAsync("apply", feed, scope.ViewKey, ticket.Value, false);
+                return;
+            }
             _following = true;
             PublishItemPage(page.Count > 200, visible);
             ApplyScreenshotCounts(counts);
-            _liveFeedRender = new(scope, version, ticket.Value);
+            _liveFeedRender = new(scope, version, revisions, ticket.Value);
             StateHasChanged();
         }
         catch (JSDisconnectedException) { /* A retired viewport cannot receive a page or a scroll ticket. */ }
@@ -94,16 +120,14 @@ public partial class Capture
         try
         {
             // Shared tracking also checks user input received while Blazor painted the new rows.
-            if (CanFollowLiveFeed && CurrentLiveVersion(render.Scope, render.Version) && _observedFeedScope == render.Scope.ViewKey)
-            {
-                await module.InvokeVoidAsync("apply", _feed, render.Scope.ViewKey, render.Ticket);
-                if (CurrentLiveVersion(render.Scope, render.Version))
-                    _renderedLiveRevision = Math.Max(_renderedLiveRevision, render.Version.Revision);
-            }
+            var follow = CanFollowLiveFeed && CurrentLiveVersion(render.Scope, render.Version) && _observedFeedScope == render.Scope.ViewKey;
+            await module.InvokeVoidAsync("apply", _feed, render.Scope.ViewKey, render.Ticket, follow);
+            if (follow && CurrentLiveVersion(render.Scope, render.Version))
+                ConsumeFeedRevisions(render.Revisions);
         }
         finally { _liveFeedRender = null; _applyingLiveFeed = false; }
 
         // A commit during the query is not consumed by applying an older page.
-        if (CaptureService.LiveFeedVersion?.Revision > _renderedLiveRevision) _ = DispatchLiveFeedReadAsync();
+        if (ReadFeedCheckpoint(_displayedScope).Revisions.Advances(_renderedFeedRevisions)) _ = DispatchLiveFeedReadAsync();
     }
 }
