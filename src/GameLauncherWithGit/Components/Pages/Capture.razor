@@ -332,7 +332,7 @@
                     </article>
                 }
             </div>
-            <div class="capture-row-menu" @ref="_rowMenu" popover="auto" role="menu" aria-label="本文行の操作">
+            <div class="capture-row-menu" @ref="_rowMenu" popover="manual" role="menu" aria-label="本文行の操作">
                 <button type="button" class="scenario-action capture-danger" role="menuitem" data-capture-row-delete>削除</button>
             </div>
             @if (_detailItem is { } detail && _detailKey is { } key)
