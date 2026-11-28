@@ -16,7 +16,7 @@ public partial class Capture
     private sealed record PendingLiveRender(DisplayedScope Scope, ScenarioLiveFeedVersion Version, long Ticket);
 
     private bool CanFollowLiveFeed => FollowingView && ViewingLiveRecord && !_busy && !_loading && !_stop.IsCancellationRequested &&
-        _scrollToEnd is null && !EditorOpen && _detailKey is null && _edit is null && _selected.Count == 0 &&
+        RequestedGameId == _loadedGameId && _scrollToEnd is null && !EditorOpen && _detailKey is null && _edit is null && _selected.Count == 0 &&
         !HasHistorySearch && !HistorySearchPending && _filter == "all" && _rangeId == 0 && _rangeSelection is null &&
         _pendingLiveRange is null && _openRowMenuViewKey != _displayedScope?.ViewKey;
 

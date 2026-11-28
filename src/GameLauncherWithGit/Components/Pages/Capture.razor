@@ -22,6 +22,7 @@
     var displayedLive = PlayRecordingOperations.DesktopTarget(_snapshot, _snapshot.Profile?.Id ?? 0);
     var displayedSetup = PlayRecordingOperations.DesktopTarget(_snapshot, _snapshot.Profile?.Id ?? 0);
     var displayedProfile = HistoryTarget(_snapshot);
+    var displayedRowDeletion = _rowDeletion;
     var displayedPlay = _playState;
     var liveSnapshot = _snapshot.Profile?.Id == _profileId ? _snapshot : new CaptureSnapshot { Status = _profileId == 0 ? "未接続" : "記録開始前" };
     var displayedGameId = SelectedGameId;
@@ -485,7 +486,7 @@
             else if (_historyDialog == HistoryDialog.DeleteRow && _rowDeletion is { } rowDeletion)
             {
                 <p>この本文行を削除します。元に戻せません。</p>
-                <div class="capture-deletion-preview" aria-label="削除する本文行"><article><p>@rowDeletion.Item.Text</p></article></div>
+                <div class="capture-deletion-preview" aria-label="削除する本文行"><article><p>@rowDeletion.Target.Item.Text</p></article></div>
             }
             else if (_historyDialog == HistoryDialog.DeleteSelected)
             {
@@ -523,7 +524,7 @@
             <button class="secondary-button" @onclick="CloseEditors" disabled="@_busy">@(_historyDialog == HistoryDialog.Manage ? "閉じる" : "キャンセル")</button>
             @if (_historyDialog != HistoryDialog.Manage)
             {
-                <button class="secondary-button capture-text-button capture-danger" @onclick="() => AtScopeAsync(displayedScope, () => ConfirmHistoryDeletionAsync(displayedProfile))" disabled="@(_busy || _historyDialog == HistoryDialog.DeleteRow || (_historyDialog != HistoryDialog.DeleteRange && HistoryCaptureActive))"><CaptureIcon Name="Trash" />@(_historyDialog == HistoryDialog.Clear ? "全履歴を消去" : "削除する")</button>
+                <button class="secondary-button capture-text-button capture-danger" @onclick="() => AtScopeAsync(displayedScope, () => displayedRowDeletion is { } row ? ConfirmRowDeletionAsync(row, displayedProfile) : ConfirmHistoryDeletionAsync(displayedProfile))" disabled="@(_busy || (_historyDialog != HistoryDialog.DeleteRange && HistoryCaptureActive))"><CaptureIcon Name="Trash" />@(_historyDialog == HistoryDialog.Clear ? "全履歴を消去" : "削除する")</button>
             }
         </footer>
     </section></div>
@@ -754,7 +755,7 @@
     private IReadOnlyList<ScenarioGameTag> _gameTags = [];
     private IReadOnlyList<string> _gameSpeakers = [];
     private ScenarioFlowGraph? _flowGraph;
-    private bool _flowLoading;
+    private bool _flowLoading, _flowNeedsReload;
     private string? _flowReadError;
     private CapturePosition? _flowHighlighted;
     private bool _screenshotSettingsOpen;
@@ -945,7 +946,7 @@
             _focusAfterInitialRetry = _focusFeed = false;
             await _feed.FocusAsync(preventScroll: true);
         }
-        if (_focusEditor) { _focusEditor = false; await _module.InvokeVoidAsync("focusEditor", _self, _displayedScope?.ViewKey, _rowDeletion is { } row ? RowDetailId(row.Item) : null); }
+        if (_focusEditor) { _focusEditor = false; await _module.InvokeVoidAsync("focusEditor", _self, _displayedScope?.ViewKey, _rowDeletion is { } row ? RowDetailId(row.Target.Item) : null); }
         if (_focusSettingsTab) { _focusSettingsTab = false; if (_settingsOpen) await _module.InvokeVoidAsync("focusSettingsTab"); }
         if (_focusHistoryContent) { _focusHistoryContent = false; await _module.InvokeVoidAsync("focusEditorContent"); }
         if (_restoreFocus) { _restoreFocus = false; await _module.InvokeVoidAsync("restoreFocus"); }
@@ -1320,7 +1321,7 @@
         if (flow)
         {
             _following = false;
-            if (_flowGraph is null && _flowReadError is null) await LoadFlowAsync();
+            if (_flowNeedsReload || _flowGraph is null && _flowReadError is null) await LoadFlowAsync();
         }
     });
 
@@ -1346,6 +1347,7 @@
                 if (!await CanPublishAsync(expected)) return;
                 _flowGraph = graph;
                 _flowMatchingComplete = material.MatchingComplete;
+                _flowNeedsReload = false;
                 return;
             }
             throw new InvalidOperationException("記録が更新されました。フローチャートを更新して再試行してください。");

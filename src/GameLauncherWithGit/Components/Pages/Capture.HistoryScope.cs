@@ -216,6 +216,7 @@ public partial class Capture
         _focusEditor = _focusExportSave = _focusHistoryContent = false;
         _flowOpen = false;
         _flowGraph = null;
+        _flowNeedsReload = false;
         _flowLoading = false;
         _flowReadError = null;
         _flowHighlighted = null;
