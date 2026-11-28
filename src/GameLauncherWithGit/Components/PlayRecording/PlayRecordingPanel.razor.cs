@@ -48,25 +48,17 @@ public partial class PlayRecordingPanel
         // Prerender has no live Interactive Server connection to read from.
         if (firstRender)
         {
+            _feedOwner = DotNetObjectReference.Create(this);
+            Operations.LiveFeedCommitted += OnLiveFeedCommitted;
+            try { _liveFeed = await Js.InvokeAsync<IJSObjectReference>("import", "/assets/scenario-live-feed.js"); }
+            catch (JSDisconnectedException) { return; }
             await RefreshAsync();
             if (!_disposed) _ = PollAsync(_lifetime.Token);
             return;
         }
-        if (_pane == Pane.Text && _galleryItem is null && _textScroller.Id is not null && !_statusError)
+        if (_pane == Pane.Text && _galleryItem is null && !_statusError)
         {
-            try
-            {
-                if (_restoreReadingPosition is { } top)
-                {
-                    _restoreReadingPosition = null;
-                    await Js.InvokeVoidAsync("playRecordingText.restore", _textScroller, top);
-                }
-                else if (_scrollToLatest)
-                {
-                    _scrollToLatest = false;
-                    await Js.InvokeVoidAsync("playRecordingText.toEnd", _textScroller);
-                }
-            }
+            try { await RenderFeedAsync(); }
             catch (JSDisconnectedException) { }
         }
         if (_nextFocus is not { } request || _busy) return;
@@ -141,23 +133,28 @@ public partial class PlayRecordingPanel
         {
             while (await timer.WaitForNextTickAsync(cancellationToken))
             {
-                await InvokeAsync(async () =>
-                {
-                    if (_disposed) return;
-                    var connectionVersion = ObserveConnection();
-                    if (!WebSession.IsConnectionCurrent(connectionVersion)) return;
-                    var before = (_state, _statusLoaded, _statusError, _textItems, _textError, _workspace, _rangeDraft, _latest, _imageCounts, _imageCountsFailed);
-                    _pollRead = RefreshStatusAsync(loadPane: _statusError, statusOnly: _busy);
-                    try { await _pollRead; }
-                    catch (DisplayChangedException) { }
-                    finally { _pollRead = null; }
-                    if (!_disposed && before != (_state, _statusLoaded, _statusError, _textItems, _textError, _workspace, _rangeDraft, _latest, _imageCounts, _imageCountsFailed)) StateHasChanged();
-                });
+                await InvokeAsync(() => RefreshInBackgroundAsync(checkStatus: true));
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         catch (ObjectDisposedException) when (_disposed) { }
         catch (InvalidOperationException) when (_disposed) { }
+    }
+
+    /// <summary>Serializes a status tick and a commit wakeup against foreground operations.</summary>
+    private async Task RefreshInBackgroundAsync(bool checkStatus)
+    {
+        if (_disposed || _pollRead is not null || _busy && !checkStatus) return;
+        var connectionVersion = ObserveConnection();
+        if (!WebSession.IsConnectionCurrent(connectionVersion)) return;
+        var before = (_state, _statusLoaded, _statusError, _textItems, _textError, _workspace, _rangeDraft, _imageCounts, _imageCountsFailed);
+        _pollRead = checkStatus ? RefreshStatusAsync(loadPane: _statusError, statusOnly: _busy) : RefreshLatestTextAsync();
+        try { await _pollRead; }
+        catch (DisplayChangedException) { }
+        catch (JSDisconnectedException) { }
+        finally { _pollRead = null; }
+        if (!_disposed && before != (_state, _statusLoaded, _statusError, _textItems, _textError, _workspace, _rangeDraft, _imageCounts, _imageCountsFailed))
+            StateHasChanged();
     }
 
     private Task RefreshAsync() => RunForegroundAsync(() => RefreshStatusAsync(loadPane: true), allowStale: true);
@@ -255,7 +252,6 @@ public partial class PlayRecordingPanel
         // Keep the text surface mounted, and stop updates while the flow is in use.
         if (_pane == Pane.Text)
         {
-            StopFollowing();
             if (_galleryItem is null) await RememberReadingPositionAsync(target);
         }
         if (!IsWorkspaceCurrent(target)) return;
@@ -275,10 +271,10 @@ public partial class PlayRecordingPanel
     /// <summary>Captures the Web text viewport's position before leaving it or opening its detail.</summary>
     private async Task RememberReadingPositionAsync(DisplayTarget target)
     {
-        if (_textScroller.Id is null) return;
+        if (_textScroller.Id is null || _liveFeed is null) return;
         try
         {
-            var position = await Js.InvokeAsync<double>("playRecordingText.position", _textScroller);
+            var position = await _liveFeed.InvokeAsync<double>("position", _textScroller);
             if (IsWorkspaceCurrent(target)) _readingPosition = position;
         }
         catch (JSDisconnectedException) { }
@@ -291,13 +287,23 @@ public partial class PlayRecordingPanel
         if (_savedRangesOpen) await LoadRangesAsync();
     });
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         _disposed = true;
+        Operations.LiveFeedCommitted -= OnLiveFeedCommitted;
         _lifetime.Cancel();
         _lifetime.Dispose();
         ClearTargetData();
-        return ValueTask.CompletedTask;
+        try
+        {
+            if (_liveFeed is not null)
+            {
+                if (_observedFeed.Id is not null) await _liveFeed.InvokeVoidAsync("unobserve", _observedFeed);
+                await _liveFeed.DisposeAsync();
+            }
+        }
+        catch (JSDisconnectedException) { }
+        finally { _feedOwner?.Dispose(); }
     }
 
     private static string ClassificationName(CaptureKind? kind, string? other = null) => kind switch

@@ -29,20 +29,7 @@ new MutationObserver(() => {
     }
 }).observe(reconnectPanel, { attributes: true, attributeFilter: ["class"] });
 
-// Scroll only the text viewport. The surrounding controls and flow keep their own position.
 window.playRecordingText = {
-    atEnd(element) {
-        return !element || element.hidden || element.scrollHeight - element.clientHeight - element.scrollTop <= 16;
-    },
-    toEnd(element) {
-        if (element) element.scrollTop = element.scrollHeight;
-    },
-    position(element) {
-        return element?.scrollTop ?? 0;
-    },
-    restore(element, top) {
-        if (element) element.scrollTop = top;
-    },
     copy(text) {
         return navigator.clipboard.writeText(text);
     }

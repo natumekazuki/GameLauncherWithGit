@@ -188,8 +188,13 @@ public partial class PlayRecordingPanel
             await LoadPaneAsync();
             _paneNeedsLoad = false;
         }
-        else if (refreshLatestText && _pane == Pane.Text && _latest && _textRangeId is null && _olderPages.Count == 0 && !_pickingRange && _editItem is null && _galleryItem is null)
+        else if (refreshLatestText)
+        {
             await RefreshLatestTextAsync();
+            // A PC screenshot can arrive without new text; refresh only visible metadata on a saved-count change.
+            if (CanFollowText && _appliedScreenshotCount != Operations.ScreenshotSavedCount)
+                await LoadImageCountsAsync();
+        }
     }
 
     private void ApplyStatus(StatusRead read, long connectionVersion)
@@ -253,6 +258,10 @@ public partial class PlayRecordingPanel
         _waitingAfterResume = false;
         _latest = true;
         _scrollToLatest = false;
+        _feedScope++;
+        _appliedFeedRevision = _appliedSpeakerRevision = _appliedScreenshotCount = 0;
+        _atFeedEnd = false;
+        _pendingTail = null;
         ResetTextPages();
         _textRangeId = null;
         _textSearchInput = _speakerSearchInput = "";
