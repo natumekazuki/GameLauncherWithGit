@@ -208,28 +208,58 @@ public sealed partial class SqliteGameLibraryStore
         return items;
     }
 
-    private static (int From, int To) ClipCaptureInterval(CaptureTextItem item, CaptureRange? range)
+    private static (int From, int To) ClipCaptureInterval(CaptureTextItem item, CaptureRange? range) =>
+        ClipCaptureInterval(item, range?.Start, range?.End);
+
+    /// <summary>Clips one saved item without changing its original row ID or received coordinates.</summary>
+    private static (int From, int To) ClipCaptureInterval(CaptureTextItem item, CapturePosition? start, CapturePosition? end)
     {
-        if (range is null) return (item.Start, item.Start + item.Length);
-        if (item.EndPosition.CompareTo(range.Start) <= 0 || item.StartPosition.CompareTo(range.End) >= 0) return (0, 0);
-        return (item.SessionId == range.Start.SessionId && item.Sequence == range.Start.Sequence ? Math.Max(item.Start, range.Start.Offset) : item.Start,
-            item.SessionId == range.End.SessionId && item.Sequence == range.End.Sequence ? Math.Min(item.Start + item.Length, range.End.Offset) : item.Start + item.Length);
+        if (start is null || end is null) return (item.Start, item.Start + item.Length);
+        if (item.EndPosition.CompareTo(start) <= 0 || item.StartPosition.CompareTo(end) >= 0) return (0, 0);
+        return (item.SessionId == start.SessionId && item.Sequence == start.Sequence ? Math.Max(item.Start, start.Offset) : item.Start,
+            item.SessionId == end.SessionId && item.Sequence == end.Sequence ? Math.Min(item.Start + item.Length, end.Offset) : item.Start + item.Length);
     }
 
+    /// <summary>Checks that temporary endpoints refer to real body positions in this recording, without storing them.</summary>
+    private static async Task ValidateReadIntervalAsync(SqliteConnection connection, SqliteTransaction transaction, long recordId,
+        CaptureRangeSelection interval)
+    {
+        foreach (var position in new[] { interval.Start, interval.End })
+        {
+            // Resolve both endpoints under the actual read snapshot; a position from another record cannot bound this read.
+            await using var query = CaptureCommand(connection, transaction, """
+                SELECT e.RawText FROM CaptureEvents e JOIN CaptureSessions s ON s.Id=e.SessionId
+                WHERE s.CaptureGameId=$game AND e.SessionId=$session AND e.ReceiveSequence=$sequence AND e.InputRole=1
+                """, ("$game", recordId), ("$session", position.SessionId), ("$sequence", position.Sequence));
+            if (await query.ExecuteScalarAsync() is not string raw || position.Offset < 0 || position.Offset > raw.Length
+                || position.Offset != raw.Length && Array.BinarySearch(StringInfo.ParseCombiningCharacters(raw), position.Offset) < 0)
+                throw new ArgumentException("同じ記録の本文位置を選び直してください。", nameof(interval));
+        }
+    }
+
+    /// <summary>Reads a page from the whole record, a saved range, or a temporary interval; search sees the clipped text.</summary>
     public async Task<IReadOnlyList<CaptureTextItem>> GetGameCaptureItemsAsync(long profileId, int limit = 200, int offset = 0,
         long? labelId = null, bool unclassifiedOnly = false, bool latest = false, long? rangeId = null, CaptureKind? kind = null,
-        string? textSearch = null, string? speakerSearch = null, CapturePosition? before = null)
+        string? textSearch = null, string? speakerSearch = null, CapturePosition? before = null, CaptureRangeSelection? interval = null)
     {
         if (limit < 0 || offset < 0) throw new ArgumentOutOfRangeException(nameof(limit));
+        if (interval is not null && (rangeId is not null || interval.CaptureGameId != profileId || interval.Start.CompareTo(interval.End) >= 0))
+            throw new ArgumentException("同じ記録の開始より後の終了位置を指定してください。", nameof(interval));
         var range = rangeId is null ? null : (await GetCaptureRangesAsync(profileId)).SingleOrDefault(x => x.Id == rangeId)
             ?? throw new ArgumentException("このゲームの区間を選んでください。");
+        var start = interval?.Start ?? range?.Start;
+        var end = interval?.End ?? range?.End;
         await EnsureInitializedAsync(default);
         await using var connection = await OpenConnectionAsync(default);
+        await using var transaction = interval is null ? null : connection.BeginTransaction(deferred: true);
+        if (interval is not null) await ValidateReadIntervalAsync(connection, transaction!, profileId, interval);
+        // The first clipped row's cursor must not select the earlier uncut start of that same row again.
+        if (before is not null && start is not null && before.CompareTo(start) <= 0) return [];
         var order = latest ? " DESC" : "";
         textSearch = string.IsNullOrWhiteSpace(textSearch) ? null : textSearch.Trim();
         speakerSearch = string.IsNullOrWhiteSpace(speakerSearch) ? null : speakerSearch.Trim();
         var searching = textSearch is not null || speakerSearch is not null;
-        await using var command = CaptureCommand(connection, null, CaptureItemQuery + """
+        await using var command = CaptureCommand(connection, transaction, CaptureItemQuery + """
              JOIN CaptureSessions s ON s.Id=i.SessionId
              WHERE s.CaptureGameId=$game AND ($label IS NULL OR l.Id=$label) AND ($unclassified=0 OR l.Id IS NULL)
              AND ($kind IS NULL OR l.Kind=$kind)
@@ -237,9 +267,9 @@ public sealed partial class SqliteGameLibraryStore
              AND ($range=0 OR ((i.SessionId,i.ReceiveSequence,i.StartUtf16+i.LengthUtf16)>($ss,$sq,$so)
                  AND (i.SessionId,i.ReceiveSequence,i.StartUtf16)<($es,$eq,$eo)))
             """ + $" ORDER BY i.SessionId{order},i.ReceiveSequence{order},i.StartUtf16{order} LIMIT $limit OFFSET $offset",
-            ("$game", profileId), ("$label", labelId), ("$unclassified", unclassifiedOnly), ("$kind", kind is null ? null : (int)kind), ("$range", range is null ? 0 : 1),
-            ("$ss", range?.Start.SessionId ?? 0), ("$sq", range?.Start.Sequence ?? 0), ("$so", range?.Start.Offset ?? 0),
-            ("$es", range?.End.SessionId ?? 0), ("$eq", range?.End.Sequence ?? 0), ("$eo", range?.End.Offset ?? 0),
+            ("$game", profileId), ("$label", labelId), ("$unclassified", unclassifiedOnly), ("$kind", kind is null ? null : (int)kind), ("$range", start is null ? 0 : 1),
+            ("$ss", start?.SessionId ?? 0), ("$sq", start?.Sequence ?? 0), ("$so", start?.Offset ?? 0),
+            ("$es", end?.SessionId ?? 0), ("$eq", end?.Sequence ?? 0), ("$eo", end?.Offset ?? 0),
             ("$beforeSession", before?.SessionId), ("$beforeSequence", before?.Sequence), ("$beforeOffset", before?.Offset),
             ("$limit", searching || limit == 0 ? -1 : limit), ("$offset", searching ? 0 : offset));
         await using var reader = await command.ExecuteReaderAsync();
@@ -248,10 +278,9 @@ public sealed partial class SqliteGameLibraryStore
         while (await reader.ReadAsync())
         {
             var item = ReadCaptureItem(reader);
-            if (range is not null)
+            if (start is not null)
             {
-                var from = item.SessionId == range.Start.SessionId && item.Sequence == range.Start.Sequence ? Math.Max(item.Start, range.Start.Offset) : item.Start;
-                var to = item.SessionId == range.End.SessionId && item.Sequence == range.End.Sequence ? Math.Min(item.Start + item.Length, range.End.Offset) : item.Start + item.Length;
+                var (from, to) = ClipCaptureInterval(item, start, end);
                 item = item with { Start = from, Length = to - from };
             }
             if (searching)
