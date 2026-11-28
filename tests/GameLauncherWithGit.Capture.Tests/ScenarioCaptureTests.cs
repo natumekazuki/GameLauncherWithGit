@@ -73,8 +73,18 @@ public sealed class ScenarioCaptureTests : IDisposable
         host.Emit(body, "「一」");
         host.Emit(body, "「二」");
         await manager.FlushPendingAsync();
+        await using (var connection = new SqliteConnection($"Data Source={Path.Combine(_directory, "library.db")}"))
+        {
+            await connection.OpenAsync();
+            await using var trigger = connection.CreateCommand();
+            trigger.CommandText = "CREATE TRIGGER reject_capture_test BEFORE INSERT ON CaptureEvents WHEN NEW.RawText='保存失敗' BEGIN SELECT RAISE(ABORT, 'test failure'); END;";
+            await trigger.ExecuteNonQueryAsync();
+        }
+        host.Emit(body, "保存失敗");
+        await manager.FlushPendingAsync();
 
         var snapshot = manager.Snapshot;
+        Assert.Equal(1, snapshot.Lost);
         Assert.Equal(new long[] { 1, 2 }, updates.Select(x => x.VisibleRows));
         Assert.Equal(new long[] { 1, 2 }, updates.Select(x => x.Version.Revision));
         Assert.All(updates, observation =>
