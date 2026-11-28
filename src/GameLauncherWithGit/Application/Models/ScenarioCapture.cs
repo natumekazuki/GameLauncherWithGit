@@ -50,6 +50,10 @@ public sealed record CaptureRange(long Id, long CaptureGameId, string Name, Capt
 public sealed record CaptureRangeSelection(long CaptureGameId, CapturePosition Start, CapturePosition End);
 public sealed record CaptureEventKey(long SessionId, long Sequence);
 public sealed record CaptureDeletionTarget(CaptureEventKey Key, string RawText, int ItemCount);
+/// <summary>Identifies one displayed row. A range view may clip its UTF-16 start and end within the saved item.</summary>
+public sealed record CaptureOccurrenceDeletionRequest(long ItemId, CapturePosition Start, CapturePosition End);
+/// <summary>The canonical saved item and recording root frozen for confirmation, not an entire received event.</summary>
+public sealed record CaptureOccurrenceDeletionTarget(long RecordId, CaptureTextItem Item);
 public sealed record CaptureHistoryCounts(int Items, int Events, int Ranges);
 public sealed record CaptureTextItem(long Id, long SessionId, long Sequence, DateTimeOffset ReceivedAt,
     string RawText, int Start, int Length, long? LabelId, string? LabelName, CaptureKind? Kind,
